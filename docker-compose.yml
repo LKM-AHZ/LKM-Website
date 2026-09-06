@@ -161,7 +161,6 @@ services:
         condition: service_healthy
     environment:
       LKM_ENV: production
-      LKM_DB_DRIVER: postgresql
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
@@ -229,16 +228,13 @@ services:
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
       LKM_RABBIT_URL: amqp://lkm:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/
-      LKM_DB_DRIVER: postgresql
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
       LKM_DB_USER: ${POSTGRES_USER:-lkm}
       LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
-      # S5-A2 Step3：auth 域专属自足 DB → 独立 auth 库（S5 拆库目标），由首启 initdb 建出、
-      # owner=同 POSTGRES_USER。覆盖 config auth_db_*(默认 sqlite)使 auth_session 直连 lkm_auth；
-      # 与上面 LKM_DB_*(=biz lkm,主要供业务读兜底/回链)解耦。
-      LKM_AUTH_DB_DRIVER: postgresql
+      # auth 域专属自足 DB → 独立 auth 库（真拆库：统一 PG），由首启 initdb 建出、
+      # owner=同 POSTGRES_USER，auth_session 直连 lkm_auth；与上面 LKM_DB_*(=biz lkm)解耦。
       LKM_AUTH_DB_HOST: postgres
       LKM_AUTH_DB_PORT: 5432
       LKM_AUTH_DB_NAME: ${LKM_AUTH_DB:-lkm_auth}
@@ -278,7 +274,6 @@ services:
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
       LKM_RABBIT_URL: amqp://lkm:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/
-      LKM_DB_DRIVER: postgresql
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
@@ -305,7 +300,6 @@ services:
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
       LKM_RABBIT_URL: amqp://lkm:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/
-      LKM_DB_DRIVER: postgresql
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
@@ -335,7 +329,6 @@ services:
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
       LKM_RABBIT_URL: amqp://lkm:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/
-      LKM_DB_DRIVER: postgresql
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
@@ -362,7 +355,6 @@ services:
       LKM_ENV: production
       LKM_REDIS_URL: redis://redis:6379/0
       LKM_RABBIT_URL: amqp://lkm:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/
-      LKM_DB_DRIVER: postgresql
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
@@ -396,7 +388,6 @@ services:
     environment:
       LKM_ENV: production
       LKM_RABBIT_URL: amqp://lkm:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/
-      LKM_DB_DRIVER: postgresql
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
@@ -422,7 +413,6 @@ services:
       LKM_ENV: production
       LKM_REDIS_URL: redis://redis:6379/0
       LKM_RABBIT_URL: amqp://lkm:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/
-      LKM_DB_DRIVER: postgresql
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
