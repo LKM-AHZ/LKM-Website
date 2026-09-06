@@ -82,6 +82,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-lkm}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # S5-A2 Step3：首启 initdb 补建独立 AUTH 库 lkm_auth(仅空数据卷首次执行)；只读挂载。
+      - ./deploy/initdb:/docker-entrypoint-initdb.d:ro
     restart: unless-stopped
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
@@ -233,6 +235,15 @@ services:
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
       LKM_DB_USER: ${POSTGRES_USER:-lkm}
       LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
+      # S5-A2 Step3：auth 域专属自足 DB → 独立 auth 库（S5 拆库目标），由首启 initdb 建出、
+      # owner=同 POSTGRES_USER。覆盖 config auth_db_*(默认 sqlite)使 auth_session 直连 lkm_auth；
+      # 与上面 LKM_DB_*(=biz lkm,主要供业务读兜底/回链)解耦。
+      LKM_AUTH_DB_DRIVER: postgresql
+      LKM_AUTH_DB_HOST: postgres
+      LKM_AUTH_DB_PORT: 5432
+      LKM_AUTH_DB_NAME: ${LKM_AUTH_DB:-lkm_auth}
+      LKM_AUTH_DB_USER: ${POSTGRES_USER:-lkm}
+      LKM_AUTH_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
       LKM_RP_ID: ${LKM_RP_ID:-124.220.55.235}
     restart: unless-stopped
     healthcheck:
