@@ -138,7 +138,7 @@ docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
 | 头像/文件上传 `404` | MinIO 桶未建(S3 不自动建) | `mc mb --ignore-existing m/lkm` |
 | 上传 `403 SignatureDoesNotMatch` | boto3 对 MinIO 默认 SigV2 | s3.py 预签名 client 需 `signature_version="s3v4"`+path 寻址+region;公网 host 与 `LKM_S3_PUBLIC_ENDPOINT_URL` 一致 |
 | 上传经 nginx `400 Bad Request`(直连正常) | ①proxy_pass 丢了签名 query ②Host 被 include 覆盖 | `/lkm/` 反代 `proxy_pass ...$request_uri`;单独设 Host,勿 include proxy-common-headers.conf |
-| nginx 反复 `Restarting` | entrypoint.sh 是 CRLF 行尾 | `sed -i 's/\r$//' nginx/entrypoint.sh` 转 LF 后重建 |
+| nginx 反复 `Restarting` | entrypoint.sh 是 CRLF 行尾 | `sed -i 's/\r$//' deploy/nginx/entrypoint.sh` 转 LF 后 `docker compose up -d --build nginx` 重建 |
 | worker 反复重启,日志 `Insecure secrets...` | worker 服务缺三个密钥 env | compose 给 worker/worker-send 注入 `LKM_JWT_SECRET` 等 |
 | worker 连 `localhost:6379` | `Worker()` 没传 `redis_settings` | `app/core/worker.py` 各 `Worker(...)` 加 `redis_settings=_redis_settings()` |
 | worker `cron ValueError` | arq `weekday` 简写错 | `'thu'`→`'thurs'`(arq 的 WEEKDAYS 是三/四字母) |

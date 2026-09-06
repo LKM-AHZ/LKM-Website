@@ -60,7 +60,10 @@ LKM-Website/                  # 根仓库(含 docker-compose.yml 与本教程)
 ├── docker-compose.yml
 ├── DEPLOYMENT.md
 ├── dev.bat / dev.ps1 / dev.sh
-├── LKM-official-website/     # 前端仓库(含 nginx/ 配置、前端 Dockerfile)
+├── deploy/
+│   ├── initdb/               # PostgreSQL 首启初始化脚本(auth 独立库建库)
+│   └── nginx/                # 全站公网入口 nginx 反代配置(并入根仓库部署资产)
+├── LKM-official-website/     # 前端仓库(含前端 Dockerfile)
 └── LKM-service/              # 后端仓库(含后端 Dockerfile)
 ```
 
@@ -148,10 +151,10 @@ LKM_FRONTEND_CALLBACK: http://124.220.55.235/login/success
 #    src/data/config.yaml:site 改 http://124.220.55.235
 #    astro.config.ts:allowedHosts 加 "124.220.55.235"
 
-# 3. nginx/nginx.conf:server_name 改 IP;80 端口的 server 不再 301 到 443,
+# 3. deploy/nginx/nginx.conf:server_name 改 IP;80 端口的 server 不再 301 到 443,
 #    改为直接反代(HTTP 是主入口);443 保留自签证书(供 admin secure cookie 使用)
 
-# 4. nginx/entrypoint.sh:自签证书目录与 CN 用 IP(124.220.55.235)
+# 4. deploy/nginx/entrypoint.sh:自签证书目录与 CN 用 IP(124.220.55.235)
 ```
 
 - **certbot 服务可停**(`docker compose stop certbot`):无域名不签正式证书,其会循环空跑 renew 报错污染日志。

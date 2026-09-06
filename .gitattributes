@@ -1,0 +1,6 @@
+# 根仓库内会被 Docker 卷挂进 Linux/alpine 容器、或作为容器初始化脚本执行的资产：
+# 强制 LF 存储与检出，避免 core.autocrlf=true 在 checkout 时注入 CRLF，
+# 否则 entrypoint.sh 等 shebang/脚本在容器内会带  而报错（nginx 反复 Restarting 即因此）。
+# 另见 OPS-CHEATSHEET.md「nginx 反复 Restarting」条目。
+deploy/**/*.sh     text eol=lf
+deploy/**/*.conf   text eol=lf
