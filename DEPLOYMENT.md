@@ -8,7 +8,7 @@
 
 ## 架构概览
 
-单机 docker-compose 编排 11 个服务,nginx 为唯一对外入口:
+单机 docker-compose 编排 20 个服务,nginx 为唯一对外入口:
 
 | 服务 | 镜像 | 端口(对外) | 职责 |
 |---|---|---|---|
@@ -16,16 +16,26 @@
 | `certbot` | `certbot/certbot` | 无 | 申请与自动续期 Let's Encrypt 证书(webroot) |
 | `astro` | `lkm-official-website:latest` | 仅内网 `4321` | 前端 SSR |
 | `static` | `lkm-official-static:latest` | `8082` | 纯静态官网(独立 nginx 输出) |
-| `backend` | `lkm-service:latest` | 仅内网 `8000` | FastAPI(REST `/api/v1`)+ 论坛域 GraphQL |
-| `worker` | `lkm-service:latest` | 无 | 默认任务队列(ARQ)。`python -m app.core.worker_default` |
-| `worker-send` | `lkm-service:latest` | 无 | 发送队列 worker。`python -m app.core.worker_send` |
-| `worker-points` | `lkm-service:latest` | 无 | 积分事件队列 worker。`python -m app.core.worker_points` |
-| `postgres` | `postgres:16-alpine` | 仅内网 `5432` | 后端数据库 |
-| `redis` | `redis:7-alpine` | 仅内网 `6379` | 任务队列、共享限流 / 缓存(ARQ 队列、RPOPLPUSH 限流、RMW 语义) |
+| `backend` | `lkm-service:latest` | 仅内网 `8000` | FastAPI(REST `/api/v1`)+ 论坛域 GraphQL + lag 上报 |
+| `auth` | `lkm-service:latest` | 仅内网 `8001` | AUTH 独立进程(`app.main_auth`) |
+| `worker` | `lkm-service:latest` | 无 | jobs + user-invalidate 订阅。`python -m app.core.worker_default` |
+| `worker-send` | `lkm-service:latest` | 无 | 发送订阅。`python -m app.core.worker_send` |
+| `worker-notify` | `lkm-service:latest` | 无 | 对象事件登记订阅。`python -m app.core.worker_notify` |
+| `worker-points-reward` | `lkm-service:latest` | 无 | points 奖励入账订阅。`python -m app.core.worker_points_reward` |
+| `worker-points-stats` | `lkm-service:latest` | 无 | points 行为计数/成就订阅。`python -m app.core.worker_points_stats` |
+| `worker-points-tasks` | `lkm-service:latest` | 无 | points 每日任务订阅。`python -m app.core.worker_points_tasks` |
+| `worker-scheduler` | `lkm-service:latest` | 无 | cron 触发发布(`app.core.worker_scheduler`) |
+| `worker-dlq` | `lkm-service:latest` | 无 | 死信落库(`app.core.worker_dlq`) |
+| `worker-outbox` | `lkm-service:latest` | 无 | outbox relay(`app.core.worker_outbox`) |
+| `postgres` | `postgres:16-alpine` | 仅内网 `5432` | 后端数据库(biz `lkm` + auth `lkm_auth`) |
+| `redis` | `redis:7-alpine` | 仅内网 `6379` | leader 租约、共享限流 / 缓存 |
+| `pulsar` | `apachepulsar/pulsar:3.3.0` | 仅内网 `6650`/`8080` | **消息总线**(standalone,自带 ZK+BookKeeper;6650 broker / 8080 Admin REST) |
+| `pulsar-init` | `apachepulsar/pulsar:3.3.0` | 无 | 一次性:建 `lkm` 租户与 `biz/auth/system` namespace 后退出 |
 | `minio` | `minio/minio:latest` | 仅容器内 `9000`/`9001` | S3 兼容对象存储:文件库文件与成员头像 |
 
-> `worker` / `worker-send` / `worker-points` 与 `backend` 共用 `lkm-service:latest` 镜像,仅启动入口不同;
-> 三者依赖 Redis + PostgreSQL,负责异步消费任务队列(节点事件推送、发送、积分事件等)。
+> `worker*` 与 `backend`/`auth` 共用 `lkm-service:latest` 镜像,仅启动入口不同;各自常驻消费
+> 一个 Pulsar 订阅(get 消费失败重投超限后进死信 topic `system/dlq`,由 `worker-dlq` 落库)。
+> points 拆三个订阅(reward/stats/tasks)消费同一 `biz/points.apply` topic 实现扇出与故障隔离。
 
 请求分流(有域名走 443 / 无域名走 80):
 

@@ -109,19 +109,45 @@ services:
     networks:
       - lkm
 
-  rabbitmq:
-    image: rabbitmq:3.13-management
+  # Apache Pulsar（M4）：全站消息总线，standalone 自带 ZooKeeper + BookKeeper。
+  # broker 6650 / Admin REST 8080 仅内网；backend 与各 worker 经 LKM_PULSAR_URL 连接。
+  pulsar:
+    image: apachepulsar/pulsar:3.3.0
+    command: ['bin/pulsar', 'standalone']
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-lkm}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?生产需设置 RABBITMQ_DEFAULT_PASS}
-    ports:
-      - '15672:15672'
+      # standalone 内存受限，避免开发机/小主机被 OOM
+      PULSAR_MEM: '-Xms512m -Xmx512m -XX:MaxDirectMemorySize=512m'
+    volumes:
+      - pulsar_data:/pulsar/data
+    expose:
+      - '6650'
+      - '8080'
     healthcheck:
-      test: ['CMD', 'rabbitmq-diagnostics', 'ping']
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      test: ['CMD-SHELL', 'bin/pulsar-admin brokers healthcheck']
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - lkm
+
+  # 一次性初始化：Pulsar 不自动创建 tenant/namespace（allowAutoTenantCreation 默认关），
+  # 建出 lkm 租户与 biz/auth/system 三个 namespace 后退出；worker 以 completed_successfully 依赖它。
+  pulsar-init:
+    image: apachepulsar/pulsar:3.3.0
+    depends_on:
+      pulsar:
+        condition: service_healthy
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - |
+        bin/pulsar-admin --url http://pulsar:8080 tenants create lkm || true
+        for ns in biz auth system; do
+          bin/pulsar-admin --url http://pulsar:8080 namespaces create lkm/$$ns || true
+        done
+        bin/pulsar-admin --url http://pulsar:8080 tenants list
+    restart: 'no'
     networks:
       - lkm
 
@@ -157,8 +183,10 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      rabbitmq:
+      pulsar:
         condition: service_healthy
+      pulsar-init:
+        condition: service_completed_successfully
     environment:
       LKM_ENV: production
       LKM_DB_HOST: postgres
@@ -167,7 +195,9 @@ services:
       LKM_DB_USER: ${POSTGRES_USER:-lkm}
       LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
       LKM_REDIS_URL: redis://redis:6379/0
-      LKM_RABBIT_URL: amqp://lkm:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/
+      LKM_PULSAR_URL: pulsar://pulsar:6650
+      # lag 上报（M4）：API 进程周期拉 Admin REST 统计订阅 msgBacklog → Prometheus
+      LKM_PULSAR_ADMIN_URL: http://pulsar:8080
       # 多 worker：按压测基线调，默认单 worker；多核下水平跑满 CPU
       LKM_WEB_WORKERS: ${LKM_WEB_WORKERS:-1}
       LKM_BLOG_REPO_DIR: /data/blog_repos
@@ -227,7 +257,7 @@ services:
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
-      LKM_RABBIT_URL: amqp://lkm:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/
+      LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
@@ -265,15 +295,17 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      rabbitmq:
+      pulsar:
         condition: service_healthy
+      pulsar-init:
+        condition: service_completed_successfully
     environment:
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
-      LKM_RABBIT_URL: amqp://lkm:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/
+      LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
@@ -291,15 +323,17 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      rabbitmq:
+      pulsar:
         condition: service_healthy
+      pulsar-init:
+        condition: service_completed_successfully
     environment:
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
-      LKM_RABBIT_URL: amqp://lkm:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/
+      LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
@@ -312,29 +346,95 @@ services:
     networks:
       - lkm
 
-  worker-points:
+  # points 三订阅扇出（M4）：同一 topic biz/points.apply 挂三个 Shared subscription，
+  # 各由独立进程消费（reward / stats / tasks），真实故障隔离——停一个不影响其余。
+  worker-points-reward:
     image: lkm-service:latest
-    command: ['python', '-m', 'app.core.worker_points']
+    command: ['python', '-m', 'app.core.worker_points_reward']
     depends_on:
       redis:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      rabbitmq:
+      pulsar:
         condition: service_healthy
+      pulsar-init:
+        condition: service_completed_successfully
     environment:
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
-      LKM_RABBIT_URL: amqp://lkm:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/
+      LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
       LKM_DB_USER: ${POSTGRES_USER:-lkm}
       LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
       LKM_BLOG_REPO_DIR: /data/blog_repos   # 与 backend 同卷同路径
+    volumes:
+      - backend_data:/data
+    restart: unless-stopped
+    networks:
+      - lkm
+
+  worker-points-stats:
+    image: lkm-service:latest
+    command: ['python', '-m', 'app.core.worker_points_stats']
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      pulsar:
+        condition: service_healthy
+      pulsar-init:
+        condition: service_completed_successfully
+    environment:
+      LKM_ENV: production
+      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
+      LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
+      LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
+      LKM_REDIS_URL: redis://redis:6379/0
+      LKM_PULSAR_URL: pulsar://pulsar:6650
+      LKM_DB_HOST: postgres
+      LKM_DB_PORT: 5432
+      LKM_DB_NAME: ${POSTGRES_DB:-lkm}
+      LKM_DB_USER: ${POSTGRES_USER:-lkm}
+      LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
+      LKM_BLOG_REPO_DIR: /data/blog_repos
+    volumes:
+      - backend_data:/data
+    restart: unless-stopped
+    networks:
+      - lkm
+
+  worker-points-tasks:
+    image: lkm-service:latest
+    command: ['python', '-m', 'app.core.worker_points_tasks']
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      pulsar:
+        condition: service_healthy
+      pulsar-init:
+        condition: service_completed_successfully
+    environment:
+      LKM_ENV: production
+      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
+      LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
+      LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
+      LKM_REDIS_URL: redis://redis:6379/0
+      LKM_PULSAR_URL: pulsar://pulsar:6650
+      LKM_DB_HOST: postgres
+      LKM_DB_PORT: 5432
+      LKM_DB_NAME: ${POSTGRES_DB:-lkm}
+      LKM_DB_USER: ${POSTGRES_USER:-lkm}
+      LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
+      LKM_BLOG_REPO_DIR: /data/blog_repos
     volumes:
       - backend_data:/data
     restart: unless-stopped
@@ -349,12 +449,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      rabbitmq:
+      pulsar:
         condition: service_healthy
+      pulsar-init:
+        condition: service_completed_successfully
     environment:
       LKM_ENV: production
       LKM_REDIS_URL: redis://redis:6379/0
-      LKM_RABBIT_URL: amqp://lkm:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/
+      LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
@@ -368,11 +470,13 @@ services:
     image: lkm-service:latest
     command: ['python', '-m', 'app.core.worker_scheduler']
     depends_on:
-      rabbitmq:
+      pulsar:
         condition: service_healthy
+      pulsar-init:
+        condition: service_completed_successfully
     environment:
       LKM_ENV: production
-      LKM_RABBIT_URL: amqp://lkm:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/
+      LKM_PULSAR_URL: pulsar://pulsar:6650
     restart: unless-stopped
     networks:
       - lkm
@@ -383,11 +487,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      rabbitmq:
+      pulsar:
         condition: service_healthy
+      pulsar-init:
+        condition: service_completed_successfully
     environment:
       LKM_ENV: production
-      LKM_RABBIT_URL: amqp://lkm:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/
+      LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
@@ -397,8 +503,8 @@ services:
     networks:
       - lkm
 
-  # outbox relay（M1）：单 leader（Redis 租约）轮询 outbox_events，把 DB 落 event 发布到
-  # RabbitMQ lkm.events。需 DB（读 outbox）+ Redis（leader 租约）+ Rabbit（publish）。
+  # outbox relay（M1）：单 leader（Redis 租约）轮询 outbox_events，把 DB 落 event 经
+  # core.messaging.publish 发布到 Pulsar。需 DB（读 outbox）+ Redis（租约）+ Pulsar。
   worker-outbox:
     image: lkm-service:latest
     command: ['python', '-m', 'app.core.worker_outbox']
@@ -407,12 +513,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      rabbitmq:
+      pulsar:
         condition: service_healthy
+      pulsar-init:
+        condition: service_completed_successfully
     environment:
       LKM_ENV: production
       LKM_REDIS_URL: redis://redis:6379/0
-      LKM_RABBIT_URL: amqp://lkm:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/
+      LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
@@ -429,6 +537,7 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
+  pulsar_data:
 
 networks:
   lkm:
