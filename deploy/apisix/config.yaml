@@ -4,20 +4,34 @@ apisix:
   node_listen: 9080          # 容器内 http；compose 映射 80:9080
   enable_ipv6: false
   # Docker 内嵌 DNS：upstream discovery_type=dns 用，复刻旧 nginx resolver 的动态解析行为
-  dns_resolver: 127.0.0.11
+  # 注意 APISIX schema 要求数组形式，写成裸字符串会启动即 "wrong type: expected array, got string"
+  dns_resolver: ['127.0.0.11']
   dns_resolver_valid: 30
+  enable_http2: true         # 3.9 起 http2 只能声明在 apisix 级，listen 级会报废弃错误
   ssl:
     enable: true
     listen:
       - port: 9443           # 容器内 https；compose 映射 443:9443
-        enable_http2: true
 
 deployment:
-  role: traditional
-  role_traditional:
+  # APISIX 无 etcd 的 standalone 形态是 data_plane（role_traditional 仅接受 config_provider=etcd）
+  role: data_plane
+  role_data_plane:
     config_provider: yaml    # /usr/local/apisix/conf/apisix.yaml（由 apisix-render 渲染）
   admin:
     admin_key: []            # 仅内网，禁用 Admin API 鉴权键（standalone 不写 etcd）
+
+# upstream `discovery_type: dns` 需要显式初始化 discovery 模块，否则运行时报
+# "discovery dns is uninitialized" → 503。servers 指 Docker 内嵌 DNS，A 记录解析 compose 服务名。
+discovery:
+  dns:
+    servers: ['127.0.0.11']
+
+plugin_attr:
+  # http→https 重定向默认用内部 ssl 监听端口(9443)拼 Location；容器内非 root 不能改听 443，
+  # 故显式声明对外 443，redirect 插件在 ret_port==443 时省略端口 → Location 不含 :9443。
+  redirect:
+    https_port: 443
 
 nginx_config:
   error_log: /dev/stderr

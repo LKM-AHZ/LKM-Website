@@ -141,7 +141,28 @@ cd LKM-Website
 docker compose up -d --build
 ```
 
-首次构建需拉取基础镜像与依赖,可能耗时数分钟。启动顺序由 `depends_on` 健康检查保证:先 `postgres`、`redis`、`minio` 就绪,再启动 `backend`(`worker`/`worker-send` 依赖 DB + Redis 同步拉起),`astro` 就绪后 `nginx` 再启动。
+首次构建需拉取基础镜像与依赖,可能耗时数分钟。启动顺序由 `depends_on` 健康检查保证:先 `postgres`、`redis`、`minio`、`pulsar` 就绪,再启动 `backend`/`auth` 与各 `worker`,前端 `astro`/`static` 就绪后网关 `apisix` 再启动。
+
+## 三·六、网关：APISIX（M5 7.2.4，已全量替换 nginx）
+
+默认接入层为 **APISIX standalone**（无 etcd，路由声明式来自 `deploy/apisix/apisix.yaml`）：
+
+- `apisix-render` sidecar 读路由模板 + certbot 证书，渲染出内联 PEM 的 `ssls` 段写入共享卷（每 6h 或重启时重渲染），APISIX 监测文件变化自动 reload。
+- `acme-webroot` 是极小的 http-01 challenge 静态 responder（不承担网关路由）。
+- 旧 nginx 保留为快速回退（`profiles: ["nginx-gateway"]`，默认不启）：
+  ```sh
+  docker compose stop apisix apisix-render acme-webroot
+  docker compose --profile nginx-gateway up -d nginx
+  ```
+
+**运行时冒烟/验收**（网关 up 后，在仓库根执行）：
+
+```sh
+sh deploy/apisix/smoke.sh 127.0.0.1          # 13 项：301/健康/GraphQL/官网/限流/MinIO/缓存/WS/…
+SMOKE_HEAVY=1 sh deploy/apisix/smoke.sh      # 追加 100m 上传边界（真发 ~101MB）
+```
+
+脚本用 `--resolve <域名>:<端口>:127.0.0.1` 保证 TLS SNI 正确（APISIX 按 SNI 选证书，直连 IP 无 SNI 会握手失败），并用 `--noproxy '*'` 绕过宿主机代理。2026-09-14 真机全栈验证 13/13 绿，详见 `LKM社区开发方案/执行路线图.md` §7.2.4 / §8 #19。
 
 ## 三·五、无域名 / 公网 IP 直连(可选)
 
@@ -166,6 +187,10 @@ LKM_FRONTEND_CALLBACK: http://124.220.55.235/login/success
 
 # 4. deploy/nginx/entrypoint.sh:自签证书目录与 CN 用 IP(124.220.55.235)
 ```
+
+> **注（M5 7.2.4 起）**：默认网关已是 APISIX，上述第 3/4 步（nginx.conf/entrypoint）仅在使用
+> `--profile nginx-gateway` 回退时适用。走 APISIX 的无域名改造需改 `deploy/apisix/apisix.yaml`
+> 的 `hosts`（IP 无法配 hosts，需另加按 `priority` 兜底的路由）与 `config.yaml`，未在本教程展开。
 
 - **certbot 服务可停**(`docker compose stop certbot`):无域名不签正式证书,其会循环空跑 renew 报错污染日志。
 - **403 后台明文限制**:admin 后台 cookie 带 `Secure`,**纯 HTTP(80)下浏览器不发送** → 后台登录会话无法保持。

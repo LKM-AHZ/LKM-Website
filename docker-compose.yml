@@ -31,7 +31,8 @@ services:
       - lkm
 
   apisix:
-    image: apache/apisix:3.9-debian
+    # 固定精确小版本：浮动 tag `3.9-debian` 在国内镜像源常拉取失败，3.9.0-debian 可稳定获取
+    image: apache/apisix:3.9.0-debian
     depends_on:
       apisix-render:
         condition: service_healthy
@@ -55,12 +56,9 @@ services:
           subpath: apisix.yaml
         read_only: true
     healthcheck:
-      # 任意 HTTP 响应即视为进程存活（404 也算，避免依赖具体状态端点契约）
-      test:
-        [
-          'CMD-SHELL',
-          "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9080/apisix/status | grep -qE '^[0-9]{3}$'",
-        ]
+      # 镜像内无 curl/wget（仅 bash），用 bash /dev/tcp 探监听端口存活即可：任意 HTTP 响应都算
+      # 进程在（不依赖 /apisix/status 契约）。曾误用 curl 导致容器长期 unhealthy 而流量正常。
+      test: ['CMD-SHELL', 'bash -c "exec 3<>/dev/tcp/127.0.0.1/9080"']
       interval: 15s
       timeout: 5s
       retries: 5
@@ -275,11 +273,11 @@ services:
     entrypoint: ['/bin/sh', '-c']
     command:
       - |
-        bin/pulsar-admin --url http://pulsar:8080 tenants create lkm || true
+        bin/pulsar-admin --admin-url http://pulsar:8080 tenants create lkm || true
         for ns in biz auth system; do
-          bin/pulsar-admin --url http://pulsar:8080 namespaces create lkm/$$ns || true
+          bin/pulsar-admin --admin-url http://pulsar:8080 namespaces create lkm/$$ns || true
         done
-        bin/pulsar-admin --url http://pulsar:8080 tenants list
+        bin/pulsar-admin --admin-url http://pulsar:8080 tenants list
     restart: 'no'
     networks:
       - lkm
@@ -629,6 +627,9 @@ services:
         condition: service_completed_successfully
     environment:
       LKM_ENV: production
+      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
+      LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
+      LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
       LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
@@ -650,6 +651,9 @@ services:
         condition: service_completed_successfully
     environment:
       LKM_ENV: production
+      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
+      LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
+      LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_PULSAR_URL: pulsar://pulsar:6650
     restart: unless-stopped
     networks:
@@ -667,6 +671,9 @@ services:
         condition: service_completed_successfully
     environment:
       LKM_ENV: production
+      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
+      LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
+      LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
@@ -693,6 +700,9 @@ services:
         condition: service_completed_successfully
     environment:
       LKM_ENV: production
+      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
+      LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
+      LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
       LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres

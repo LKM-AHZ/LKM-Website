@@ -7,6 +7,16 @@ global_rules:
   - id: 1
     plugins:
       gzip: {}
+  # 转发头对齐（旧 nginx proxy-common-headers.conf）：APISIX 默认不设 X-Real-IP/XFF/Proto。
+  # 网关即边缘，XFF 直接以对端地址覆写（不追加，避免伪造链）；$remote_addr/$scheme 由插件 resolve_var 展开。
+  - id: 2
+    plugins:
+      proxy-rewrite:
+        headers:
+          set:
+            X-Real-IP: "$remote_addr"
+            X-Forwarded-For: "$remote_addr"
+            X-Forwarded-Proto: "$scheme"
 
 routes:
   # ── ACME http-01：两域名的 challenge 走微型静态 responder（非网关角色）──
@@ -117,6 +127,9 @@ routes:
     uri: /api/*
     hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
     priority: 110
+    # 实时端点 /api/v1/ws/events 走本前缀：须开 upgrade 转发，否则 APISIX 剥掉 Upgrade/Connection
+    # 头→后端按普通 GET 处理 404（旧 nginx 的 /api/ location 亦未开，属既有隐患，此处一并修复）
+    enable_websocket: true
     plugins:
       client-control:
         max_body_size: 104857600
@@ -191,19 +204,19 @@ routes:
       pass_host: pass
 
   # ── MinIO 对象存储 → minio:9000；Host 必须为公网站点（SigV4 预签名按 lkm-ahz.ltd 签），
-  #    path+query 原样透传（proxy-rewrite 不动 uri/args，保住 X-Amz-Signature）──
+  #    path+query 原样透传（不写 proxy-rewrite，保住 X-Amz-Signature）。
+  #    pass_host=rewrite 时 Host 取自 upstream.upstream_host；用插件 proxy-rewrite.host 会被
+  #    pass_host 逻辑以 nil 覆盖 → 上游收到空 Host → MinIO "missing required Host header" 400。
   - id: minio
     uri: /lkm/*
     hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
     priority: 100
-    plugins:
-      proxy-rewrite:
-        host: lkm-ahz.ltd
     upstream:
       type: roundrobin
       discovery_type: dns
       service_name: "minio:9000"
       pass_host: rewrite
+      upstream_host: lkm-ahz.ltd
 
   # ── 其余 → 前端 SSR ──
   - id: community-catchall
