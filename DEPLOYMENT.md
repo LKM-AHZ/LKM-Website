@@ -321,7 +321,6 @@ sudo systemctl restart postgresql
 ```yaml
   backend:
     environment:
-      LKM_DB_DRIVER: postgresql
       LKM_DB_HOST: 172.17.0.1   # 宿主机在 docker 网桥上的地址
       LKM_DB_PORT: 5432
       LKM_DB_NAME: lkm

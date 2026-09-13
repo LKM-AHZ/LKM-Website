@@ -83,7 +83,7 @@ cp .env.example .env      # 首次;设置 API_URL=http://127.0.0.1:8000
 pnpm dev
 ```
 
-本地默认使用 **SQLite**(`lkm.db`),零数据库配置即可跑通;默认端口:前端 `4321`、后端 `8000`。
+本地使用 **PostgreSQL**(连接参数见 `LKM-service/.env.example`);默认端口:前端 `4321`、后端 `8000`。
 
 ---
 
@@ -103,7 +103,7 @@ LKM_VERIFICATION_CODE_PEPPER=<与上面都不同>
 # 不设以上时,dev 脚本也会自动生成
 ```
 
-- 数据库:默认 SQLite;需 PostgreSQL 时设 `LKM_DB_DRIVER=postgresql` 及 `LKM_DB_HOST/PORT/NAME/USER/PASSWORD`。
+- 数据库:PostgreSQL;设 `LKM_DB_HOST/PORT/NAME/USER/PASSWORD`(见 `LKM-service/.env.example`)。
 - Redis:设 `LKM_REDIS_URL=redis://...` 启用共享限流与任务队列;留空回退单机(限流失效、任务队列不消费)。
 
 ### 对象存储(文件库与头像)
@@ -213,4 +213,4 @@ node scripts/generate-icons.mjs
 - **dev 报 `Unable to locate icon`**:新增图标后没跑 `node scripts/generate-icons.mjs`。
 - **前端 dev 异常/卡死**:用 `pnpm dev:clean` 清 vite 缓存后重启。
 - **集成测试 skipped**:`uv run pytest -m integration` 需要先设置 `LKM_REDIS_URL` 并启动 Redis。
-- **数据库是全新的**:后端启动时(`lifespan` 的 `init_db`)默认用 `Base.metadata.create_all()` 自动建缺失表（开发免维护增量迁移；新增表只改 `models.py` 即可，SQLite 与 PostgreSQL 均无需手动初始化）;生产/有历史数据的库需显式设 `LKM_USE_ALEMBIC=true` 走 Alembic 增量迁移,手动管理时用 `uv run alembic upgrade head`。
+- **数据库是全新的**:后端启动时(`lifespan` 的 `init_db`)默认用 `Base.metadata.create_all()` 自动建缺失表（开发免维护增量迁移；新增表只改 `models.py` 即可，无需手动初始化）;生产/有历史数据的库需显式设 `LKM_USE_ALEMBIC=true` 走 Alembic 增量迁移,手动管理时用 `uv run alembic upgrade head`。

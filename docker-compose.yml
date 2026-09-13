@@ -198,6 +198,11 @@ services:
       LKM_PULSAR_URL: pulsar://pulsar:6650
       # lag 上报（M4）：API 进程周期拉 Admin REST 统计订阅 msgBacklog → Prometheus
       LKM_PULSAR_ADMIN_URL: http://pulsar:8080
+      # AUTH 内部读写缝（B1.3）：S5 拆库后 users/profiles 只在 auth 独立库，业务库无 users 表。
+      # 未配齐（URL/token）→ seam 关闭，snapshot 回落业务库直查 users 会 UndefinedTable，
+      # 身份展示读 + 考试解锁/项目升权写全线报错。故生产必须成对配置。
+      LKM_AUTH_HTTP_URL: ${LKM_AUTH_HTTP_URL:-http://auth:8001}
+      LKM_AUTH_HTTP_TOKEN: ${LKM_AUTH_HTTP_TOKEN:?生产需设置 LKM_AUTH_HTTP_TOKEN}
       # 多 worker：按压测基线调，默认单 worker；多核下水平跑满 CPU
       LKM_WEB_WORKERS: ${LKM_WEB_WORKERS:-1}
       LKM_BLOG_REPO_DIR: /data/blog_repos
@@ -270,6 +275,9 @@ services:
       LKM_AUTH_DB_NAME: ${LKM_AUTH_DB:-lkm_auth}
       LKM_AUTH_DB_USER: ${POSTGRES_USER:-lkm}
       LKM_AUTH_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
+      # AUTH 进程须持有同一内部缝 token 以校验 backend 的 Bearer（router_read/router_authz
+      # 的 _require_internal_token）；不设 URL 避免本进程 snapshot 自打自的回路。
+      LKM_AUTH_HTTP_TOKEN: ${LKM_AUTH_HTTP_TOKEN:?生产需设置 LKM_AUTH_HTTP_TOKEN}
       LKM_RP_ID: ${LKM_RP_ID:-124.220.55.235}
     restart: unless-stopped
     healthcheck:
@@ -340,6 +348,13 @@ services:
       LKM_DB_USER: ${POSTGRES_USER:-lkm}
       LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
       LKM_BLOG_REPO_DIR: /data/blog_repos   # 与 backend 同卷同路径
+      # jobs 消费者跑 user_dim 离线 ETL（auth.tasks）→ 需读 auth 库源（User/Profile），
+      # 写业务库 user_dim（跨 realm 双会话）。
+      LKM_AUTH_DB_HOST: postgres
+      LKM_AUTH_DB_PORT: 5432
+      LKM_AUTH_DB_NAME: ${LKM_AUTH_DB:-lkm_auth}
+      LKM_AUTH_DB_USER: ${POSTGRES_USER:-lkm}
+      LKM_AUTH_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
     volumes:
       - backend_data:/data
     restart: unless-stopped
