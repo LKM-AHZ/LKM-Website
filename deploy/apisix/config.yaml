@@ -1,0 +1,26 @@
+# APISIX standalone（M5 7.2.4）：无 etcd，路由/SSL 由 apisix.yaml 声明式提供。
+# 挂载为 /usr/local/apisix/conf/config.yaml，叠加在镜像自带 config-default.yaml 之上。
+apisix:
+  node_listen: 9080          # 容器内 http；compose 映射 80:9080
+  enable_ipv6: false
+  # Docker 内嵌 DNS：upstream discovery_type=dns 用，复刻旧 nginx resolver 的动态解析行为
+  dns_resolver: 127.0.0.11
+  dns_resolver_valid: 30
+  ssl:
+    enable: true
+    listen:
+      - port: 9443           # 容器内 https；compose 映射 443:9443
+        enable_http2: true
+
+deployment:
+  role: traditional
+  role_traditional:
+    config_provider: yaml    # /usr/local/apisix/conf/apisix.yaml（由 apisix-render 渲染）
+  admin:
+    admin_key: []            # 仅内网，禁用 Admin API 鉴权键（standalone 不写 etcd）
+
+nginx_config:
+  error_log: /dev/stderr
+  http:
+    access_log: /dev/stdout
+    access_log_format: '$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent" $request_time'

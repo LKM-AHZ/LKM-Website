@@ -1,0 +1,231 @@
+# APISIX standalone 声明式路由（M5 7.2.4，nginx 全量替换）。
+# 由 apisix-render 读取本文件（路由模板）+ certbot 证书渲染出 /out/apisix.yaml 供 APISIX 加载：
+# `# __SSL_SECTION__` 注释行是渲染占位（render.sh 替换为内联 PEM 的 ssls 段），勿删。
+# 匹配规则：priority 高者先，其次 uri 长者先；精确路径（无 *）优先于前缀。
+# upstream 用 DNS discovery（service_name=host:port）复刻旧 nginx resolver 动态解析。
+global_rules:
+  - id: 1
+    plugins:
+      gzip: {}
+
+routes:
+  # ── ACME http-01：两域名的 challenge 走微型静态 responder（非网关角色）──
+  - id: acme-challenge
+    uri: /.well-known/acme-challenge/*
+    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd, lkm-ahz.icu, www.lkm-ahz.icu]
+    priority: 300
+    vars: [["scheme", "==", "http"]]
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "acme-webroot:80"
+      pass_host: pass
+
+  # ── http → https 301（两域名共用；优先级低于 ACME，challenge 不受影响）──
+  - id: http-redirect
+    uri: /*
+    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd, lkm-ahz.icu, www.lkm-ahz.icu]
+    priority: 200
+    vars: [["scheme", "==", "http"]]
+    plugins:
+      redirect:
+        http_to_https: true
+        ret_code: 301
+
+  # ── 登录写面：网关层限流（应用层另有 Redis 防爆破），local 计数不引入集群依赖 ──
+  - id: auth-login
+    uri: /api/v1/auth/login/*
+    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    priority: 150
+    plugins:
+      limit-count:
+        count: 60
+        time_window: 60
+        key: remote_addr
+        policy: local
+        rejected_code: 429
+      client-control:
+        max_body_size: 104857600
+      cors: {}
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "auth:8001"
+      pass_host: pass
+
+  # ── 后台 admin 会话读面 /me（精确）→ backend ──
+  - id: admin-auth-me
+    uri: /api/v1/admin/auth/me
+    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    priority: 140
+    plugins:
+      client-control:
+        max_body_size: 104857600
+      cors: {}
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "backend:8000"
+      pass_host: pass
+
+  # ── 后台 admin 会话写面（login/refresh/logout/2fa）→ auth ──
+  - id: admin-auth-prefix
+    uri: /api/v1/admin/auth/*
+    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    priority: 130
+    plugins:
+      client-control:
+        max_body_size: 104857600
+      cors: {}
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "auth:8001"
+      pass_host: pass
+
+  # ── 前台认证面 → auth 独立进程 ──
+  - id: auth-prefix
+    uri: /api/v1/auth/*
+    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    priority: 120
+    plugins:
+      client-control:
+        max_body_size: 104857600
+      cors: {}
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "auth:8001"
+      pass_host: pass
+
+  # ── REST API → backend（精确 /api 与前缀 /api/* 两条）──
+  - id: api-exact
+    uri: /api
+    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    priority: 115
+    plugins:
+      client-control:
+        max_body_size: 104857600
+      cors: {}
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "backend:8000"
+      pass_host: pass
+
+  - id: api-prefix
+    uri: /api/*
+    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    priority: 110
+    plugins:
+      client-control:
+        max_body_size: 104857600
+      cors: {}
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "backend:8000"
+      pass_host: pass
+
+  # ── GraphQL → backend，支持 WebSocket upgrade（subscription）──
+  - id: graphql-exact
+    uri: /graphql
+    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    priority: 108
+    enable_websocket: true
+    plugins:
+      client-control:
+        max_body_size: 104857600
+      cors: {}
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "backend:8000"
+      pass_host: pass
+
+  - id: graphql-prefix
+    uri: /graphql/*
+    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    priority: 107
+    enable_websocket: true
+    plugins:
+      client-control:
+        max_body_size: 104857600
+      cors: {}
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "backend:8000"
+      pass_host: pass
+
+  # ── 指纹静态资源 → astro，长缓存 ──
+  - id: astro-assets
+    uri: /_astro/*
+    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    priority: 100
+    plugins:
+      response-rewrite:
+        headers:
+          set:
+            Cache-Control: "public, max-age=31536000, immutable"
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "astro:4321"
+      pass_host: pass
+
+  # ── 成员头像 → backend，长缓存 ──
+  - id: avatars
+    uri: /static/avatars/*
+    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    priority: 100
+    plugins:
+      response-rewrite:
+        headers:
+          set:
+            Cache-Control: "public, max-age=31536000, immutable"
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "backend:8000"
+      pass_host: pass
+
+  # ── MinIO 对象存储 → minio:9000；Host 必须为公网站点（SigV4 预签名按 lkm-ahz.ltd 签），
+  #    path+query 原样透传（proxy-rewrite 不动 uri/args，保住 X-Amz-Signature）──
+  - id: minio
+    uri: /lkm/*
+    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    priority: 100
+    plugins:
+      proxy-rewrite:
+        host: lkm-ahz.ltd
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "minio:9000"
+      pass_host: rewrite
+
+  # ── 其余 → 前端 SSR ──
+  - id: community-catchall
+    uri: /*
+    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    priority: 10
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "astro:4321"
+      pass_host: pass
+
+  # ── 官网（.icu）全部 → static 静态容器 ──
+  - id: official-site
+    uri: /*
+    hosts: [lkm-ahz.icu, www.lkm-ahz.icu]
+    priority: 50
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "static:80"
+      pass_host: pass
+
+# __SSL_SECTION__
+#END

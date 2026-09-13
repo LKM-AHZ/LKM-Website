@@ -1,0 +1,28 @@
+# OpenTelemetry Collector（M5 7.2.2）：接收应用 OTLP/HTTP traces，本地 debug 输出。
+# 需接外部 SigNoz 时，在 exporters 下加 otlphttp（endpoint 指向 SigNoz OTLP ingestion），
+# 并把它加入 traces 管线的 exporters 列表；applications 侧只改 LKM_OTEL_EXPORTER_OTLP_ENDPOINT。
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch: {}
+
+exporters:
+  debug:
+    verbosity: normal
+
+service:
+  # Collector 自身内部指标（含 otelcol_receiver_accepted_spans_total），供验收抓取
+  telemetry:
+    metrics:
+      address: 0.0.0.0:8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

@@ -1,6 +1,81 @@
 services:
+  # ── APISIX 网关（M5 7.2.4，默认接入层，替换 nginx）──
+  # standalone 模式（yaml config_provider，无 etcd）：路由模板 deploy/apisix/apisix.yaml 中的
+  # `# __SSL_SECTION__` 占位由 apisix-render 用 certbot 证书渲染为内联 PEM 的 ssls 段，
+  # 写入 apisix_conf 卷，APISIX 监测 mtime 自动 reload。
+  apisix-render:
+    image: nginx:1.27-alpine
+    entrypoint: ['sh', '/src/render.sh']
+    volumes:
+      - ./deploy/apisix:/src:ro
+      - certbot_conf:/etc/letsencrypt
+      - apisix_conf:/out
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'test -s /out/apisix.yaml']
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 5s
+    networks:
+      - lkm
+
+  # 微型 ACME http-01 responder（非网关角色，仅服务 certbot webroot；见 apisix.yaml acme-challenge 路由）
+  acme-webroot:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./deploy/apisix/acme-webroot.conf:/etc/nginx/conf.d/default.conf:ro
+      - certbot_www:/var/www/certbot:ro
+    restart: unless-stopped
+    networks:
+      - lkm
+
+  apisix:
+    image: apache/apisix:3.9-debian
+    depends_on:
+      apisix-render:
+        condition: service_healthy
+      astro:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      static:
+        condition: service_started
+    ports:
+      - '80:9080'
+      - '443:9443'
+    volumes:
+      - ./deploy/apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      # 命名卷内子路径单文件挂载（compose 长语法 subpath）：render 就地写同一 inode，
+      # APISIX 才能看到 mtime 变化并 reload
+      - type: volume
+        source: apisix_conf
+        target: /usr/local/apisix/conf/apisix.yaml
+        volume:
+          subpath: apisix.yaml
+        read_only: true
+    healthcheck:
+      # 任意 HTTP 响应即视为进程存活（404 也算，避免依赖具体状态端点契约）
+      test:
+        [
+          'CMD-SHELL',
+          "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9080/apisix/status | grep -qE '^[0-9]{3}$'",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - lkm
+
+  # 旧 nginx 网关（M5 7.2.4 起由 APISIX 全量替换）。默认**不启**（profile nginx-gateway），
+  # 仅作快速回退：停 apisix 后
+  #   docker compose stop apisix apisix-render acme-webroot
+  #   docker compose --profile nginx-gateway up -d nginx
   nginx:
     image: nginx:1.27-alpine
+    profiles: ['nginx-gateway']
     entrypoint: ['sh', '/entrypoint.sh']
     command: ['nginx', '-g', 'daemon off;']
     ports:
@@ -32,7 +107,7 @@ services:
       - certbot_www:/var/www/certbot
     restart: unless-stopped
     depends_on:
-      - nginx
+      - apisix
     networks:
       - lkm
 
@@ -70,6 +145,64 @@ services:
     image: lkm-official-static:latest
     ports:
       - '${LKM_STATIC_PORT:-8082}:80'
+    restart: unless-stopped
+    networks:
+      - lkm
+
+  # OpenTelemetry Collector（M5 7.2.2，profile=otel）：默认不启，不影响主栈。
+  # 启用：LKM_OTEL_ENABLED=true 且 LKM_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318/v1/traces
+  # 后 `docker compose --profile otel up -d`。内部指标 :8888/metrics 可查接收 span 数。
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.109.0
+    profiles: ['otel']
+    command: ['--config=/etc/otelcol/config.yaml']
+    volumes:
+      - ./deploy/otel/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    expose:
+      - '4317'
+      - '4318'
+      - '8888'
+    restart: unless-stopped
+    networks:
+      - lkm
+
+  # Infisical 密钥管理（M5 7.2.3，profile=infisical）：默认不启，不影响主栈。
+  # 首启后到 Web UI 建项目 + universal-auth machine identity，把 client id/secret 与
+  # project id 填回根 .env（LKM_INFISICAL_*），并置 LKM_INFISICAL_ENABLED=true；
+  # 应用经 deploy/docker-entrypoint.sh → app.core.secrets_bootstrap 启动前拉取注入。
+  infisical-db:
+    image: postgres:16-alpine
+    profiles: ['infisical']
+    environment:
+      POSTGRES_USER: infisical
+      POSTGRES_PASSWORD: ${INFISICAL_DB_PASSWORD:-change-me-infisical-db}
+      POSTGRES_DB: infisical
+    volumes:
+      - infisical_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U infisical -d infisical']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - lkm
+
+  infisical:
+    image: infisical/infisical:latest
+    profiles: ['infisical']
+    depends_on:
+      infisical-db:
+        condition: service_healthy
+    environment:
+      ENCRYPTION_KEY: ${INFISICAL_ENCRYPTION_KEY:-change-me}
+      AUTH_SECRET: ${INFISICAL_AUTH_SECRET:-change-me}
+      DB_CONNECTION_URI: postgresql://infisical:${INFISICAL_DB_PASSWORD:-change-me-infisical-db}@infisical-db:5432/infisical
+      REDIS_URL: redis://redis:6379/1
+      SITE_URL: ${INFISICAL_SITE_URL:-http://localhost:8085}
+    ports:
+      - '${LKM_INFISICAL_PORT:-8085}:8080'
     restart: unless-stopped
     networks:
       - lkm
@@ -226,6 +359,19 @@ services:
       LKM_ORIGIN: http://124.220.55.235
       LKM_GITHUB_REDIRECT_URI: http://124.220.55.235/api/v1/auth/oauth/github/callback
       LKM_FRONTEND_CALLBACK: http://124.220.55.235/login/success
+      # 链路追踪（M5 7.2.2）：默认关；起 otel profile 并指 ENDPOINT 才生效
+      LKM_OTEL_ENABLED: ${LKM_OTEL_ENABLED:-false}
+      LKM_OTEL_EXPORTER_OTLP_ENDPOINT: ${LKM_OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      LKM_OTEL_SAMPLE_RATIO: ${LKM_OTEL_SAMPLE_RATIO:-0.1}
+      # Infisical 密钥管理（M5 7.2.3）：默认关；起 infisical profile 并配齐 ID/secret 才拉取
+      LKM_INFISICAL_ENABLED: ${LKM_INFISICAL_ENABLED:-false}
+      LKM_INFISICAL_REQUIRED: ${LKM_INFISICAL_REQUIRED:-false}
+      LKM_INFISICAL_SITE_URL: ${LKM_INFISICAL_SITE_URL:-http://infisical:8080}
+      LKM_INFISICAL_PROJECT_ID: ${LKM_INFISICAL_PROJECT_ID:-}
+      LKM_INFISICAL_ENVIRONMENT: ${LKM_INFISICAL_ENVIRONMENT:-prod}
+      LKM_INFISICAL_SECRET_PATH: ${LKM_INFISICAL_SECRET_PATH:-/}
+      LKM_INFISICAL_CLIENT_ID: ${LKM_INFISICAL_CLIENT_ID:-}
+      LKM_INFISICAL_CLIENT_SECRET: ${LKM_INFISICAL_CLIENT_SECRET:-}
     volumes:
       - backend_data:/data
     restart: unless-stopped
@@ -279,6 +425,19 @@ services:
       # 的 _require_internal_token）；不设 URL 避免本进程 snapshot 自打自的回路。
       LKM_AUTH_HTTP_TOKEN: ${LKM_AUTH_HTTP_TOKEN:?生产需设置 LKM_AUTH_HTTP_TOKEN}
       LKM_RP_ID: ${LKM_RP_ID:-124.220.55.235}
+      # 链路追踪（M5 7.2.2）：auth 进程独立 service.name 后缀 -auth
+      LKM_OTEL_ENABLED: ${LKM_OTEL_ENABLED:-false}
+      LKM_OTEL_EXPORTER_OTLP_ENDPOINT: ${LKM_OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      LKM_OTEL_SAMPLE_RATIO: ${LKM_OTEL_SAMPLE_RATIO:-0.1}
+      # Infisical 密钥管理（M5 7.2.3）：auth 进程同样启动前拉取
+      LKM_INFISICAL_ENABLED: ${LKM_INFISICAL_ENABLED:-false}
+      LKM_INFISICAL_REQUIRED: ${LKM_INFISICAL_REQUIRED:-false}
+      LKM_INFISICAL_SITE_URL: ${LKM_INFISICAL_SITE_URL:-http://infisical:8080}
+      LKM_INFISICAL_PROJECT_ID: ${LKM_INFISICAL_PROJECT_ID:-}
+      LKM_INFISICAL_ENVIRONMENT: ${LKM_INFISICAL_ENVIRONMENT:-prod}
+      LKM_INFISICAL_SECRET_PATH: ${LKM_INFISICAL_SECRET_PATH:-/}
+      LKM_INFISICAL_CLIENT_ID: ${LKM_INFISICAL_CLIENT_ID:-}
+      LKM_INFISICAL_CLIENT_SECRET: ${LKM_INFISICAL_CLIENT_SECRET:-}
     restart: unless-stopped
     healthcheck:
       test:
@@ -548,6 +707,8 @@ services:
 volumes:
   certbot_conf:
   certbot_www:
+  apisix_conf:
+  infisical_db_data:
   backend_data:
   postgres_data:
   redis_data:
