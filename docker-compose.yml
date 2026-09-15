@@ -202,6 +202,9 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
+    # 镜像自带 /etc/vector/vector.yaml（demo 配置），而 vector 的默认 config 查找顺序
+    # **yaml 先于 toml** —— 不显式 --config 会加载 demo 而非本挂载，静默采集假数据。
+    command: ['--config', '/etc/vector/vector.toml']
     environment:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-lkm}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-change-me-clickhouse}

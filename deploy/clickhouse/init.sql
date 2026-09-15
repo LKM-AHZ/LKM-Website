@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS lkm.app_logs
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(ts)
 ORDER BY (service, ts)
-TTL ts + INTERVAL 30 DAY;
+-- TTL 表达式须返回 DateTime/Date（ClickHouse 不接受 DateTime64 直接作 TTL 表达式，报
+-- BAD_TTL_EXPRESSION 并使整个 init.sql 中止），故用 toDateTime(ts) 降到秒精度。
+TTL toDateTime(ts) + INTERVAL 30 DAY;
 
 -- ── 路 A：outbox 失败事件（周期增量导出）──────────────────────────────────────
 
@@ -53,7 +55,7 @@ CREATE TABLE IF NOT EXISTS lkm.event_failures
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(folded_at)
 ORDER BY id
-TTL folded_at + INTERVAL 180 DAY;
+TTL toDateTime(folded_at) + INTERVAL 180 DAY;
 
 -- ── 路 A：auth 行为审计（周期增量导出）───────────────────────────────────────
 
@@ -70,4 +72,4 @@ CREATE TABLE IF NOT EXISTS lkm.audit_logs
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(created_at)
 ORDER BY id
-TTL created_at + INTERVAL 365 DAY;
+TTL toDateTime(created_at) + INTERVAL 365 DAY;
