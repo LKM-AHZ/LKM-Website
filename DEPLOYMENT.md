@@ -164,6 +164,73 @@ SMOKE_HEAVY=1 sh deploy/apisix/smoke.sh      # 追加 100m 上传边界（真发
 
 脚本用 `--resolve <域名>:<端口>:127.0.0.1` 保证 TLS SNI 正确（APISIX 按 SNI 选证书，直连 IP 无 SNI 会握手失败），并用 `--noproxy '*'` 绕过宿主机代理。2026-09-14 真机全栈验证 13/13 绿，详见 `LKM社区开发方案/执行路线图.md` §7.2.4 / §8 #19。
 
+## 三·七、Prefect 编排（M5 7.2.5，profile=prefect）
+
+复杂数据管道（首期为 `user_dim` 报表宽表对账/回填）由 Prefect flow 编排，APScheduler 仍只做简单 cron 触发入口。默认**不启用**——cron 消费者直调既有 ETL，行为与现状一致。
+
+启动与接线：
+
+```sh
+# 1) 起 server/worker（独立 prefect 库，UI 不发布公网端口）
+docker compose --profile prefect up -d
+# 2) 根 .env 配齐并开启（见 .env.example Prefect 块），重建 jobs worker 使其改走触发：
+#    LKM_PREFECT_ENABLED=true
+#    LKM_PREFECT_API_URL=http://prefect-server:4200/api
+#    LKM_PREFECT_DEPLOYMENT=user-dim-reconcile/reconcile
+docker compose up -d --force-recreate worker
+```
+
+运维：
+
+```sh
+# Prefect UI：server 只 expose 4200，经 SSH 隧道访问
+ssh -L 4200:127.0.0.1:4200 <server>   # 本地开 http://127.0.0.1:4200
+# 查看 flow run
+docker compose exec prefect-worker prefect flow-run ls
+# 手动触发一次对账
+docker compose exec prefect-worker prefect deployment run 'user-dim-reconcile/reconcile'
+# 回填指定用户（在 worker 容器内以本地代码执行 flow）
+docker compose exec prefect-worker python -m app.flows.user_dim --backfill --ids 1,2,3
+```
+
+- 触发失败 **fail-open 回落直调**，crash-safety 对账不会因编排层故障丢跑；`LKM_PREFECT_ENABLED=false` 即整体回退。
+- flow 复用既有 ETL 入口，保持「命令数恒定 / 跨 auth+业务双会话 / 幂等」不变量。
+
+## 三·八、ClickHouse 分析管道（M5 7.2.6，profile=clickhouse）
+
+日志 / 失败事件 / 审计的检索与分析，两路数据：**vector** 采集各容器 stdout/stderr 的结构化 JSON 日志 → `lkm.app_logs`；**Prefect flow** 周期把 `event_failures`（业务库）+ `audit_logs`（auth 独立库）按水位增量导出到 CH。默认**不启用**——导出 no-op、admin 分析查询端点返 503。
+
+启动与接线：
+
+```sh
+# 1) 起 ClickHouse + vector（数据卷首启执行 deploy/clickhouse/init.sql 建库建表）
+docker compose --profile clickhouse up -d
+# 2) 根 .env 配齐并开启（见 .env.example ClickHouse 块），重建 backend/worker：
+#    LKM_CLICKHOUSE_ENABLED=true
+#    LKM_CLICKHOUSE_URL=http://clickhouse:8123
+#    CLICKHOUSE_PASSWORD=<强随机>   # 同时用于 CH 服务、vector、后端
+docker compose up -d --force-recreate backend worker
+# 3) 可选：走 Prefect 触发导出（需先按三·七起 profile=prefect）
+#    LKM_PREFECT_ANALYTICS_DEPLOYMENT=analytics-clickhouse-export/analytics-export
+```
+
+验收：
+
+```sh
+# 建表 + 日志已入库
+docker compose exec clickhouse clickhouse-client --query "SHOW TABLES FROM lkm"
+docker compose exec clickhouse clickhouse-client --query "SELECT count() FROM lkm.app_logs"
+# 触发一次导出并核对计数；重跑计数不变（CH 侧 max(id) 水位幂等）
+docker compose exec prefect-worker prefect deployment run 'analytics-clickhouse-export/analytics-export'
+docker compose exec clickhouse clickhouse-client --query "SELECT count() FROM lkm.event_failures"
+# admin 查询（须带后台 cookie；dataset ∈ app_logs / event_failures / audit_logs）
+curl -s 'http://<host>/api/v1/admin/analytics/app_logs?limit=5' -b 'lkm_admin_access=<cookie>'
+```
+
+- 表 TTL：`app_logs` 30 天 / `event_failures` 180 天 / `audit_logs` 365 天（**固定值**；改 `deploy/clickhouse/init.sql` 后需重建数据卷 `docker compose --profile clickhouse down -v` 才生效）。
+- CH 未启用 / 不可达时：admin 查询返 **503**（不返空列表），周期导出 no-op 不报错。
+- 回退：`LKM_CLICKHOUSE_ENABLED=false`（默认）+ `docker compose --profile clickhouse down`，不影响主栈。
+
 ## 三·五、无域名 / 公网 IP 直连(可选)
 
 没有域名时,用公网 IP 直连(如 `http://124.220.55.235`)。需把默认写死的域名 `lkm.s12mc.xyz`

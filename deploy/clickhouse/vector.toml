@@ -1,0 +1,69 @@
+# LKM 社区 · Vector 日志采集（M5 7.2.6 路 B）
+#
+# 采集各容器 stdout/stderr（Docker json-file 日志驱动）→ 解析 core/logging.py 的
+# JsonFormatter 结构 → 写入 ClickHouse lkm.app_logs。
+#
+# 挂载要求（见 docker-compose.yml `vector` 服务）：
+#   /var/lib/docker/containers:ro  —— docker_logs source 读日志文件
+#   /var/run/docker.sock:ro        —— 容器元数据（名称/镜像）发现
+#
+# 非 JSON 行（pulsar/apisix 等三方容器日志）不丢弃：level=unknown、原文进 msg/extra_fields。
+# 日志格式对齐 app/core/logging.py：ts/level/logger/msg + request_id/trace_id/span_id + exc_info；
+# extra_fields 存原始 JSON 串全文（检索兜底，避免为收集平铺字段引入脆弱 VRL）。
+
+[api]
+enabled = false
+
+[sources.docker_logs]
+type = "docker_logs"
+docker_host = "unix:///var/run/docker.sock"
+
+[transforms.parse]
+type = "remap"
+inputs = ["docker_logs"]
+source = '''
+.service = to_string(.container_name) ?? "unknown"
+raw = to_string(.message) ?? ""
+.extra_fields = raw
+
+parsed, err = parse_json(raw)
+if err == null && is_object(parsed) {
+  .level = to_string(parsed.level) ?? "unknown"
+  .logger = to_string(parsed.logger) ?? ""
+  .msg = to_string(parsed.msg) ?? raw
+  .request_id = to_string(parsed.request_id) ?? ""
+  .trace_id = to_string(parsed.trace_id) ?? ""
+  .span_id = to_string(parsed.span_id) ?? ""
+  .exc_info = to_string(parsed.exc_info) ?? ""
+  ts_raw = to_string(parsed.ts) ?? ""
+  ts, ts_err = parse_timestamp(ts_raw, format: "%Y-%m-%dT%H:%M:%S%.f%:z")
+  .ts = if ts_err == null {
+    format_timestamp!(ts, format: "%Y-%m-%d %H:%M:%S%.3f")
+  } else {
+    format_timestamp!(now(), format: "%Y-%m-%d %H:%M:%S%.3f")
+  }
+} else {
+  .level = "unknown"
+  .logger = "docker"
+  .msg = raw
+  .request_id = ""
+  .trace_id = ""
+  .span_id = ""
+  .exc_info = ""
+  .ts = format_timestamp!(now(), format: "%Y-%m-%d %H:%M:%S%.3f")
+}
+'''
+
+[sinks.clickhouse]
+type = "clickhouse"
+inputs = ["parse"]
+endpoint = "http://clickhouse:8123"
+database = "lkm"
+table = "app_logs"
+# docker_logs 自带 container_id/image/stream/timestamp 等列不在表中，靠此忽略；
+# 缺失列由 CH 表 DEFAULT 兜底（String 默认空串）。
+skip_unknown_fields = true
+auth.strategy = "basic"
+auth.user = "${CLICKHOUSE_USER}"
+auth.password = "${CLICKHOUSE_PASSWORD}"
+batch.max_events = 500

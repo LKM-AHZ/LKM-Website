@@ -164,6 +164,55 @@ services:
     networks:
       - lkm
 
+  # ClickHouse 分析库（M5 7.2.6，profile=clickhouse）：默认不启，不影响主栈。
+  # 承载 app_logs（vector 采集）+ event_failures/audit_logs（周期增量导出）。
+  # 启用：置 LKM_CLICKHOUSE_ENABLED=true + LKM_CLICKHOUSE_* 后
+  # `docker compose --profile clickhouse up -d`。DDL 由 deploy/clickhouse/init.sql
+  # 在数据卷首启时执行；表结构变更需重建卷（down -v）或手动 ALTER。
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    profiles: ['clickhouse']
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-lkm}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-change-me-clickhouse}
+      CLICKHOUSE_DB: lkm
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: '1'
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./deploy/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8123/ping || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - lkm
+
+  # Vector 日志采集（M5 7.2.6 路 B，profile=clickhouse）：读 Docker 容器日志 →
+  # 解析 core/logging.py 的 JSON → 写 lkm.app_logs。需挂 docker socket 与日志目录。
+  vector:
+    image: timberio/vector:0.43.0-alpine
+    profiles: ['clickhouse']
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-lkm}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-change-me-clickhouse}
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./deploy/clickhouse/vector.toml:/etc/vector/vector.toml:ro
+    restart: unless-stopped
+    networks:
+      - lkm
+
   # Infisical 密钥管理（M5 7.2.3，profile=infisical）：默认不启，不影响主栈。
   # 首启后到 Web UI 建项目 + universal-auth machine identity，把 client id/secret 与
   # project id 填回根 .env（LKM_INFISICAL_*），并置 LKM_INFISICAL_ENABLED=true；
@@ -370,6 +419,12 @@ services:
       LKM_INFISICAL_SECRET_PATH: ${LKM_INFISICAL_SECRET_PATH:-/}
       LKM_INFISICAL_CLIENT_ID: ${LKM_INFISICAL_CLIENT_ID:-}
       LKM_INFISICAL_CLIENT_SECRET: ${LKM_INFISICAL_CLIENT_SECRET:-}
+      # ClickHouse 分析库（M5 7.2.6）：backend 承载 admin 只读查询；默认关（查询端点 503）
+      LKM_CLICKHOUSE_ENABLED: ${LKM_CLICKHOUSE_ENABLED:-false}
+      LKM_CLICKHOUSE_URL: ${LKM_CLICKHOUSE_URL:-http://clickhouse:8123}
+      LKM_CLICKHOUSE_DATABASE: ${LKM_CLICKHOUSE_DATABASE:-lkm}
+      LKM_CLICKHOUSE_USER: ${CLICKHOUSE_USER:-lkm}
+      LKM_CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-change-me-clickhouse}
     volumes:
       - backend_data:/data
     restart: unless-stopped
@@ -512,6 +567,20 @@ services:
       LKM_AUTH_DB_NAME: ${LKM_AUTH_DB:-lkm_auth}
       LKM_AUTH_DB_USER: ${POSTGRES_USER:-lkm}
       LKM_AUTH_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
+      # Prefect 编排（M5 7.2.5）：默认关。开启后 cron 对账改为触发 Prefect deployment，
+      # 触发失败 fail-open 回落直调。需同时 `--profile prefect up -d` 起 server/worker。
+      LKM_PREFECT_ENABLED: ${LKM_PREFECT_ENABLED:-false}
+      LKM_PREFECT_API_URL: ${LKM_PREFECT_API_URL:-}
+      LKM_PREFECT_DEPLOYMENT: ${LKM_PREFECT_DEPLOYMENT:-}
+      LKM_PREFECT_ANALYTICS_DEPLOYMENT: ${LKM_PREFECT_ANALYTICS_DEPLOYMENT:-}
+      LKM_PREFECT_API_TOKEN: ${LKM_PREFECT_API_TOKEN:-}
+      # ClickHouse 分析管道（M5 7.2.6）：回落直调导出（auth.tasks → analytics_body）需连
+      # CH；默认关则 no-op。触发成功时重活在 prefect-worker 内，此处仅回落路径用。
+      LKM_CLICKHOUSE_ENABLED: ${LKM_CLICKHOUSE_ENABLED:-false}
+      LKM_CLICKHOUSE_URL: ${LKM_CLICKHOUSE_URL:-http://clickhouse:8123}
+      LKM_CLICKHOUSE_DATABASE: ${LKM_CLICKHOUSE_DATABASE:-lkm}
+      LKM_CLICKHOUSE_USER: ${CLICKHOUSE_USER:-lkm}
+      LKM_CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-change-me-clickhouse}
     volumes:
       - backend_data:/data
     restart: unless-stopped
@@ -714,11 +783,128 @@ services:
     networks:
       - lkm
 
+  # ── Prefect 编排（M5 7.2.5，profile=prefect）：复杂数据管道 flow 的 server/worker ──
+  # 蓝图《后端规划.md》§调度：APScheduler 只做简单 cron 触发入口（cron.* 经总线），
+  # DAG/失败重试/回填由 Prefect flow 编排。默认不启；启用：
+  #   根 .env 置 LKM_PREFECT_ENABLED/API_URL/DEPLOYMENT（见 .env.example）
+  #   docker compose --profile prefect up -d
+  # UI 不发布公网端口（运维经 SSH 隧道访问 server:4200）；与主栈 profile 隔离，可独立 down。
+  prefect-postgres:
+    image: postgres:16-alpine
+    profiles: ['prefect']
+    environment:
+      POSTGRES_USER: prefect
+      POSTGRES_PASSWORD: ${PREFECT_DB_PASSWORD:-change-me-prefect-db}
+      POSTGRES_DB: prefect
+    volumes:
+      - prefect_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U prefect -d prefect']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - lkm
+
+  prefect-server:
+    image: lkm-service:latest
+    profiles: ['prefect']
+    depends_on:
+      prefect-postgres:
+        condition: service_healthy
+    environment:
+      LKM_INFISICAL_ENABLED: ${LKM_INFISICAL_ENABLED:-false}
+      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://prefect:${PREFECT_DB_PASSWORD:-change-me-prefect-db}@prefect-postgres:5432/prefect
+    command: ['prefect', 'server', 'start', '--host', '0.0.0.0']
+    expose:
+      - '4200'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'python',
+          '-c',
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4200/api/health', timeout=5)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - lkm
+
+  # 一次性：注册 work pool 与 deployment（幂等，可重跑）
+  prefect-init:
+    image: lkm-service:latest
+    profiles: ['prefect']
+    depends_on:
+      prefect-server:
+        condition: service_healthy
+    environment:
+      LKM_INFISICAL_ENABLED: ${LKM_INFISICAL_ENABLED:-false}
+      PREFECT_API_URL: http://prefect-server:4200/api
+      LKM_PREFECT_WORK_POOL: ${LKM_PREFECT_WORK_POOL:-lkm}
+      LKM_PREFECT_FLOW_DEPLOYMENT_NAME: ${LKM_PREFECT_FLOW_DEPLOYMENT_NAME:-reconcile}
+    command:
+      - sh
+      - -c
+      - prefect work-pool create "$$LKM_PREFECT_WORK_POOL" --type process || true; python -m app.flows.deploy
+    restart: 'no'
+    networks:
+      - lkm
+
+  # process 型 work pool：flow 直接在 worker 容器内以本地源码执行，复用 lkm-service 镜像。
+  # 环境集比照 jobs worker（flow 会建 auth+业务双会话、用 Redis 锁），另加 PREFECT_API_URL。
+  prefect-worker:
+    image: lkm-service:latest
+    profiles: ['prefect']
+    depends_on:
+      prefect-server:
+        condition: service_healthy
+      prefect-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      LKM_ENV: production
+      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
+      LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
+      LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
+      LKM_REDIS_URL: redis://redis:6379/0
+      LKM_DB_HOST: postgres
+      LKM_DB_PORT: 5432
+      LKM_DB_NAME: ${POSTGRES_DB:-lkm}
+      LKM_DB_USER: ${POSTGRES_USER:-lkm}
+      LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
+      LKM_AUTH_DB_HOST: postgres
+      LKM_AUTH_DB_PORT: 5432
+      LKM_AUTH_DB_NAME: ${LKM_AUTH_DB:-lkm_auth}
+      LKM_AUTH_DB_USER: ${POSTGRES_USER:-lkm}
+      LKM_AUTH_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
+      # ClickHouse 分析管道（M5 7.2.6）：flow 在 worker 内执行导出，需连 CH（默认关则 no-op）
+      LKM_CLICKHOUSE_ENABLED: ${LKM_CLICKHOUSE_ENABLED:-false}
+      LKM_CLICKHOUSE_URL: ${LKM_CLICKHOUSE_URL:-http://clickhouse:8123}
+      LKM_CLICKHOUSE_DATABASE: ${LKM_CLICKHOUSE_DATABASE:-lkm}
+      LKM_CLICKHOUSE_USER: ${CLICKHOUSE_USER:-lkm}
+      LKM_CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-change-me-clickhouse}
+      PREFECT_API_URL: http://prefect-server:4200/api
+    command: ['prefect', 'worker', 'start', '--pool', '${LKM_PREFECT_WORK_POOL:-lkm}', '--type', 'process']
+    restart: unless-stopped
+    networks:
+      - lkm
+
 volumes:
   certbot_conf:
   certbot_www:
   apisix_conf:
   infisical_db_data:
+  prefect_pg_data:
+  clickhouse_data:
   backend_data:
   postgres_data:
   redis_data:
