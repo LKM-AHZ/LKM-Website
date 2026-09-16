@@ -20,7 +20,7 @@ LKM 网站由三份独立 git 仓库组成(根仓库仅做编排,包含本教程
 LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / dev 脚本 / 本教程)
 ├── DEVELOPMENT.md            # 本文件
 ├── DEPLOYMENT.md             # 生产部署教程
-├── docker-compose.yml        # 生产编排(nginx/astro/static/postgres/redis/minio/backend/worker 等)
+├── docker-compose.yml        # 生产编排(apisix/astro/static/postgres/redis/minio/backend/worker 等)
 ├── dev.bat / dev.ps1 / dev.sh# 本地一键启动脚本
 ├── .gitignore                # 忽略 .env、记忆目录等敏感/本地文件
 ├── docs/                     # 设计文档与需求总结(被 gitignore 忽略,不入库)

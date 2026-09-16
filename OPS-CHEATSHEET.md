@@ -34,9 +34,10 @@ docker compose up -d --force-recreate worker worker-send   # 让 worker 吃到�
 docker compose restart backend
 docker compose stop certbot        # 无域名时 certbot 空跑,可停掉减日志噪音
 
-# 健康检查(后端依赖 DB+Redis;astro 依赖后端就绪后才由 nginx 拉起)
+# 健康检查(后端依赖 DB+Redis;astro 依赖后端就绪后才由 APISIX 拉起)
 curl http://127.0.0.1/api/v1/health
 # 期望 {"code":0,"msg":"OK","data":{"status":"ok","db":{"status":"up"},"redis":{"status":"up"}}}
+# 探针分级(M6.2):/api/v1/liveness 零外部依赖(进程心跳);/api/v1/readiness 复合四项(未就绪 503)
 ```
 
 ## 二、日志
@@ -47,7 +48,7 @@ docker compose ps --format "{{.Name}}"
 
 # 实时跟踪某服务日志
 docker compose logs -f backend
-docker compose logs -f nginx
+docker compose logs -f apisix       # 网关(唯一对外入口,访问日志在此)
 docker compose logs -f worker       # 任务队列消费
 docker compose logs -f worker-send  # 发送队列
 docker compose logs -f minio        # MinIO
@@ -59,7 +60,7 @@ docker logs --tail 120 <容器名> 2>&1 | grep -iE "error|exception|traceback"
 
 ## 三、MinIO 对象存储
 
-MinIO 仅内网(经 nginx `/lkm/` 转发给浏览器),不开放公网 9000。管理用容器内 `mc`:
+MinIO 仅内网(经 APISIX `/lkm/` 转发给浏览器),不开放公网 9000。管理用容器内 `mc`:
 
 ```sh
 mc(){ docker exec lkm-website-minio-1 sh -c 'mc alias set m http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" && mc '"$@"; }
@@ -128,8 +129,8 @@ docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
 
 ## 六、证书 / HTTPS
 
-- **有域名**:`docker compose run --rm --entrypoint certbot certbot certonly --webroot -w /var/www/certbot -d <域名>`;续期由 certbot 每 12h 自动 + nginx 每 6h reload。
-- **无域名(自签)**:nginx entrypoint 自动生成自签占位证书(CN=公网 IP),443 可用但浏览器告警;80 是主入口直接反代。
+- **有域名**:`docker compose run --rm --entrypoint certbot certbot certonly --webroot -w /var/www/certbot -d <域名>`;续期由 certbot 每 12h 自动 + `apisix-render` 每 6h 重渲染触发 APISIX reload。
+- **无域名(自签)**:`apisix-render` 缺证书时自动生成自签占位(CN=域名),443 可用但浏览器告警;http 由 APISIX 301 到 https。
 
 ## 七、常见故障速查(本次实战踩坑)
 
@@ -137,8 +138,8 @@ docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
 |---|---|---|
 | 头像/文件上传 `404` | MinIO 桶未建(S3 不自动建) | `mc mb --ignore-existing m/lkm` |
 | 上传 `403 SignatureDoesNotMatch` | boto3 对 MinIO 默认 SigV2 | s3.py 预签名 client 需 `signature_version="s3v4"`+path 寻址+region;公网 host 与 `LKM_S3_PUBLIC_ENDPOINT_URL` 一致 |
-| 上传经 nginx `400 Bad Request`(直连正常) | ①proxy_pass 丢了签名 query ②Host 被 include 覆盖 | `/lkm/` 反代 `proxy_pass ...$request_uri`;单独设 Host,勿 include proxy-common-headers.conf |
-| nginx 反复 `Restarting` | entrypoint.sh 是 CRLF 行尾 | `sed -i 's/\r$//' deploy/nginx/entrypoint.sh` 转 LF 后 `docker compose up -d --build nginx` 重建 |
+| 上传经 APISIX `400 Bad Request`(直连正常) | MinIO 路由 Host 未改写为公网站点(SigV4 预签名按公网 host 签) | `deploy/apisix/apisix.yaml` 的 `minio` 路由用 `pass_host: rewrite` + `upstream_host`,勿用 `proxy-rewrite.host`(会被 pass_host 以 nil 覆盖) |
+| 容器反复 `Restarting` | 挂载进去的 `.sh` 是 CRLF 行尾 | `sed -i 's/\r$//' <脚本>` 转 LF 后重建;仓根 `deploy/**` 已由 `.gitattributes` 强制 LF |
 | worker 反复重启,日志 `Insecure secrets...` | worker 服务缺三个密钥 env | compose 给 worker/worker-send 注入 `LKM_JWT_SECRET` 等 |
 | worker 连 `localhost:6379` | `Worker()` 没传 `redis_settings` | `app/core/worker.py` 各 `Worker(...)` 加 `redis_settings=_redis_settings()` |
 | worker `cron ValueError` | arq `weekday` 简写错 | `'thu'`→`'thurs'`(arq 的 WEEKDAYS 是三/四字母) |

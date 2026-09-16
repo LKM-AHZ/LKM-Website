@@ -1,6 +1,6 @@
 # LKM 网站部署教程
 
-本文档说明如何把 LKM 网站(前端 Astro + 后端 FastAPI)通过 nginx 统一入口部署到生产主机。
+本文档说明如何把 LKM 网站(前端 Astro + 后端 FastAPI)通过 APISIX 统一入口部署到生产主机。
 
 > **当前实际部署为「测试 IP 直连」模式**:无正式域名,对外走测试 IP `124.220.55.235`(HTTP 为主 +
 > 自签证书兜底)。下文把「正式域名 + Let's Encrypt」作为可选路径,与「三·五 无域名/公网 IP 直连」
@@ -8,14 +8,16 @@
 
 ## 架构概览
 
-单机 docker-compose 编排 20 个服务,nginx 为唯一对外入口:
+单机 docker-compose 编排,APISIX 为唯一对外入口(**全栈唯一网关**;nginx 已彻底移除):
 
 | 服务 | 镜像 | 端口(对外) | 职责 |
 |---|---|---|---|
-| `nginx` | `nginx:1.27-alpine` | `80` / `443` | TLS 终止、HTTP→HTTPS 重定向、反代分流、gzip、静态缓存 |
+| `apisix` | `apache/apisix:3.9.0-debian` | `80` / `443` | **唯一网关**:TLS 终止、HTTP→HTTPS 重定向、反代分流、gzip、CORS 白名单、限流 |
+| `apisix-render` | `alpine:3.19` | 无 | 纯 shell sidecar:把证书内联进 apisix.yaml 并每 6h 重渲染(触发 APISIX reload) |
+| `acme-webroot` | `nginx:1.27-alpine` | 无 | 微型静态 responder:仅服务 ACME `/.well-known/acme-challenge/`(非网关角色) |
 | `certbot` | `certbot/certbot` | 无 | 申请与自动续期 Let's Encrypt 证书(webroot) |
 | `astro` | `lkm-official-website:latest` | 仅内网 `4321` | 前端 SSR |
-| `static` | `lkm-official-static:latest` | `8082` | 纯静态官网(独立 nginx 输出) |
+| `static` | `lkm-official-static:latest` | `8082` | 纯静态官网(独立静态文件服务器) |
 | `backend` | `lkm-service:latest` | 仅内网 `8000` | FastAPI(REST `/api/v1`)+ 论坛域 GraphQL + lag 上报 |
 | `auth` | `lkm-service:latest` | 仅内网 `8001` | AUTH 独立进程(`app.main_auth`) |
 | `worker` | `lkm-service:latest` | 无 | jobs + user-invalidate 订阅。`python -m app.core.worker_default` |
@@ -40,23 +42,23 @@
 请求分流(有域名走 443 / 无域名走 80):
 
 ```
-浏览器 ──> nginx(80 与 443)
-              ├─ /api/        ──> backend:8000   (保持路径)
+浏览器 ──> APISIX(80 与 443)
+              ├─ /api/        ──> backend:8000   (保持路径, WS upgrade 已开)
               ├─ /graphql     ──> backend:8000   (支持 WebSocket)
               ├─ /_astro/*    ──> astro:4321     (指纹静态资源, immutable 长缓存)
               ├─ /lkm/        ──> minio:9000     (对象存储预签名直传/下载, 保留全部 path+query)
               └─ 其余         ──> astro:4321     (SSR)
 ```
 
-后端 REST 前缀为 `/api/v1`,GraphQL 为 `/graphql`。nginx 用 Docker 内嵌 DNS(`resolver 127.0.0.11`)在运行时动态解析 `backend`/`astro`,不依赖启动期 DNS。
+后端 REST 前缀为 `/api/v1`,GraphQL 为 `/graphql`。APISIX 用 Docker 内嵌 DNS(`dns_resolver: ['127.0.0.11']` + `discovery_type: dns`)在运行时动态解析 `backend`/`astro`,不依赖启动期 DNS。
 
-> `static` 服务(**纯静态官网**)不挂在此 nginx 下,由独立容器输出并映射到主机 `${LKM_STATIC_PORT:-8082}` 端口,直接从 `http://<主机IP>:8082` 访问。
+> `static` 服务(**纯静态官网**)不挂在 APISIX 的主域名路由下,由独立容器输出并映射到主机 `${LKM_STATIC_PORT:-8082}` 端口,可直接从 `http://<主机IP>:8082` 访问(经 APISIX 的 `.icu` 域名路由亦可)。
 
 ## 前置条件
 
 - 一台有公网 IP 的 Linux 主机,防火墙/安全组放行 `80` 与 `443` 端口。
-  > MinIO 不开放独立公网端口:对象存储经 nginx `/lkm/` 路径转发到 `minio:9000`(仅内网),
-  > 浏览器访问经 nginx 统一入口即可,无需在安全组另开 9000。
+  > MinIO 不开放独立公网端口:对象存储经 APISIX `/lkm/` 路径转发到 `minio:9000`(仅内网),
+  > 浏览器访问经 APISIX 统一入口即可,无需在安全组另开 9000。
 - **域名可选**:有域名走 `lkm.s12mc.xyz` + Let's Encrypt 正式证书;**无域名可用公网 IP 直连**——
   此时走 **HTTP(80)+自签证书(443)** 模式(见下文「无域名/IP 直连」一节),浏览器访问 IP 即可。
 - 已安装 Docker 与 Docker Compose 插件(`docker compose version` 可正常输出)。
@@ -72,7 +74,8 @@ LKM-Website/                  # 根仓库(含 docker-compose.yml 与本教程)
 ├── dev.bat / dev.ps1 / dev.sh
 ├── deploy/
 │   ├── initdb/               # PostgreSQL 首启初始化脚本(auth 独立库建库)
-│   └── nginx/                # 全站公网入口 nginx 反代配置(并入根仓库部署资产)
+│   ├── apisix/               # 全站公网入口 APISIX 声明式路由/SSL 渲染/冒烟脚本
+│   └── certbot/              # certbot 常驻入口脚本(webroot 申请与续期)
 ├── LKM-official-website/     # 前端仓库(含前端 Dockerfile)
 └── LKM-service/              # 后端仓库(含后端 Dockerfile)
 ```
@@ -107,6 +110,14 @@ POSTGRES_DB=lkm
 # 留空则后端回退到单机内存版限流(共享限流失效);生产建议保留 compose 默认值
 # LKM_REDIS_URL=redis://redis:6379/0
 
+# 公网安全面(M6.1;compose 已给生产默认值,一般无需改动)。
+# 换域名时**两处都要改**:此处 + deploy/apisix/apisix.yaml 的 cors.allow_origins。
+# ALLOWED_HOSTS 必须含内网服务名与回环(backend,auth,localhost,127.0.0.1),
+#   否则容器 healthcheck 直连 127.0.0.1 会被判 400 → 容器长期 unhealthy。
+# CORS_ORIGINS 须含前端域名(漏配致前端跨域全挂);不可填 `*`(会自动关闭凭证携带)。
+# LKM_ALLOWED_HOSTS=lkm-ahz.ltd,www.lkm-ahz.ltd,backend,auth,localhost,127.0.0.1
+# LKM_CORS_ORIGINS=https://lkm-ahz.ltd,https://www.lkm-ahz.ltd
+
 # MinIO 对象存储(必须设置密码;文件库与成员头像均存于此)
 MINIO_ROOT_PASSWORD=<强随机密码>
 # 可选:MinIO 管理员账号(默认 lkmadmin)
@@ -116,7 +127,7 @@ MINIO_ROOT_PASSWORD=<强随机密码>
 # LKM_S3_PREFIX=files
 
 # S3 预签名直传/下载的公网地址(浏览器直连 MinIO 用)。
-# 默认走站点公网地址经 nginx /lkm/ 转发(MinIO 不打公网端口),一般无需改动。
+# 默认走站点公网地址经 APISIX /lkm/ 转发(MinIO 不打公网端口),一般无需改动。
 # 若 MinIO 暴露了另外的公网端口,改成对应的地址即可。
 # LKM_S3_PUBLIC_ENDPOINT_URL=http://124.220.55.235
 
@@ -143,17 +154,17 @@ docker compose up -d --build
 
 首次构建需拉取基础镜像与依赖,可能耗时数分钟。启动顺序由 `depends_on` 健康检查保证:先 `postgres`、`redis`、`minio`、`pulsar` 就绪,再启动 `backend`/`auth` 与各 `worker`,前端 `astro`/`static` 就绪后网关 `apisix` 再启动。
 
-## 三·六、网关：APISIX（M5 7.2.4，已全量替换 nginx）
+## 三·六、网关：APISIX（M5 7.2.4，全栈唯一网关）
 
-默认接入层为 **APISIX standalone**（无 etcd，路由声明式来自 `deploy/apisix/apisix.yaml`）：
+接入层为 **APISIX standalone**（无 etcd，路由声明式来自 `deploy/apisix/apisix.yaml`）：
 
 - `apisix-render` sidecar 读路由模板 + certbot 证书，渲染出内联 PEM 的 `ssls` 段写入共享卷（每 6h 或重启时重渲染），APISIX 监测文件变化自动 reload。
 - `acme-webroot` 是极小的 http-01 challenge 静态 responder（不承担网关路由）。
-- 旧 nginx 保留为快速回退（`profiles: ["nginx-gateway"]`，默认不启）：
-  ```sh
-  docker compose stop apisix apisix-render acme-webroot
-  docker compose --profile nginx-gateway up -d nginx
-  ```
+- **nginx 已彻底移除**：旧网关曾以 `profiles: ["nginx-gateway"]` 作回退路径保留，但它已与 APISIX 路由分叉
+  （如 `/api/` 未开 WS upgrade → `/api/v1/ws/events` 经回退路径不可用），成为一份会腐烂的第二真相源；
+  回退机制改由 git 承担（`git revert` / 检出历史 tag 得到的是「当时一致」的整套配置）。
+  全栈仅存的 nginx 镜像是 `acme-webroot` 与官网 `static` 两处**静态文件服务器**角色（非网关），二者与
+  APISIX 是互补关系而非重叠。
 
 **运行时冒烟/验收**（网关 up 后，在仓库根执行）：
 
@@ -249,15 +260,12 @@ LKM_FRONTEND_CALLBACK: http://124.220.55.235/login/success
 #    src/data/config.yaml:site 改 http://124.220.55.235
 #    astro.config.ts:allowedHosts 加 "124.220.55.235"
 
-# 3. deploy/nginx/nginx.conf:server_name 改 IP;80 端口的 server 不再 301 到 443,
-#    改为直接反代(HTTP 是主入口);443 保留自签证书(供 admin secure cookie 使用)
-
-# 4. deploy/nginx/entrypoint.sh:自签证书目录与 CN 用 IP(124.220.55.235)
+# 3. deploy/apisix/apisix.yaml:各路由 hosts 列（IP 无法配 hosts，需另加按 priority 兜底的路由）；
+#    deploy/apisix/config.yaml 的 redirect.https_port 与 dns 解析按需调整
 ```
 
-> **注（M5 7.2.4 起）**：默认网关已是 APISIX，上述第 3/4 步（nginx.conf/entrypoint）仅在使用
-> `--profile nginx-gateway` 回退时适用。走 APISIX 的无域名改造需改 `deploy/apisix/apisix.yaml`
-> 的 `hosts`（IP 无法配 hosts，需另加按 `priority` 兜底的路由）与 `config.yaml`，未在本教程展开。
+> **注**：网关自 M5 7.2.4 起为 APISIX，无域名/IP 直连改造只需改上述第 3 步（`deploy/apisix/` 下两个
+> YAML），未在本教程展开。
 
 - **certbot 服务可停**(`docker compose stop certbot`):无域名不签正式证书,其会循环空跑 renew 报错污染日志。
 - **403 后台明文限制**:admin 后台 cookie 带 `Secure`,**纯 HTTP(80)下浏览器不发送** → 后台登录会话无法保持。
@@ -266,16 +274,18 @@ LKM_FRONTEND_CALLBACK: http://124.220.55.235/login/success
 
 ## 四、首次签发 HTTPS 证书
 
-nginx 首次启动时没有正式证书,会用自签占位证书占位(保证能启动)。正式签发:
+`apisix-render` 首次渲染时若发现无证书,会生成自签占位证书(保证 APISIX 能带 TLS 启动)。正式签发:
 
 ```sh
 docker compose run --rm --entrypoint certbot certbot certonly --webroot \
   -w /var/www/certbot -d lkm.s12mc.xyz
 
-docker compose exec nginx nginx -s reload
+# 触发 apisix-render 立即重渲染（把新证书内联进 ssls 段），APISIX 监测到文件变化自动 reload
+docker compose restart apisix-render
 ```
 
-签发成功后证书落在 `certbot_conf` 卷(`/etc/letsencrypt`),reload 后 443 端口即使用正式证书。
+签发成功后证书落在 `certbot_conf` 卷(`/etc/letsencrypt`),重渲染后 443 端口即使用正式证书。
+(平时无需手动:`apisix-render` 每 6h 重渲染一次,会顺带拾取续期后的新证书。)
 
 ## 五、验证
 
@@ -309,7 +319,8 @@ openssl s_client -connect lkm.s12mc.xyz:443 </dev/null 2>/dev/null | openssl x50
 ## 六、证书续期(自动)
 
 - `certbot` 容器每 12 小时执行 `certbot renew`,证书文件原地更新。
-- `nginx` 容器每 6 小时 `nginx -s reload`,自动拾取续期后的新证书。
+- `apisix-render` 容器每 6 小时重渲染一次 `apisix.yaml`(内联新证书),APISIX 监测文件变化自动 reload。
+  该重渲染同时刷新 upstream DNS 解析(standalone 为静态解析,后端容器换 IP 靠此自愈)。
 
 无需人工干预;证书与续期状态都在 `certbot_conf` 卷,容器重建不丢。
 
@@ -320,7 +331,7 @@ openssl s_client -connect lkm.s12mc.xyz:443 </dev/null 2>/dev/null | openssl x50
 docker compose ps
 
 # 查看日志
-docker compose logs -f nginx
+docker compose logs -f apisix       # 网关(唯一对外入口,访问日志在此)
 docker compose logs -f backend
 docker compose logs -f worker       # 任务队列消费
 docker compose logs -f worker-send  # 发送队列
@@ -473,18 +484,16 @@ cd LKM-service
 ## 常见问题
 
 - **后端反复重启(Exited 3)**:通常是密钥缺失或过短。确认 `.env` 中三个密钥已设置为强随机值,并 `docker compose up -d` 重读。
-- **上传大文件被拒**:nginx 已设 `client_max_body_size 100m`,与后端 100MB 上限对齐;更大文件需同时改 nginx 配置与后端 `max_upload_bytes`。
+- **上传大文件被拒**:APISIX 路由已设 `client-control.max_body_size: 104857600`(100m),与后端 `max_upload_bytes` 对齐;更大文件需同时改 `deploy/apisix/apisix.yaml` 与后端配置。
 - **数据库**:使用 PostgreSQL(`postgres:16-alpine` 服务,卷持久化)。后端经 `LKM_DB_*` 环境变量以 `postgresql+asyncpg` 连接;首次启动时 alembic 自动建表。
-- **换域名/子路径**:需同步改 nginx 配置的 `server_name`、证书签发域名,以及前端 `PUBLIC_SITE_URL` / `PUBLIC_BASE_PATH`、后端 compose 的 `LKM_ORIGIN`/`LKM_RP_ID`/`LKM_S3_PUBLIC_ENDPOINT_URL`。
+- **换域名**:需同步改 `deploy/apisix/apisix.yaml` 的 `hosts`/`cors.allow_origins`、`.env` 的 `LKM_ALLOWED_HOSTS`/`LKM_CORS_ORIGINS`(见下「公网安全面」)、证书签发域名,以及前端 `PUBLIC_SITE_URL` / `PUBLIC_BASE_PATH`、后端 compose 的 `LKM_ORIGIN`/`LKM_RP_ID`/`LKM_S3_PUBLIC_ENDPOINT_URL`。
 
 - **头像/文件上传 404**:MinIO 桶未创建(S3 不自动建桶)。先 `mc mb .../lkm` 建桶(见上文「MinIO 首次初始化」)。
 
 - **上传返回 403 SignatureDoesNotMatch**:boto3 对 MinIO 默认生成 SigV2 签名,MinIO 不认 → 需在 s3.py 预签名 client 显式 `signature_version="s3v4"` + `addressing_style="path"` + 给 region。且预签名 URL 的 host 必须与浏览器实际访问的 host 一致(`LKM_S3_PUBLIC_ENDPOINT_URL`)。
 
-- **上传经 nginx 后 400 Bad Request**(而直连 MinIO 正常)**:两个 nginx 细节:
-  1. `/lkm/` 反代 `proxy_pass` 必须带 `$request_uri`(否则丢 `X-Amz-Signature` 等签名参数);
-  2. 不能 `include proxy-common-headers.conf`(其 `Host $host` 会覆盖签名用的 host),应单独 `proxy_set_header Host <公网host>`。
+- **上传经 APISIX 后 400 Bad Request**(而直连 MinIO 正常)**:MinIO 路由的 Host 必须落为公网站点(SigV4 预签名按公网 host 签)(`deploy/apisix/apisix.yaml` 的 `minio` 路由用 `pass_host: rewrite` + `upstream.upstream_host`;用插件 `proxy-rewrite.host` 会被 pass_host 以 nil 覆盖 → 空 Host → MinIO 400)。
 
-- **MinIO 建议经 nginx 转发而非开公网 9000**:compose 里 minio 保持 `expose`(仅内网),由 nginx `/lkm/` 路径转 发;安全组只需放行 80/443。
+- **MinIO 建议经 APISIX 转发而非开公网 9000**:compose 里 minio 保持仅内网,由 APISIX `/lkm/` 路径转发;安全组只需放行 80/443。
 
 - **后台登录后操作报「需要 MFA」**:登录不再强制 2FA(对齐 GitHub),仅后台危险操作(板块审核等)要求 2FA;通过后信任 1 小时。首次需在后台完成 2FA 设置。

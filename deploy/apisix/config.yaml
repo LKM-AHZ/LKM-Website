@@ -3,7 +3,7 @@
 apisix:
   node_listen: 9080          # 容器内 http；compose 映射 80:9080
   enable_ipv6: false
-  # Docker 内嵌 DNS：upstream discovery_type=dns 用，复刻旧 nginx resolver 的动态解析行为
+  # Docker 内嵌 DNS：upstream discovery_type=dns 用，等效于传统 nginx `resolver` 的动态解析行为
   # 注意 APISIX schema 要求数组形式，写成裸字符串会启动即 "wrong type: expected array, got string"
   dns_resolver: ['127.0.0.11']
   dns_resolver_valid: 30

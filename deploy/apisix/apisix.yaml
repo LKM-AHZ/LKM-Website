@@ -1,4 +1,4 @@
-# APISIX standalone 声明式路由（M5 7.2.4，nginx 全量替换）。
+# APISIX standalone 声明式路由（M5 7.2.4）：本栈唯一网关；nginx 网关已于 2026-09-16 彻底移除。
 # 由 apisix-render 读取本文件（路由模板）+ certbot 证书渲染出 /out/apisix.yaml 供 APISIX 加载：
 # `# __SSL_SECTION__` 注释行是渲染占位（render.sh 替换为内联 PEM 的 ssls 段），勿删。
 # 匹配规则：priority 高者先，其次 uri 长者先；精确路径（无 *）优先于前缀。
@@ -7,7 +7,7 @@ global_rules:
   - id: 1
     plugins:
       gzip: {}
-  # 转发头对齐（旧 nginx proxy-common-headers.conf）：APISIX 默认不设 X-Real-IP/XFF/Proto。
+  # 转发头对齐：APISIX 默认不设 X-Real-IP/XFF/Proto，须显式补（历史 nginx 配置有设）。
   # 网关即边缘，XFF 直接以对端地址覆写（不追加，避免伪造链）；$remote_addr/$scheme 由插件 resolve_var 展开。
   - id: 2
     plugins:
@@ -56,7 +56,18 @@ routes:
         rejected_code: 429
       client-control:
         max_body_size: 104857600
-      cors: {}
+      # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
+      # 与应用层 `LKM_CORS_ORIGINS` 同值，互为纵深（网关先答预检，应用层是直连端口的兜底）。
+      # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
+      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
+      # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
+      cors:
+        allow_origins: "https://lkm-ahz.ltd,https://www.lkm-ahz.ltd"
+        allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
+        allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
+        expose_headers: "X-Request-ID"
+        max_age: 3600
+        allow_credential: true
     upstream:
       type: roundrobin
       discovery_type: dns
@@ -71,7 +82,18 @@ routes:
     plugins:
       client-control:
         max_body_size: 104857600
-      cors: {}
+      # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
+      # 与应用层 `LKM_CORS_ORIGINS` 同值，互为纵深（网关先答预检，应用层是直连端口的兜底）。
+      # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
+      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
+      # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
+      cors:
+        allow_origins: "https://lkm-ahz.ltd,https://www.lkm-ahz.ltd"
+        allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
+        allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
+        expose_headers: "X-Request-ID"
+        max_age: 3600
+        allow_credential: true
     upstream:
       type: roundrobin
       discovery_type: dns
@@ -86,7 +108,18 @@ routes:
     plugins:
       client-control:
         max_body_size: 104857600
-      cors: {}
+      # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
+      # 与应用层 `LKM_CORS_ORIGINS` 同值，互为纵深（网关先答预检，应用层是直连端口的兜底）。
+      # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
+      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
+      # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
+      cors:
+        allow_origins: "https://lkm-ahz.ltd,https://www.lkm-ahz.ltd"
+        allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
+        allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
+        expose_headers: "X-Request-ID"
+        max_age: 3600
+        allow_credential: true
     upstream:
       type: roundrobin
       discovery_type: dns
@@ -101,7 +134,18 @@ routes:
     plugins:
       client-control:
         max_body_size: 104857600
-      cors: {}
+      # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
+      # 与应用层 `LKM_CORS_ORIGINS` 同值，互为纵深（网关先答预检，应用层是直连端口的兜底）。
+      # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
+      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
+      # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
+      cors:
+        allow_origins: "https://lkm-ahz.ltd,https://www.lkm-ahz.ltd"
+        allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
+        allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
+        expose_headers: "X-Request-ID"
+        max_age: 3600
+        allow_credential: true
     upstream:
       type: roundrobin
       discovery_type: dns
@@ -116,7 +160,18 @@ routes:
     plugins:
       client-control:
         max_body_size: 104857600
-      cors: {}
+      # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
+      # 与应用层 `LKM_CORS_ORIGINS` 同值，互为纵深（网关先答预检，应用层是直连端口的兜底）。
+      # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
+      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
+      # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
+      cors:
+        allow_origins: "https://lkm-ahz.ltd,https://www.lkm-ahz.ltd"
+        allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
+        allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
+        expose_headers: "X-Request-ID"
+        max_age: 3600
+        allow_credential: true
     upstream:
       type: roundrobin
       discovery_type: dns
@@ -133,7 +188,18 @@ routes:
     plugins:
       client-control:
         max_body_size: 104857600
-      cors: {}
+      # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
+      # 与应用层 `LKM_CORS_ORIGINS` 同值，互为纵深（网关先答预检，应用层是直连端口的兜底）。
+      # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
+      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
+      # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
+      cors:
+        allow_origins: "https://lkm-ahz.ltd,https://www.lkm-ahz.ltd"
+        allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
+        allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
+        expose_headers: "X-Request-ID"
+        max_age: 3600
+        allow_credential: true
     upstream:
       type: roundrobin
       discovery_type: dns
@@ -149,7 +215,18 @@ routes:
     plugins:
       client-control:
         max_body_size: 104857600
-      cors: {}
+      # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
+      # 与应用层 `LKM_CORS_ORIGINS` 同值，互为纵深（网关先答预检，应用层是直连端口的兜底）。
+      # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
+      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
+      # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
+      cors:
+        allow_origins: "https://lkm-ahz.ltd,https://www.lkm-ahz.ltd"
+        allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
+        allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
+        expose_headers: "X-Request-ID"
+        max_age: 3600
+        allow_credential: true
     upstream:
       type: roundrobin
       discovery_type: dns
@@ -164,7 +241,18 @@ routes:
     plugins:
       client-control:
         max_body_size: 104857600
-      cors: {}
+      # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
+      # 与应用层 `LKM_CORS_ORIGINS` 同值，互为纵深（网关先答预检，应用层是直连端口的兜底）。
+      # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
+      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
+      # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
+      cors:
+        allow_origins: "https://lkm-ahz.ltd,https://www.lkm-ahz.ltd"
+        allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
+        allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
+        expose_headers: "X-Request-ID"
+        max_age: 3600
+        allow_credential: true
     upstream:
       type: roundrobin
       discovery_type: dns

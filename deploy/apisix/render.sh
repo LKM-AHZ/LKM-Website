@@ -3,7 +3,7 @@
 # standalone 的 ssl 对象只接受**内联 PEM**（不能引用证书文件路径），故由本 sidecar 读取
 # deploy/apisix/apisix.yaml（路由模板，含 `# __SSL_SECTION__` 占位）+ certbot 证书，渲染出
 # 完整 apisix.yaml 写入共享卷，供 APISIX 的 yaml config_provider 自动加载。
-# - 缺证书时按旧 nginx 入口同法生成自签占位，保证 APISIX 冷启动即有证书可起。
+# - 缺证书时生成自签占位（CN=域名，1 天有效），保证 APISIX 冷启动即有证书可起。
 # - 每 6h 重渲染一次：既拾取 certbot 续期后的新证书，也顺带触发 APISIX reload 重新解析
 #   upstream DNS（standalone 静态解析，重启后容器 IP 变化靠此刷新）。
 # - 渲染失败（awk/sed 异常）不覆盖上一版 good config（tmp + mv 原子替换）。
@@ -22,7 +22,7 @@ ensure_selfsigned() {
     cert="$dir/fullchain.pem"
     key="$dir/privkey.pem"
     if [ ! -f "$cert" ] || [ ! -f "$key" ]; then
-        # nginx:alpine 默认不含 openssl CLI，按需安装（与旧 nginx entrypoint 同法）
+        # alpine 基础镜像不含 openssl CLI，按需安装（失败不致命：已有证书时根本不走这里）
         apk add --no-cache openssl >/dev/null 2>&1 || true
         mkdir -p "$dir"
         openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
