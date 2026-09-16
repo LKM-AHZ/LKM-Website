@@ -8,6 +8,12 @@ services:
     # 用最小 alpine，不借用任何 Web 服务器镜像。
     image: alpine:3.19
     entrypoint: ['sh', '/src/render.sh']
+    environment:
+      # 网关配置的**单一来源**：路由 hosts 与 CORS 来源由域名变量展开，请求体上限与后端
+      # LKM_MAX_UPLOAD_BYTES 取同一个 env。改域名/改上限只需动 .env 一处。
+      APISIX_COMMUNITY_DOMAINS: ${LKM_COMMUNITY_DOMAINS:-lkm-ahz.ltd}
+      APISIX_OFFICIAL_DOMAINS: ${LKM_OFFICIAL_DOMAINS:-lkm-ahz.icu}
+      APISIX_MAX_BODY_SIZE: ${LKM_MAX_UPLOAD_BYTES:-104857600}
     volumes:
       - ./deploy/apisix:/src:ro
       - certbot_conf:/etc/letsencrypt
@@ -345,10 +351,13 @@ services:
         condition: service_completed_successfully
     environment:
       LKM_ENV: production
-      # 公网安全面（M6.1）：生产必填（缺则进程装配期 fail-fast）。内网服务名/回环必须列入
-      # 白名单，否则容器 healthcheck 直连 127.0.0.1 会被 TrustedHost 判 400 而长期 unhealthy。
+      # 公网 Host 白名单（M6.1）：生产必填（缺则进程装配期 fail-fast）。内网服务名/回环
+      # 必须列入，否则容器 healthcheck 直连 127.0.0.1 会被 TrustedHost 判 400 → 长期 unhealthy。
+      # CORS 不在此下发：生产不挂应用层 CORS，唯一权威是 APISIX 的 cors 插件
+      # （deploy/apisix/apisix.yaml），来源白名单在 render.sh 里由域名变量展开。
       LKM_ALLOWED_HOSTS: ${LKM_ALLOWED_HOSTS:-lkm-ahz.ltd,www.lkm-ahz.ltd,backend,auth,localhost,127.0.0.1}
-      LKM_CORS_ORIGINS: ${LKM_CORS_ORIGINS:-https://lkm-ahz.ltd,https://www.lkm-ahz.ltd}
+      # 单文件上传上限：与网关 APISIX 的 max_body_size 同源（apisix-render 读同一个 env）
+      LKM_MAX_UPLOAD_BYTES: ${LKM_MAX_UPLOAD_BYTES:-104857600}
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
@@ -442,9 +451,9 @@ services:
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
-      # 公网安全面（M6.1）：与 backend 同值，auth 亦承载对外认证面
+      # 公网 Host 白名单（M6.1）：与 backend 同值；auth 亦承载对外认证面。
+      # CORS 同 backend：生产唯一权威是 APISIX，不在此下发。
       LKM_ALLOWED_HOSTS: ${LKM_ALLOWED_HOSTS:-lkm-ahz.ltd,www.lkm-ahz.ltd,backend,auth,localhost,127.0.0.1}
-      LKM_CORS_ORIGINS: ${LKM_CORS_ORIGINS:-https://lkm-ahz.ltd,https://www.lkm-ahz.ltd}
       LKM_REDIS_URL: redis://redis:6379/0
       LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres

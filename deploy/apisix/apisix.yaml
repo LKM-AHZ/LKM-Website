@@ -22,7 +22,7 @@ routes:
   # ── ACME http-01：两域名的 challenge 走微型静态 responder（非网关角色）──
   - id: acme-challenge
     uri: /.well-known/acme-challenge/*
-    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd, lkm-ahz.icu, www.lkm-ahz.icu]
+    hosts: [__ALL_HOSTS__]
     priority: 300
     vars: [["scheme", "==", "http"]]
     upstream:
@@ -34,7 +34,7 @@ routes:
   # ── http → https 301（两域名共用；优先级低于 ACME，challenge 不受影响）──
   - id: http-redirect
     uri: /*
-    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd, lkm-ahz.icu, www.lkm-ahz.icu]
+    hosts: [__ALL_HOSTS__]
     priority: 200
     vars: [["scheme", "==", "http"]]
     plugins:
@@ -45,9 +45,15 @@ routes:
   # ── 登录写面：网关层限流（应用层另有 Redis 防爆破），local 计数不引入集群依赖 ──
   - id: auth-login
     uri: /api/v1/auth/login/*
-    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    hosts: [__COMMUNITY_HOSTS__]
     priority: 150
     plugins:
+      # 登录限流「网关那一半」——**分工，不是重复**（与应用层不是同一把锁，数值本就不同）：
+      #   网关（这里）：按 remote_addr 的**粗粒度削峰**，policy=local 各实例独立计数，
+      #                 目的是把洪水挡在应用之前；无法做账号级归因。
+      #   应用（LKM_LOGIN_*，见 app/core/config.py）：**账号级精确锁定**——用户名级 +
+      #                 真实 IP 级（经 X-Real-IP）Redis 滑动窗口，跨实例共享，才会真正锁账号。
+      # 故这里 60/60s 与应用的 20/200/60s 不必也不应取同值；调参请各自按各自语义调。
       limit-count:
         count: 60
         time_window: 60
@@ -55,14 +61,15 @@ routes:
         policy: local
         rejected_code: 429
       client-control:
-        max_body_size: 104857600
+        # 与后端 LKM_MAX_UPLOAD_BYTES 同源（render.sh 从同一 env 展开），禁两处手改
+        max_body_size: __MAX_BODY_SIZE__
       # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
-      # 与应用层 `LKM_CORS_ORIGINS` 同值，互为纵深（网关先答预检，应用层是直连端口的兜底）。
+      # 生产**只此一处**（应用层不再挂 CORS，见 core/middleware.py），来源由域名变量展开。
       # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
       # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
       # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
       cors:
-        allow_origins: "https://lkm-ahz.ltd,https://www.lkm-ahz.ltd"
+        allow_origins: "__COMMUNITY_ORIGINS__"
         allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
         allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
         expose_headers: "X-Request-ID"
@@ -77,18 +84,19 @@ routes:
   # ── 后台 admin 会话读面 /me（精确）→ backend ──
   - id: admin-auth-me
     uri: /api/v1/admin/auth/me
-    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    hosts: [__COMMUNITY_HOSTS__]
     priority: 140
     plugins:
       client-control:
-        max_body_size: 104857600
+        # 与后端 LKM_MAX_UPLOAD_BYTES 同源（render.sh 从同一 env 展开），禁两处手改
+        max_body_size: __MAX_BODY_SIZE__
       # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
-      # 与应用层 `LKM_CORS_ORIGINS` 同值，互为纵深（网关先答预检，应用层是直连端口的兜底）。
+      # 生产**只此一处**（应用层不再挂 CORS，见 core/middleware.py），来源由域名变量展开。
       # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
       # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
       # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
       cors:
-        allow_origins: "https://lkm-ahz.ltd,https://www.lkm-ahz.ltd"
+        allow_origins: "__COMMUNITY_ORIGINS__"
         allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
         allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
         expose_headers: "X-Request-ID"
@@ -103,18 +111,19 @@ routes:
   # ── 后台 admin 会话写面（login/refresh/logout/2fa）→ auth ──
   - id: admin-auth-prefix
     uri: /api/v1/admin/auth/*
-    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    hosts: [__COMMUNITY_HOSTS__]
     priority: 130
     plugins:
       client-control:
-        max_body_size: 104857600
+        # 与后端 LKM_MAX_UPLOAD_BYTES 同源（render.sh 从同一 env 展开），禁两处手改
+        max_body_size: __MAX_BODY_SIZE__
       # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
-      # 与应用层 `LKM_CORS_ORIGINS` 同值，互为纵深（网关先答预检，应用层是直连端口的兜底）。
+      # 生产**只此一处**（应用层不再挂 CORS，见 core/middleware.py），来源由域名变量展开。
       # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
       # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
       # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
       cors:
-        allow_origins: "https://lkm-ahz.ltd,https://www.lkm-ahz.ltd"
+        allow_origins: "__COMMUNITY_ORIGINS__"
         allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
         allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
         expose_headers: "X-Request-ID"
@@ -129,18 +138,19 @@ routes:
   # ── 前台认证面 → auth 独立进程 ──
   - id: auth-prefix
     uri: /api/v1/auth/*
-    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    hosts: [__COMMUNITY_HOSTS__]
     priority: 120
     plugins:
       client-control:
-        max_body_size: 104857600
+        # 与后端 LKM_MAX_UPLOAD_BYTES 同源（render.sh 从同一 env 展开），禁两处手改
+        max_body_size: __MAX_BODY_SIZE__
       # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
-      # 与应用层 `LKM_CORS_ORIGINS` 同值，互为纵深（网关先答预检，应用层是直连端口的兜底）。
+      # 生产**只此一处**（应用层不再挂 CORS，见 core/middleware.py），来源由域名变量展开。
       # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
       # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
       # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
       cors:
-        allow_origins: "https://lkm-ahz.ltd,https://www.lkm-ahz.ltd"
+        allow_origins: "__COMMUNITY_ORIGINS__"
         allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
         allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
         expose_headers: "X-Request-ID"
@@ -155,18 +165,19 @@ routes:
   # ── REST API → backend（精确 /api 与前缀 /api/* 两条）──
   - id: api-exact
     uri: /api
-    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    hosts: [__COMMUNITY_HOSTS__]
     priority: 115
     plugins:
       client-control:
-        max_body_size: 104857600
+        # 与后端 LKM_MAX_UPLOAD_BYTES 同源（render.sh 从同一 env 展开），禁两处手改
+        max_body_size: __MAX_BODY_SIZE__
       # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
-      # 与应用层 `LKM_CORS_ORIGINS` 同值，互为纵深（网关先答预检，应用层是直连端口的兜底）。
+      # 生产**只此一处**（应用层不再挂 CORS，见 core/middleware.py），来源由域名变量展开。
       # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
       # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
       # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
       cors:
-        allow_origins: "https://lkm-ahz.ltd,https://www.lkm-ahz.ltd"
+        allow_origins: "__COMMUNITY_ORIGINS__"
         allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
         allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
         expose_headers: "X-Request-ID"
@@ -180,21 +191,22 @@ routes:
 
   - id: api-prefix
     uri: /api/*
-    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    hosts: [__COMMUNITY_HOSTS__]
     priority: 110
     # 实时端点 /api/v1/ws/events 走本前缀：须开 upgrade 转发，否则 APISIX 剥掉 Upgrade/Connection
     # 头→后端按普通 GET 处理 404（旧 nginx 的 /api/ location 亦未开，属既有隐患，此处一并修复）
     enable_websocket: true
     plugins:
       client-control:
-        max_body_size: 104857600
+        # 与后端 LKM_MAX_UPLOAD_BYTES 同源（render.sh 从同一 env 展开），禁两处手改
+        max_body_size: __MAX_BODY_SIZE__
       # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
-      # 与应用层 `LKM_CORS_ORIGINS` 同值，互为纵深（网关先答预检，应用层是直连端口的兜底）。
+      # 生产**只此一处**（应用层不再挂 CORS，见 core/middleware.py），来源由域名变量展开。
       # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
       # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
       # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
       cors:
-        allow_origins: "https://lkm-ahz.ltd,https://www.lkm-ahz.ltd"
+        allow_origins: "__COMMUNITY_ORIGINS__"
         allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
         allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
         expose_headers: "X-Request-ID"
@@ -209,19 +221,20 @@ routes:
   # ── GraphQL → backend，支持 WebSocket upgrade（subscription）──
   - id: graphql-exact
     uri: /graphql
-    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    hosts: [__COMMUNITY_HOSTS__]
     priority: 108
     enable_websocket: true
     plugins:
       client-control:
-        max_body_size: 104857600
+        # 与后端 LKM_MAX_UPLOAD_BYTES 同源（render.sh 从同一 env 展开），禁两处手改
+        max_body_size: __MAX_BODY_SIZE__
       # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
-      # 与应用层 `LKM_CORS_ORIGINS` 同值，互为纵深（网关先答预检，应用层是直连端口的兜底）。
+      # 生产**只此一处**（应用层不再挂 CORS，见 core/middleware.py），来源由域名变量展开。
       # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
       # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
       # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
       cors:
-        allow_origins: "https://lkm-ahz.ltd,https://www.lkm-ahz.ltd"
+        allow_origins: "__COMMUNITY_ORIGINS__"
         allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
         allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
         expose_headers: "X-Request-ID"
@@ -235,19 +248,20 @@ routes:
 
   - id: graphql-prefix
     uri: /graphql/*
-    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    hosts: [__COMMUNITY_HOSTS__]
     priority: 107
     enable_websocket: true
     plugins:
       client-control:
-        max_body_size: 104857600
+        # 与后端 LKM_MAX_UPLOAD_BYTES 同源（render.sh 从同一 env 展开），禁两处手改
+        max_body_size: __MAX_BODY_SIZE__
       # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
-      # 与应用层 `LKM_CORS_ORIGINS` 同值，互为纵深（网关先答预检，应用层是直连端口的兜底）。
+      # 生产**只此一处**（应用层不再挂 CORS，见 core/middleware.py），来源由域名变量展开。
       # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
       # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
       # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
       cors:
-        allow_origins: "https://lkm-ahz.ltd,https://www.lkm-ahz.ltd"
+        allow_origins: "__COMMUNITY_ORIGINS__"
         allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
         allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
         expose_headers: "X-Request-ID"
@@ -262,7 +276,7 @@ routes:
   # ── 指纹静态资源 → astro，长缓存 ──
   - id: astro-assets
     uri: /_astro/*
-    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    hosts: [__COMMUNITY_HOSTS__]
     priority: 100
     plugins:
       response-rewrite:
@@ -278,38 +292,48 @@ routes:
   # ── 成员头像 → backend，长缓存 ──
   - id: avatars
     uri: /static/avatars/*
-    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    hosts: [__COMMUNITY_HOSTS__]
     priority: 100
     plugins:
       response-rewrite:
         headers:
           set:
             Cache-Control: "public, max-age=31536000, immutable"
+      # 本路由也代理到 backend：按「凡代理到应用的都带 cors」统一补上（同源 <img> 用不到，
+      # 但 fetch()/canvas 取头像等跨域场景需要，且省掉一份"例外清单"）。
+      cors:
+        allow_origins: "__COMMUNITY_ORIGINS__"
+        allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
+        allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
+        expose_headers: "X-Request-ID"
+        max_age: 3600
+        allow_credential: true
     upstream:
       type: roundrobin
       discovery_type: dns
       service_name: "backend:8000"
       pass_host: pass
 
-  # ── MinIO 对象存储 → minio:9000；Host 必须为公网站点（SigV4 预签名按 lkm-ahz.ltd 签），
+  # ── MinIO 对象存储 → minio:9000；Host 必须为公网站点（SigV4 预签名按该 host 签，
+  #    须与后端 LKM_S3_PUBLIC_ENDPOINT_URL 的 host 一致，否则 MinIO 400 SignatureDoesNotMatch），
   #    path+query 原样透传（不写 proxy-rewrite，保住 X-Amz-Signature）。
   #    pass_host=rewrite 时 Host 取自 upstream.upstream_host；用插件 proxy-rewrite.host 会被
   #    pass_host 逻辑以 nil 覆盖 → 上游收到空 Host → MinIO "missing required Host header" 400。
   - id: minio
     uri: /lkm/*
-    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    hosts: [__COMMUNITY_HOSTS__]
     priority: 100
     upstream:
       type: roundrobin
       discovery_type: dns
       service_name: "minio:9000"
       pass_host: rewrite
-      upstream_host: lkm-ahz.ltd
+      upstream_host: __COMMUNITY_DOMAIN__
 
   # ── 其余 → 前端 SSR ──
   - id: community-catchall
     uri: /*
-    hosts: [lkm-ahz.ltd, www.lkm-ahz.ltd]
+    hosts: [__COMMUNITY_HOSTS__]
     priority: 10
     upstream:
       type: roundrobin
@@ -320,7 +344,7 @@ routes:
   # ── 官网（.icu）全部 → static 静态容器 ──
   - id: official-site
     uri: /*
-    hosts: [lkm-ahz.icu, www.lkm-ahz.icu]
+    hosts: [__OFFICIAL_HOSTS__]
     priority: 50
     upstream:
       type: roundrobin

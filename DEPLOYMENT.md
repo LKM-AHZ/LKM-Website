@@ -110,13 +110,21 @@ POSTGRES_DB=lkm
 # 留空则后端回退到单机内存版限流(共享限流失效);生产建议保留 compose 默认值
 # LKM_REDIS_URL=redis://redis:6379/0
 
-# 公网安全面(M6.1;compose 已给生产默认值,一般无需改动)。
-# 换域名时**两处都要改**:此处 + deploy/apisix/apisix.yaml 的 cors.allow_origins。
-# ALLOWED_HOSTS 必须含内网服务名与回环(backend,auth,localhost,127.0.0.1),
+# 域名与上传上限(**单一来源**:网关与后端都从这里派生)。
+# 换域名只改这两个:render.sh 据此展开 APISIX 的 hosts / CORS 来源 / MinIO Host 改写 / 证书 SNI。
+# LKM_COMMUNITY_DOMAINS=lkm-ahz.ltd      # 社群站(/api、/graphql、认证面、MinIO 预签名 host)
+# LKM_OFFICIAL_DOMAINS=lkm-ahz.icu       # 官网静态站
+# 上传上限(字节):同一个值同时给后端校验与网关 client-control.max_body_size
+# LKM_MAX_UPLOAD_BYTES=104857600
+
+# 公网 Host 白名单(M6.1;compose 已给生产默认值,一般无需改动)。
+# 必须含内网服务名与回环(backend,auth,localhost,127.0.0.1),
 #   否则容器 healthcheck 直连 127.0.0.1 会被判 400 → 容器长期 unhealthy。
-# CORS_ORIGINS 须含前端域名(漏配致前端跨域全挂);不可填 `*`(会自动关闭凭证携带)。
 # LKM_ALLOWED_HOSTS=lkm-ahz.ltd,www.lkm-ahz.ltd,backend,auth,localhost,127.0.0.1
-# LKM_CORS_ORIGINS=https://lkm-ahz.ltd,https://www.lkm-ahz.ltd
+#
+# 注:**没有** LKM_CORS_ORIGINS。生产不挂应用层 CORS —— backend/auth 无对外端口,流量必经
+# APISIX,网关的 cors 插件是唯一权威(来源由上面的域名变量展开)。应用层 CORSMiddleware 只在
+# 非生产挂载,供本地前端直连 :8000 跨域调试。
 
 # MinIO 对象存储(必须设置密码;文件库与成员头像均存于此)
 MINIO_ROOT_PASSWORD=<强随机密码>
@@ -159,7 +167,15 @@ docker compose up -d --build
 接入层为 **APISIX standalone**（无 etcd，路由声明式来自 `deploy/apisix/apisix.yaml`）：
 
 - `apisix-render` sidecar 读路由模板 + certbot 证书，渲染出内联 PEM 的 `ssls` 段写入共享卷（每 6h 或重启时重渲染），APISIX 监测文件变化自动 reload。
+  它同时是**网关配置的单一模板展开点**：模板里只放占位，域名与请求体上限从环境变量展开——
+  `LKM_COMMUNITY_DOMAINS`/`LKM_OFFICIAL_DOMAINS` → 各路由 `hosts`、CORS `allow_origins`、MinIO Host 改写、证书 SNI；
+  `LKM_MAX_UPLOAD_BYTES` → 各路由 `client-control.max_body_size`（与后端校验同源）。
+  模板里若残留未展开占位，render 会**拒绝覆盖**上一版配置并在日志报错，不会把坏 YAML 喂给 APISIX。
 - `acme-webroot` 是极小的 http-01 challenge 静态 responder（不承担网关路由）。
+- **CORS 与登录限流的归属**：CORS 只在网关（应用层生产不挂，非生产才挂供本地跨域调试）；
+  登录限流是**两层分工而非重复**——网关按 IP 粗粒度削峰（`policy: local`、60/60s），
+  应用做账号级精确锁定（用户名级 + 真实 IP 级 Redis 滑动窗口，IP 取自网关注入的 `X-Real-IP`）。
+  两层数值刻意不同，不要当成"重复"去同步。
 - **nginx 已彻底移除**：旧网关曾以 `profiles: ["nginx-gateway"]` 作回退路径保留，但它已与 APISIX 路由分叉
   （如 `/api/` 未开 WS upgrade → `/api/v1/ws/events` 经回退路径不可用），成为一份会腐烂的第二真相源；
   回退机制改由 git 承担（`git revert` / 检出历史 tag 得到的是「当时一致」的整套配置）。
@@ -486,7 +502,7 @@ cd LKM-service
 - **后端反复重启(Exited 3)**:通常是密钥缺失或过短。确认 `.env` 中三个密钥已设置为强随机值,并 `docker compose up -d` 重读。
 - **上传大文件被拒**:APISIX 路由已设 `client-control.max_body_size: 104857600`(100m),与后端 `max_upload_bytes` 对齐;更大文件需同时改 `deploy/apisix/apisix.yaml` 与后端配置。
 - **数据库**:使用 PostgreSQL(`postgres:16-alpine` 服务,卷持久化)。后端经 `LKM_DB_*` 环境变量以 `postgresql+asyncpg` 连接;首次启动时 alembic 自动建表。
-- **换域名**:需同步改 `deploy/apisix/apisix.yaml` 的 `hosts`/`cors.allow_origins`、`.env` 的 `LKM_ALLOWED_HOSTS`/`LKM_CORS_ORIGINS`(见下「公网安全面」)、证书签发域名,以及前端 `PUBLIC_SITE_URL` / `PUBLIC_BASE_PATH`、后端 compose 的 `LKM_ORIGIN`/`LKM_RP_ID`/`LKM_S3_PUBLIC_ENDPOINT_URL`。
+- **换域名**:网关侧只需在 `.env` 改 `LKM_COMMUNITY_DOMAINS` / `LKM_OFFICIAL_DOMAINS`(hosts、CORS 来源、MinIO Host、证书 SNI 全量跟随,见「单一来源」),再 `docker compose up -d apisix-render` 重渲染;此外还要改后端**自身身份**类配置 `LKM_ALLOWED_HOSTS`/`LKM_ORIGIN`/`LKM_RP_ID`/`LKM_GITHUB_REDIRECT_URI`/`LKM_FRONTEND_CALLBACK`/`LKM_S3_PUBLIC_ENDPOINT_URL` 与前端 `PUBLIC_SITE_URL`/`PUBLIC_BASE_PATH`,并重新签发证书。
 
 - **头像/文件上传 404**:MinIO 桶未创建(S3 不自动建桶)。先 `mc mb .../lkm` 建桶(见上文「MinIO 首次初始化」)。
 
