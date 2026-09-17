@@ -1,0 +1,143 @@
+# Apache Pulsar standalone（自带 ZooKeeper + BookKeeper），全站消息总线。
+#
+# ⚠️ k8s 形态上的关键取舍（2026-09-17 用户拍板）：**不持久化、无状态化**。
+#
+# 为什么不能像 compose 那样挂数据卷：ledger 元数据里记的是 bookie 的 **IP:端口**；
+# Pod 重建后 IP 会变（StatefulSet 只固定名字不固定 IP），且 embedded bookie **每次进程
+# 启动都随机取端口**（实测三次登记为 `:37145` / `:34811` / `:38119`）。任一变化都会让旧
+# ledger 不可读：`Failed to read entry` / `Bookie handle is not available` → broker 不健康
+# → 依赖它的 backend 与 9 个 worker 全部起不来。这就是 compose 上复发两次的那个故障，
+# k8s 下同样复现（实测：删 Pod 后 45 处 ledger 读失败、healthcheck 失败）。
+#
+# 三条「钉住 bookie 位置」的路**实测全部无效**，别再走：
+#   ① `PULSAR_PREFIX_advertisedAddress` 环境变量——standalone 启动器不读该前缀
+#      （那是 Helm chart 展开配置的做法）；
+#   ② `standalone --advertised-address / --bookkeeper-port` CLI——只作用于 broker；
+#   ③ 改写 standalone.conf——`advertisedAddress` 被解析成列表 `[, <dns>]`（首元素是原
+#      空值），`bookiePort` 被启动器覆盖回随机值。
+#
+# 既然「跨重启保留账本」在这个形态下做不到，就让**每次启动都是干净的**：数据目录用
+# emptyDir，Pod 重建即自愈，永远不会出现脏 ledger。代价：Pulsar 内已发布但未被消费的
+# 消息会丢（未发布的事件由 PG 的 outbox relay 重新投递，消费者按 event_id 幂等，
+# 但「已发布未消费」这一窗口没有兜底）。生产不应以本形态自托管，见文件末。
+#
+# 租户/namespace 不再由一次性 Job 建（那样 Pod 重建后没人重建它们）：改为**同 Pod 的
+# sidecar**，Pod 一起即重跑，幂等。效果与 compose 的 `pulsar-init` 等价，且随 Pod 自愈。
+apiVersion: v1
+kind: Service
+metadata:
+  name: pulsar
+  labels:
+    app.kubernetes.io/name: pulsar
+    app.kubernetes.io/component: infra
+    app.kubernetes.io/part-of: lkm
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: pulsar
+  ports:
+    - name: broker
+      port: 6650
+      targetPort: broker
+    - name: admin
+      port: 8080
+      targetPort: admin
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pulsar
+  labels:
+    app.kubernetes.io/name: pulsar
+    app.kubernetes.io/component: infra
+    app.kubernetes.io/part-of: lkm
+spec:
+  serviceName: pulsar
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pulsar
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pulsar
+        app.kubernetes.io/component: infra
+        app.kubernetes.io/part-of: lkm
+    spec:
+      securityContext:
+        # Pulsar 镜像以 uid 10000 运行；emptyDir 由 kubelet 赋权，fsGroup 保证可写
+        fsGroup: 10000
+      containers:
+        - name: pulsar
+          image: apachepulsar/pulsar:3.3.0
+          imagePullPolicy: IfNotPresent
+          command: ['bin/pulsar', 'standalone']
+          ports:
+            - name: broker
+              containerPort: 6650
+            - name: admin
+              containerPort: 8080
+          env:
+            # standalone 内存受限，避免小主机被 OOM（与 compose 同值）
+            - name: PULSAR_MEM
+              value: '-Xms512m -Xmx512m -XX:MaxDirectMemorySize=512m'
+          volumeMounts:
+            - name: data
+              mountPath: /pulsar/data
+          # Pulsar standalone 冷启动要拉起 ZK + BookKeeper + broker，实测可达 1~2 分钟。
+          # startup 探针独立放宽，避免被 liveness 误判重启（重启反而又触发一次冷启动）。
+          startupProbe:
+            exec:
+              command: ['bin/pulsar-admin', 'brokers', 'healthcheck']
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command: ['bin/pulsar-admin', 'brokers', 'healthcheck']
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command: ['bin/pulsar-admin', 'brokers', 'healthcheck']
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 300m, memory: 1Gi }
+            limits: { memory: 2Gi }
+        # 建 lkm 租户与 biz/auth/system 三个 namespace，然后长睡（不退出 → 不会被反复重启）。
+        # Pod 重建时本容器随之重跑，故无需人工干预；命令幂等（|| true）。
+        - name: pulsar-init
+          image: apachepulsar/pulsar:3.3.0
+          imagePullPolicy: IfNotPresent
+          command: ['/bin/sh', '-c']
+          args:
+            - |
+              set -e
+              for i in $(seq 1 60); do
+                if bin/pulsar-admin --admin-url http://localhost:8080 brokers healthcheck >/dev/null 2>&1; then
+                  break
+                fi
+                echo "waiting for pulsar broker... ($i/60)"
+                sleep 5
+              done
+              bin/pulsar-admin --admin-url http://localhost:8080 tenants create lkm || true
+              for ns in biz auth system; do
+                bin/pulsar-admin --admin-url http://localhost:8080 namespaces create "lkm/$ns" || true
+              done
+              bin/pulsar-admin --admin-url http://localhost:8080 tenants list
+              echo "pulsar tenants/namespaces ready; idling"
+              # 长睡而非退出：退出会被 restartPolicy 反复拉起、空转刷日志
+              exec sleep infinity
+          resources:
+            requests: { cpu: 50m, memory: 256Mi }
+            limits: { memory: 512Mi }
+      volumes:
+        # 见文件头：emptyDir 是刻意选择——账本跨不了 Pod 重建，索性每次从干净状态起
+        - name: data
+          emptyDir: {}
+# 生产建议：不要以「standalone StatefulSet」自托管 Pulsar（本形态牺牲了消息持久性）。
+# 官方 Pulsar Helm chart（多 bookie、可显式配置端口与 advertised address）或托管 Pulsar
+# 服务才能同时给到「跨重启持久化」与「多副本」。该结论已登记《执行路线图》§8 #29。

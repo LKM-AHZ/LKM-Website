@@ -1,0 +1,20 @@
+# kind 集群定义：把宿主机端口映射到节点的 NodePort（30080/30443），
+# 这样本机就能用标准端口访问网关，而不必记 NodePort 号。
+# 控制器节点同时承载所有工作负载（单节点集群）。
+#
+# ⚠️ 宿主端口刻意用 **8080/8443 而非 80/443**：本机若同时跑着 compose 栈，
+# 它的 apisix 已经占了宿主 80/443，kind 容器再绑会直接创建失败。
+# 换端口后冒烟脚本要跟着指：
+#   SMOKE_HTTP_PORT=8080 SMOKE_HTTPS_PORT=8443 sh deploy/apisix/smoke.sh 127.0.0.1
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: lkm
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8080
+        protocol: TCP
+      - containerPort: 30443
+        hostPort: 8443
+        protocol: TCP

@@ -1,0 +1,259 @@
+# APISIX standalone 网关（M5 7.2.4）：全栈唯一对外入口，无 etcd，路由/SSL 由声明式
+# apisix.yaml 提供。
+#
+# 与 compose 的形态差异及对齐手段：
+#  1) compose 用 `depends_on: apisix-render: service_healthy` 保证 APISIX 启动前
+#     rendered 配置已就绪；k8s 容器间无启动顺序 → 改 **initContainer 先渲染一次**
+#     （RENDER_ONCE=1），再让 apisix 主容器与常驻 sidecar 起来。语义等价：
+#     「配置文件先于 APISIX 存在」由 init 保证，「每 6h 重渲染」由 sidecar 保证。
+#  2) upstream 的 DNS 解析：compose 用 Docker 内嵌 DNS 127.0.0.11；k8s 用 CoreDNS
+#     （ClusterIP，kind/prod 均为 10.96.0.10，可由 overlay 覆盖）。而 CoreDNS 不做
+#     短名的 search domain 补全（lua-resty-dns 是裸查询），故 upstream 必须写 **FQDN**
+#     `<svc>.<ns>.svc.cluster.local`，不能像 compose 那样只写 `backend`。
+#  3) 证书：compose 里 certbot 往共享卷写文件；k8s 改由 Secret `lkm-tls` 提供，
+#     经 projected volume 还原成 render.sh 期望的 `<域名>/fullchain.pem` 目录结构。
+#     签发/续期在集群外或由 cert-manager 负责，见 deploy/k8s/gen-tls.sh 与 README。
+apiVersion: v1
+kind: Service
+metadata:
+  name: apisix
+  labels: &gw-labels
+    app.kubernetes.io/name: apisix
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/part-of: lkm
+spec:
+  # 基础档只给集群内地址；对外暴露方式按环境在 overlay 覆盖
+  # （kind → NodePort + 集群 extraPortMappings；云上 → LoadBalancer 或 Ingress）
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: apisix
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+    - name: https
+      port: 443
+      targetPort: https
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apisix
+  labels: &gw-labels2
+    app.kubernetes.io/name: apisix
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/part-of: lkm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: apisix
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: apisix
+        app.kubernetes.io/component: gateway
+        app.kubernetes.io/part-of: lkm
+    spec:
+      initContainers:
+        # 渲染一次，保证 apisix 主容器启动时 config.yaml / apisix.yaml 已存在且已展开占位
+        - name: apisix-render-init
+          image: alpine:3.19
+          imagePullPolicy: IfNotPresent
+          command: ['sh', '/src/render.sh']
+          env:
+            - name: APISIX_RENDER_ONCE
+              value: "1"
+            - name: APISIX_COMMUNITY_DOMAINS
+              valueFrom:
+                configMapKeyRef: { name: lkm-gateway-config, key: APISIX_COMMUNITY_DOMAINS }
+            - name: APISIX_OFFICIAL_DOMAINS
+              valueFrom:
+                configMapKeyRef: { name: lkm-gateway-config, key: APISIX_OFFICIAL_DOMAINS }
+            - name: APISIX_MAX_BODY_SIZE
+              valueFrom:
+                configMapKeyRef: { name: lkm-config, key: LKM_MAX_UPLOAD_BYTES }
+            - name: APISIX_DNS_RESOLVER
+              valueFrom:
+                configMapKeyRef: { name: lkm-gateway-config, key: APISIX_DNS_RESOLVER }
+            - name: APISIX_UPSTREAM_SUFFIX
+              valueFrom:
+                configMapKeyRef: { name: lkm-gateway-config, key: APISIX_UPSTREAM_SUFFIX }
+          volumeMounts:
+            - name: src
+              mountPath: /src
+              readOnly: true
+            - name: rendered
+              mountPath: /out
+            - name: certs
+              mountPath: /etc/letsencrypt/live
+              readOnly: true
+      containers:
+        # 常驻 sidecar：每 6h 重渲染（拾取证书轮换 + 刷新 upstream DNS 解析）
+        - name: apisix-render
+          image: alpine:3.19
+          imagePullPolicy: IfNotPresent
+          command: ['sh', '/src/render.sh']
+          env:
+            - name: APISIX_COMMUNITY_DOMAINS
+              valueFrom:
+                configMapKeyRef: { name: lkm-gateway-config, key: APISIX_COMMUNITY_DOMAINS }
+            - name: APISIX_OFFICIAL_DOMAINS
+              valueFrom:
+                configMapKeyRef: { name: lkm-gateway-config, key: APISIX_OFFICIAL_DOMAINS }
+            - name: APISIX_MAX_BODY_SIZE
+              valueFrom:
+                configMapKeyRef: { name: lkm-config, key: LKM_MAX_UPLOAD_BYTES }
+            - name: APISIX_DNS_RESOLVER
+              valueFrom:
+                configMapKeyRef: { name: lkm-gateway-config, key: APISIX_DNS_RESOLVER }
+            - name: APISIX_UPSTREAM_SUFFIX
+              valueFrom:
+                configMapKeyRef: { name: lkm-gateway-config, key: APISIX_UPSTREAM_SUFFIX }
+          volumeMounts:
+            - name: src
+              mountPath: /src
+              readOnly: true
+            - name: rendered
+              mountPath: /out
+            - name: certs
+              mountPath: /etc/letsencrypt/live
+              readOnly: true
+        - name: apisix
+          image: apache/apisix:3.9.0-debian
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 9080
+            - name: https
+              containerPort: 9443
+          volumeMounts:
+            # 用 subPath 挂单文件而非挂整个目录：subPath 是对文件 inode 的 bind mount，
+            # render 就地写同一 inode 时容器内可见（与 compose 的命名卷 subpath 同款语义）；
+            # 若挂目录再替换文件，APISIX 会一直读旧 inode。
+            - name: rendered
+              mountPath: /usr/local/apisix/conf/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            - name: rendered
+              mountPath: /usr/local/apisix/conf/apisix.yaml
+              subPath: apisix.yaml
+              readOnly: true
+          # 镜像内无 curl/wget（仅 bash），用 bash /dev/tcp 探监听端口存活：
+          # 任意 TCP 可连即进程在（不依赖 /apisix/status 契约）。曾经误用 curl 导致
+          # 容器长期 unhealthy 而流量正常。
+          readinessProbe:
+            exec:
+              command: ['bash', '-c', 'exec 3<>/dev/tcp/127.0.0.1/9080']
+            periodSeconds: 15
+            timeoutSeconds: 5
+          # startup 给足首启窗口：APISIX 冷启动要编译 Lua 规则，比普通服务慢
+          startupProbe:
+            exec:
+              command: ['bash', '-c', 'exec 3<>/dev/tcp/127.0.0.1/9080']
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            exec:
+              command: ['bash', '-c', 'exec 3<>/dev/tcp/127.0.0.1/9080']
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources:
+            requests: { cpu: 200m, memory: 256Mi }
+            limits: { memory: 1Gi }
+      volumes:
+        - name: src
+          configMap:
+            name: apisix-templates
+        - name: rendered
+          emptyDir: {}
+        # Secret 的键名不能含 `/`，故用扁平键名 + projected 的 items.path 还原成
+        # render.sh 期望的 `<域名>/fullchain.pem` 结构
+        - name: certs
+          projected:
+            sources:
+              - secret:
+                  name: lkm-tls
+                  optional: true
+                  items:
+                    - key: lkm-ahz.ltd_fullchain.pem
+                      path: lkm-ahz.ltd/fullchain.pem
+                    - key: lkm-ahz.ltd_privkey.pem
+                      path: lkm-ahz.ltd/privkey.pem
+                    - key: lkm-ahz.icu_fullchain.pem
+                      path: lkm-ahz.icu/fullchain.pem
+                    - key: lkm-ahz.icu_privkey.pem
+                      path: lkm-ahz.icu/privkey.pem
+---
+# 微型 ACME http-01 responder（非网关角色）：仅服务 certbot webroot 的挑战文件。
+# 保留原因与 compose 一致——APISIX 不服务静态文件，http-01 需要一个静态 responder。
+# 若不使用 certbot（走 cert-manager / 外部签发），可把本 Deployment 副本置 0。
+apiVersion: v1
+kind: Service
+metadata:
+  name: acme-webroot
+  labels:
+    app.kubernetes.io/name: acme-webroot
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/part-of: lkm
+spec:
+  selector:
+    app.kubernetes.io/name: acme-webroot
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: acme-webroot
+  labels:
+    app.kubernetes.io/name: acme-webroot
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/part-of: lkm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: acme-webroot
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: acme-webroot
+        app.kubernetes.io/component: gateway
+        app.kubernetes.io/part-of: lkm
+    spec:
+      containers:
+        - name: acme-webroot
+          image: nginx:1.27-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+          volumeMounts:
+            - name: conf
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: acme-webroot.conf
+              readOnly: true
+            - name: www
+              mountPath: /var/www/certbot
+          # 用 tcpSocket 而非 httpGet：本容器只服务 `/.well-known/acme-challenge/`，
+          # 对 `/` 一律 404 —— 早先写 httpGet `/` 会让 Pod **永不 Ready**，被摘出 Service
+          # endpoints，于是 ACME http-01 路由没有上游、证书签发/续期实际不可用（且因为
+          # 新 Pod 永不 Ready，Deployment 滚动更新卡住、新旧两个 Pod 同时存活）。
+          # 「端口在听」才是这个静态 responder 的正确就绪语义。
+          readinessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { memory: 128Mi }
+      volumes:
+        - name: conf
+          configMap:
+            name: acme-webroot-conf
+        # certbot 写入挑战文件的共享位置（由外部 certbot Job 或 cert-manager 填充）
+        - name: www
+          emptyDir: {}

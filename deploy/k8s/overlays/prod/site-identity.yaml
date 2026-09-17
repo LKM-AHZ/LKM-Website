@@ -1,0 +1,21 @@
+# 生产站点身份：后端「自己的身份」类配置 + 对外地址。
+# 这些**不**由网关的域名变量派生（见 DEPLOYMENT.md「换域名」一节）：
+# WebAuthn 的 RP_ID/Origin、GitHub OAuth 回调、前端回跳、S3 预签名 URL 的对外 host。
+#
+# ⚠️ 换域名时这几项必须与 LKM_COMMUNITY_DOMAINS 一起改，漏改的表现是：
+#   - RP_ID/Origin 不符 → Passkey 注册/登录被浏览器拒绝（静默失败）
+#   - 预签名 host 不符 → 上传报 403 SignatureDoesNotMatch
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lkm-config
+data:
+  LKM_RP_ID: lkm-ahz.ltd
+  LKM_ORIGIN: https://lkm-ahz.ltd
+  LKM_GITHUB_REDIRECT_URI: https://lkm-ahz.ltd/api/v1/auth/oauth/github/callback
+  LKM_FRONTEND_CALLBACK: https://lkm-ahz.ltd/login/success
+  # 预签名 host 必须等于 APISIX MinIO 路由改写后的 Host（即社群裸域）
+  LKM_S3_PUBLIC_ENDPOINT_URL: https://lkm-ahz.ltd
+  # 公网域名 + 回环 + 集群内服务名。**回环必须保留**：exec 探针从容器内打
+  # 127.0.0.1，漏了会被 TrustedHost 判 400 → 探针长期失败（M6.2 的探针反成故障源）。
+  LKM_ALLOWED_HOSTS: lkm-ahz.ltd,www.lkm-ahz.ltd,127.0.0.1,localhost,backend,auth

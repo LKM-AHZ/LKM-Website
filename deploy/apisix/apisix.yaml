@@ -3,6 +3,9 @@
 # `# __SSL_SECTION__` 注释行是渲染占位（render.sh 替换为内联 PEM 的 ssls 段），勿删。
 # 匹配规则：priority 高者先，其次 uri 长者先；精确路径（无 *）优先于前缀。
 # upstream 用 DNS discovery（service_name=host:port）复刻旧 nginx resolver 动态解析。
+#   `__UPSTREAM_SUFFIX__` 由 APISIX_UPSTREAM_SUFFIX 展开：compose 下为空（服务短名靠
+#   Docker 内嵌 DNS 114 解析）；k8s 下为 `.lkm.svc.cluster.local`——CoreDNS 不做
+#   search domain 补全（lua-resty-dns 是裸查询），短名解析不到，必须补全 FQDN。
 global_rules:
   - id: 1
     plugins:
@@ -28,7 +31,7 @@ routes:
     upstream:
       type: roundrobin
       discovery_type: dns
-      service_name: "acme-webroot:80"
+      service_name: "acme-webroot__UPSTREAM_SUFFIX__:80"
       pass_host: pass
 
   # ── http → https 301（两域名共用；优先级低于 ACME，challenge 不受影响）──
@@ -78,7 +81,7 @@ routes:
     upstream:
       type: roundrobin
       discovery_type: dns
-      service_name: "auth:8001"
+      service_name: "auth__UPSTREAM_SUFFIX__:8001"
       pass_host: pass
 
   # ── 后台 admin 会话读面 /me（精确）→ backend ──
@@ -105,7 +108,7 @@ routes:
     upstream:
       type: roundrobin
       discovery_type: dns
-      service_name: "backend:8000"
+      service_name: "backend__UPSTREAM_SUFFIX__:8000"
       pass_host: pass
 
   # ── 后台 admin 会话写面（login/refresh/logout/2fa）→ auth ──
@@ -132,7 +135,7 @@ routes:
     upstream:
       type: roundrobin
       discovery_type: dns
-      service_name: "auth:8001"
+      service_name: "auth__UPSTREAM_SUFFIX__:8001"
       pass_host: pass
 
   # ── 前台认证面 → auth 独立进程 ──
@@ -159,7 +162,7 @@ routes:
     upstream:
       type: roundrobin
       discovery_type: dns
-      service_name: "auth:8001"
+      service_name: "auth__UPSTREAM_SUFFIX__:8001"
       pass_host: pass
 
   # ── REST API → backend（精确 /api 与前缀 /api/* 两条）──
@@ -186,7 +189,7 @@ routes:
     upstream:
       type: roundrobin
       discovery_type: dns
-      service_name: "backend:8000"
+      service_name: "backend__UPSTREAM_SUFFIX__:8000"
       pass_host: pass
 
   - id: api-prefix
@@ -215,7 +218,7 @@ routes:
     upstream:
       type: roundrobin
       discovery_type: dns
-      service_name: "backend:8000"
+      service_name: "backend__UPSTREAM_SUFFIX__:8000"
       pass_host: pass
 
   # ── GraphQL → backend，支持 WebSocket upgrade（subscription）──
@@ -243,7 +246,7 @@ routes:
     upstream:
       type: roundrobin
       discovery_type: dns
-      service_name: "backend:8000"
+      service_name: "backend__UPSTREAM_SUFFIX__:8000"
       pass_host: pass
 
   - id: graphql-prefix
@@ -270,7 +273,7 @@ routes:
     upstream:
       type: roundrobin
       discovery_type: dns
-      service_name: "backend:8000"
+      service_name: "backend__UPSTREAM_SUFFIX__:8000"
       pass_host: pass
 
   # ── 指纹静态资源 → astro，长缓存 ──
@@ -286,7 +289,7 @@ routes:
     upstream:
       type: roundrobin
       discovery_type: dns
-      service_name: "astro:4321"
+      service_name: "astro__UPSTREAM_SUFFIX__:4321"
       pass_host: pass
 
   # ── 成员头像 → backend，长缓存 ──
@@ -311,7 +314,7 @@ routes:
     upstream:
       type: roundrobin
       discovery_type: dns
-      service_name: "backend:8000"
+      service_name: "backend__UPSTREAM_SUFFIX__:8000"
       pass_host: pass
 
   # ── MinIO 对象存储 → minio:9000；Host 必须为公网站点（SigV4 预签名按该 host 签，
@@ -326,7 +329,7 @@ routes:
     upstream:
       type: roundrobin
       discovery_type: dns
-      service_name: "minio:9000"
+      service_name: "minio__UPSTREAM_SUFFIX__:9000"
       pass_host: rewrite
       upstream_host: __COMMUNITY_DOMAIN__
 
@@ -338,7 +341,7 @@ routes:
     upstream:
       type: roundrobin
       discovery_type: dns
-      service_name: "astro:4321"
+      service_name: "astro__UPSTREAM_SUFFIX__:4321"
       pass_host: pass
 
   # ── 官网（.icu）全部 → static 静态容器 ──
@@ -349,7 +352,7 @@ routes:
     upstream:
       type: roundrobin
       discovery_type: dns
-      service_name: "static:80"
+      service_name: "static__UPSTREAM_SUFFIX__:80"
       pass_host: pass
 
 # __SSL_SECTION__

@@ -1,0 +1,75 @@
+# Kustomize base：全栈清单（有状态中间件 + 应用层 + 网关），与 docker-compose.yml 逐服务对应。
+#
+# ⚠️ 本 kustomization 用 `configMapGenerator` 直接引用仓库里**既有的**部署资产
+# （deploy/apisix/*、deploy/initdb/*、deploy/clickhouse/*、deploy/otel/*），
+# 这些文件在 base 目录之外。因此构建时必须放开 kustomize 的加载限制。
+# 注意 `kubectl apply -k` **不接受**该标志（只有 `kubectl kustomize` 接受），
+# 故部署走两步：
+#
+#   kubectl kustomize deploy/k8s/overlays/kind --load-restrictor LoadRestrictionsNone | kubectl apply -f -
+#   kustomize build deploy/k8s/base --load-restrictor LoadRestrictionsNone
+#
+# 这样做是为了**不留第二份副本**：路由模板、initdb 脚本、CH DDL、OTel 配置都只有一份，
+# compose 与 k8s 共用；改一处两边同时生效（DNS/upstream 差异由 render.sh 的占位展开吸收）。
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: lkm
+
+resources:
+  - namespace.yaml
+  # 应用层配置（非敏感）；敏感项由 deploy/k8s/gen-secret.sh 生成的 Secret 注入
+  - app-config.yaml
+  - gateway/config.yaml
+  # 有状态中间件
+  - infra/postgres.yaml
+  - infra/redis.yaml
+  - infra/pulsar.yaml
+  - infra/minio.yaml
+  - infra/clickhouse.yaml
+  - infra/vector.yaml
+  - infra/otel-collector.yaml
+  - infra/prefect.yaml
+  # 应用层
+  - app/backend.yaml
+  - app/auth.yaml
+  - app/workers.yaml
+  - app/frontend.yaml
+  # 网关
+  - gateway/apisix.yaml
+
+configMapGenerator:
+  # PostgreSQL 首启初始化脚本（建 AUTH 独立库 lkm_auth）—— 与 compose 挂的是同一文件
+  - name: postgres-initdb
+    files:
+      - ../../initdb/01-auth-db.sh
+  # ClickHouse 建库建表 DDL（含各表 TTL）—— 与 compose 挂的是同一文件
+  - name: clickhouse-initdb
+    files:
+      - ../../clickhouse/init.sql
+  # Vector 采集配置（k8s 版：读 /var/log/pods 的 CRI 日志）
+  - name: vector-config
+    files:
+      - infra/vector.toml
+  # OTel Collector 配置 —— 与 compose 挂的是同一文件
+  - name: otel-collector-config
+    files:
+      - ../../otel/otel-collector.yaml
+  # APISIX 模板集：路由模板 + APISIX 自身配置模板 + 渲染脚本，都由 apisix-render 消费。
+  # 三者与 compose 用的是同一批文件（单一模板展开点）。
+  - name: apisix-templates
+    files:
+      - ../../apisix/apisix.yaml
+      - ../../apisix/config.yaml
+      - ../../apisix/render.sh
+  # ACME http-01 静态 responder 的 nginx 配置 —— 与 compose 挂的是同一文件
+  - name: acme-webroot-conf
+    files:
+      - ../../apisix/acme-webroot.conf
+
+# 统一打来源标签。includeSelectors=false：各资源的 selector 已在清单里显式写死，
+# 不由 kustomize 代改，避免「改了 kustomization 就打不上/打错 selector」这类隐式耦合。
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: lkm
+    includeSelectors: false

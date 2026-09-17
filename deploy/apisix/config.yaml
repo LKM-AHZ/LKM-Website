@@ -3,9 +3,11 @@
 apisix:
   node_listen: 9080          # 容器内 http；compose 映射 80:9080
   enable_ipv6: false
-  # Docker 内嵌 DNS：upstream discovery_type=dns 用，等效于传统 nginx `resolver` 的动态解析行为
+  # 上游 DNS：upstream discovery_type=dns 用，等效于传统 nginx `resolver` 的动态解析行为。
+  # 由 apisix-render 展开 `__DNS_RESOLVER__`：compose 下是 Docker 内嵌 DNS 127.0.0.11；
+  # k8s 下是 CoreDNS 的 ClusterIP（kind/多数集群为 10.96.0.10）。
   # 注意 APISIX schema 要求数组形式，写成裸字符串会启动即 "wrong type: expected array, got string"
-  dns_resolver: ['127.0.0.11']
+  dns_resolver: ['__DNS_RESOLVER__']
   dns_resolver_valid: 30
   enable_http2: true         # 3.9 起 http2 只能声明在 apisix 级，listen 级会报废弃错误
   ssl:
@@ -22,10 +24,11 @@ deployment:
     admin_key: []            # 仅内网，禁用 Admin API 鉴权键（standalone 不写 etcd）
 
 # upstream `discovery_type: dns` 需要显式初始化 discovery 模块，否则运行时报
-# "discovery dns is uninitialized" → 503。servers 指 Docker 内嵌 DNS，A 记录解析 compose 服务名。
+# "discovery dns is uninitialized" → 503。servers 与上面的 dns_resolver 同源（同一个
+# 占位、同一个环境变量展开），compose 指 Docker 内嵌 DNS，k8s 指 CoreDNS。
 discovery:
   dns:
-    servers: ['127.0.0.11']
+    servers: ['__DNS_RESOLVER__']
 
 plugin_attr:
   # http→https 重定向默认用内部 ssl 监听端口(9443)拼 Location；容器内非 root 不能改听 443，

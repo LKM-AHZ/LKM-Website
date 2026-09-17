@@ -1,0 +1,33 @@
+# kind（本地单节点集群）验收 overlay。
+#
+# 构建/应用（必须放开加载限制，原因见 ../../base/kustomization.yaml 顶部）。
+# `apply -k` 不接受 --load-restrictor，故走「先渲染、再 apply」：
+#   kubectl kustomize deploy/k8s/overlays/kind --load-restrictor LoadRestrictionsNone | kubectl apply -f -
+# 或直接用封装脚本：sh deploy/k8s/overlays/kind/setup.sh
+#
+# 与 base 的差异只有两处，都是「本地没有云能力」导致的：
+#   1) 网关 Service 改 NodePort（kind 无 LoadBalancer），配合 kind-cluster.yaml 的
+#      宿主端口映射，本机可用 80/443 访问；
+#   2) 站点身份类配置统一到社群域名，便于用 --resolve 做带 SNI 的验收。
+# 存储、DNS、探针、副本数等均沿用 base——本地验收要覆盖的正是 base 的行为。
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: lkm
+
+resources:
+  - ../../base
+
+patches:
+  - path: patch-apisix-nodeport.yaml
+  - path: site-identity.yaml
+
+# 三个本地构建的镜像不进任何 registry，由 kind load docker-image 直接塞进节点。
+# imagePullPolicy 在 base 里已是 IfNotPresent，故节点优先用本地镜像、不去远端拉。
+images:
+  - name: lkm-service
+    newTag: latest
+  - name: lkm-official-website
+    newTag: latest
+  - name: lkm-official-static
+    newTag: latest

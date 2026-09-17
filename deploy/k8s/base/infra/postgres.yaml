@@ -1,0 +1,107 @@
+# PostgreSQL：业务库 lkm + 独立 AUTH 库 lkm_auth（同实例）。
+# 用 StatefulSet 而非 Deployment：稳定网络标识 + volumeClaimTemplates 保证重建后
+# 仍绑回同一 PVC（Deployment 的 Pod 名随机，PVC 需另建且易被误删）。
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels: &labels
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: infra
+    app.kubernetes.io/part-of: lkm
+spec:
+  clusterIP: None          # headless：client 直连 Pod，去掉一层转发
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: infra
+    app.kubernetes.io/part-of: lkm
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/component: infra
+        app.kubernetes.io/part-of: lkm
+    spec:
+      securityContext:
+        # postgres:16-alpine 的官方 entrypoint 需以 root 启动后降权到 postgres（uid 70）
+        runAsUser: 0
+        fsGroup: 70
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: lkm-secrets, key: POSTGRES_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: lkm-secrets, key: POSTGRES_PASSWORD }
+            - name: POSTGRES_DB
+              value: lkm
+            # initdb 脚本只在**数据目录为空**时执行（首启）。已初始化后再改脚本不生效——
+            # 与 compose 行为一致，AUTH 库补建等变更须走迁移而非改此脚本。
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          readinessProbe:
+            exec:
+              command: ['sh', '-c', 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          # liveness 用同一命令但阈值放宽：pg_isready 在长事务/检查点期间可能瞬时失败，
+          # 判死重启会中断正在跑的迁移。startup 探针负责扛住首启 initdb 的慢启动。
+          livenessProbe:
+            exec:
+              command: ['sh', '-c', 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          startupProbe:
+            exec:
+              command: ['sh', '-c', 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            periodSeconds: 5
+            failureThreshold: 60
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 1Gi }
+      volumes:
+        - name: initdb
+          configMap:
+            name: postgres-initdb
+            defaultMode: 0755
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 10Gi

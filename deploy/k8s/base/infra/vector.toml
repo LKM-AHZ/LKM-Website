@@ -1,0 +1,87 @@
+# LKM 社区 · Vector 日志采集（k8s 版）
+#
+# 这是 deploy/clickhouse/vector.toml（compose 版）在 k8s 上的**运行时对应物**，
+# 二者**刻意不同**且不可合并——差异在日志源，不在解析意图：
+#   compose：docker_logs source 走 /var/run/docker.sock，读 docker json-file 驱动日志
+#            （每行即一条 `{"log":"...","stream":"...","time":"..."}`）
+#   k8s    ：file source 读 /var/log/pods，读 CRI 格式日志
+#            （`<RFC3339Nano> <stdout|stderr> <F|P> <原始行>`）
+# 下游 VRL 解析（core/logging.py 的 JsonFormatter 结构）与 clickhouse sink 的
+# 表/列/TTL 语义完全一致，故只有 source 段与「从 CRI 行取出原始 payload」这一步不同。
+# 该分叉已在《执行路线图》§8 登记。
+#
+# 挂载要求（见同目录 vector.yaml）：hostPath /var/log/pods 只读。
+
+[api]
+enabled = false
+
+[sources.pod_logs]
+type = "file"
+# 只采本命名空间的 Pod：/var/log/pods/<ns>_<pod>_<uid>/<container>/<n>.log
+include = ["/var/log/pods/lkm_*/*/*.log"]
+read_from = "beginning"
+# 容器日志在节点上是持续追加的；忽略 1 天前的旧文件，避免首次部署时全量回灌
+ignore_older_secs = 86400
+
+[transforms.parse]
+type = "remap"
+inputs = ["pod_logs"]
+source = '''
+# 路径 → service/container 名：/var/log/pods/lkm_<pod>_<uid>/<container>/<n>.log
+path = to_string(.file) ?? ""
+meta, merr = parse_regex(path, r'^/var/log/pods/lkm_(?P<pod>[^_]+)_[^/]+/(?P<container>[^/]+)/')
+# 注：parse_regex 的命名捕获组类型是非空 string，故 to_string() 之后不能再跟 `??`
+# （VRL E651: unnecessary error coalescing operation）——这一点与 docker_logs 版不同，
+# 是 k8s 版踩过的编译期错误。
+.service = if merr == null { to_string(meta.container) } else { "unknown" }
+
+line = to_string(.message) ?? ""
+.extra_fields = line
+
+# CRI 前缀：<ts> <stream> <F|P> <payload>；tag 可能是 F/P，也可能被省略
+cri, cerr = parse_regex(line, r'^(?P<ts>\S+) (?P<stream>\S+) (?P<tag>\S+) (?P<payload>.*)$')
+raw = if cerr == null { to_string(cri.payload) } else { line }
+.extra_fields = raw
+
+parsed, err = parse_json(raw)
+if err == null && is_object(parsed) {
+  .level = to_string(parsed.level) ?? "unknown"
+  .logger = to_string(parsed.logger) ?? ""
+  .msg = to_string(parsed.msg) ?? raw
+  .request_id = to_string(parsed.request_id) ?? ""
+  .trace_id = to_string(parsed.trace_id) ?? ""
+  .span_id = to_string(parsed.span_id) ?? ""
+  .exc_info = to_string(parsed.exc_info) ?? ""
+  ts_raw = to_string(parsed.ts) ?? ""
+  ts, ts_err = parse_timestamp(ts_raw, format: "%Y-%m-%dT%H:%M:%S%.f%:z")
+  .ts = if ts_err == null {
+    format_timestamp!(ts, format: "%Y-%m-%d %H:%M:%S%.3f")
+  } else {
+    format_timestamp!(now(), format: "%Y-%m-%d %H:%M:%S%.3f")
+  }
+} else {
+  # 非 JSON 行（pulsar/apisix 等三方容器）不丢弃：level=unknown、原文进 msg（与 compose 版一致）
+  .level = "unknown"
+  .logger = "cri"
+  .msg = raw
+  .request_id = ""
+  .trace_id = ""
+  .span_id = ""
+  .exc_info = ""
+  .ts = format_timestamp!(now(), format: "%Y-%m-%d %H:%M:%S%.3f")
+}
+'''
+
+[sinks.clickhouse]
+type = "clickhouse"
+inputs = ["parse"]
+endpoint = "http://clickhouse:8123"
+database = "lkm"
+table = "app_logs"
+# file source 自带 file/host/source_type 等列不在表中，靠此忽略；
+# 缺失列由 CH 表 DEFAULT 兜底（String 默认空串）。
+skip_unknown_fields = true
+auth.strategy = "basic"
+auth.user = "${CLICKHOUSE_USER}"
+auth.password = "${CLICKHOUSE_PASSWORD}"
+batch.max_events = 500

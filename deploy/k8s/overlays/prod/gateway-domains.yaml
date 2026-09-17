@@ -1,0 +1,15 @@
+# 生产域名与上游解析。
+#
+# APISIX_DNS_RESOLVER 必须是集群 CoreDNS 的 ClusterIP，用下面命令取实际值：
+#   kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}'
+# 很多集群是 10.96.0.10，但**不要照抄**——service CIDR 不同的集群会不一样。
+# APISIX_UPSTREAM_SUFFIX 取决于部署命名空间：命名空间改了，这里也要改。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lkm-gateway-config
+data:
+  APISIX_COMMUNITY_DOMAINS: lkm-ahz.ltd
+  APISIX_OFFICIAL_DOMAINS: lkm-ahz.icu
+  APISIX_DNS_RESOLVER: 10.96.0.10
+  APISIX_UPSTREAM_SUFFIX: .lkm.svc.cluster.local

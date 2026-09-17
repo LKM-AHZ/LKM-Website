@@ -1,0 +1,22 @@
+# 生产 overlay 模板。
+#
+# 与 base 的差异都集中在「环境相关」的三类：域名/证书、对外暴露方式、站点身份。
+# 值用占位符标出，落地前必须按实际环境替换（见同目录 README 说明）。
+#
+#   kubectl kustomize deploy/k8s/overlays/prod --load-restrictor LoadRestrictionsNone | kubectl apply -f -
+#
+# 存储：沿用集群默认 StorageClass（多数云与自建集群都有 default SC）。
+# 若集群无默认 SC，或要多节点共享 backend_data，需另加 patch 指定 storageClassName
+# 与 accessModes（见 README「已知限制」关于 ReadWriteOnce 的说明）。
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: lkm
+
+resources:
+  - ../../base
+
+patches:
+  - path: gateway-domains.yaml
+  - path: site-identity.yaml
+  - path: patch-apisix-service.yaml

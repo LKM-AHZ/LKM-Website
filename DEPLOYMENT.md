@@ -366,6 +366,31 @@ git pull
 docker compose up -d --build
 ```
 
+## 八、Kubernetes 部署（可选，与 compose 并列）
+
+除本教程的 compose 形态外，仓库另提供一套 **Kustomize 清单**把整栈搬到 k8s，
+入口是 [`deploy/k8s/README.md`](deploy/k8s/README.md)：
+
+```sh
+# Secret 与网关证书（从根目录 .env 与自签证书生成）
+sh deploy/k8s/gen-secret.sh | kubectl apply -f -
+sh deploy/k8s/gen-tls.sh    | kubectl apply -f -
+# 建命名空间（Secret 要落进来）
+kubectl apply -f deploy/k8s/base/namespace.yaml
+# 应用（--load-restrictor 必需：清单直接引用 deploy/ 下的既有资产，不复制副本；
+# 且 `apply -k` 不接受该标志，故先渲染再 apply）
+kubectl kustomize deploy/k8s/overlays/kind --load-restrictor LoadRestrictionsNone | kubectl apply -f -
+```
+
+- **覆盖范围**：与本文的 compose 栈逐服务一一对应（网关 + 应用层 + 全部有状态中间件），
+  不是另一套架构。两套编排并列、互不依赖，可随时回退。
+- **单一来源**：路由模板、initdb 脚本、ClickHouse DDL、OTel 配置等仍只有一份文件，
+  compose 与 k8s 共用；`render.sh` 把运行时差异（上游 DNS、服务名后缀）从环境变量展开。
+- **差异与坑**：启动顺序用 Job/initContainer 替代 `depends_on`、可选组件由 `--profile`
+  改为副本数、证书改 Secret 载体、探针必须用 `exec`（`httpGet` 的 Host 是 Pod IP，
+  会被 `LKM_ALLOWED_HOSTS` 判 400）等，逐条列在 `deploy/k8s/README.md`。
+- 本地无集群时可用 kind 验收：`sh deploy/k8s/overlays/kind/setup.sh`。
+
 ## 数据库
 
 ### 默认方案：docker 内置 PostgreSQL

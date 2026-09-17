@@ -1,0 +1,86 @@
+# 应用层非敏感配置。分三张表，避免把所有变量无差别灌进每个进程——
+# compose 里各服务的 env 集本就不同（§8 #16：worker-scheduler 不接 DB/Redis，
+# 按进程强制校验会误杀），此处按「谁真的用」分组，而不是一张大表 envFrom 全量下发。
+---
+# ① 公共表：backend / auth / 全部 worker 都注入
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lkm-config
+data:
+  LKM_ENV: production
+  # 公网 Host 白名单（M6.1）。**内网服务名与回环必须列入**：kubelet 的
+  # httpGet 探针直连 Pod IP（Host 为 Pod IP，非 127.0.0.1），exec 探针走回环；
+  # 两者都被 TrustedHost 校验，漏配即 400 → 探针长期失败（M6.2 的探针分级反成故障源）。
+  # 域名部分在 overlay 覆盖。
+  LKM_ALLOWED_HOSTS: lkm-ahz.ltd,www.lkm-ahz.ltd,backend,auth,localhost,127.0.0.1
+  LKM_MAX_UPLOAD_BYTES: "104857600"
+  # 同命名空间内直接用 Service 短名（CoreDNS 解析 <svc>.<ns>.svc.cluster.local）
+  LKM_DB_HOST: postgres
+  LKM_DB_PORT: "5432"
+  LKM_DB_NAME: lkm
+  LKM_DB_USER: lkm
+  LKM_REDIS_URL: redis://redis:6379/0
+  LKM_PULSAR_URL: pulsar://pulsar:6650
+  LKM_PULSAR_ADMIN_URL: http://pulsar:8080
+  LKM_AUTH_HTTP_URL: http://auth:8001
+  LKM_WEB_WORKERS: "1"
+  LKM_BLOG_REPO_DIR: /data/blog_repos
+  LKM_FILES_STORE_DIR: /data/files_store
+  LKM_STORAGE_BACKEND: s3
+  LKM_S3_ENDPOINT_URL: http://minio:9000
+  LKM_S3_BUCKET: lkm
+  LKM_S3_PREFIX: files
+  # 预签名 URL 对浏览器暴露的地址，须与 APISIX 侧 MinIO 路由改写的 Host 一致
+  LKM_S3_PUBLIC_ENDPOINT_URL: http://124.220.55.235
+  # 应用自身身份（不由网关键名变量派生，换域名时需单独改）
+  LKM_RP_ID: "124.220.55.235"
+  LKM_ORIGIN: http://124.220.55.235
+  LKM_GITHUB_REDIRECT_URI: http://124.220.55.235/api/v1/auth/oauth/github/callback
+  LKM_FRONTEND_CALLBACK: http://124.220.55.235/login/success
+  LKM_GITHUB_CLIENT_ID: ""
+  LKM_OTEL_ENABLED: "false"
+  LKM_OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  LKM_OTEL_SAMPLE_RATIO: "0.1"
+  LKM_INFISICAL_ENABLED: "false"
+  LKM_INFISICAL_REQUIRED: "false"
+  LKM_INFISICAL_SITE_URL: http://infisical:8080
+  LKM_INFISICAL_PROJECT_ID: ""
+  LKM_INFISICAL_ENVIRONMENT: prod
+  LKM_INFISICAL_SECRET_PATH: /
+  LKM_INFISICAL_CLIENT_ID: ""
+---
+# ② AUTH 独立库（真拆库：users/profiles 只在此库）：仅 auth 进程、jobs worker、
+#    prefect-worker 需要——jobs worker 跑 user_dim 离线 ETL 要跨 realm 双会话。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lkm-config-authdb
+data:
+  LKM_AUTH_DB_HOST: postgres
+  LKM_AUTH_DB_PORT: "5432"
+  LKM_AUTH_DB_NAME: lkm_auth
+  LKM_AUTH_DB_USER: lkm
+---
+# ③ 分析管道 + 编排：backend（admin 只读查询）、jobs worker（回落直调导出）、
+#    prefect-worker（flow 内跑导出）需要。**不下发给 worker-scheduler**——
+#    它只做 cron 发布，compose 亦未给，下发可能改变其行为。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lkm-config-analytics
+data:
+  LKM_CLICKHOUSE_ENABLED: "false"
+  LKM_CLICKHOUSE_URL: http://clickhouse:8123
+  LKM_CLICKHOUSE_DATABASE: lkm
+  LKM_CLICKHOUSE_USER: lkm
+  LKM_CLICKHOUSE_EXPORT_WINDOW: "1000"
+  LKM_CLICKHOUSE_QUERY_LIMIT_MAX: "200"
+  LKM_PREFECT_ENABLED: "false"
+  LKM_PREFECT_API_URL: ""
+  LKM_PREFECT_DEPLOYMENT: ""
+  LKM_PREFECT_ANALYTICS_DEPLOYMENT: ""
+  LKM_PREFECT_API_TOKEN: ""
+  LKM_PREFECT_WORK_POOL: lkm
+  LKM_PREFECT_FLOW_DEPLOYMENT_NAME: reconcile
+  PREFECT_API_URL: http://prefect-server:4200/api

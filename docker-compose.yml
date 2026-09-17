@@ -20,7 +20,9 @@ services:
       - apisix_conf:/out
     restart: unless-stopped
     healthcheck:
-      test: ['CMD-SHELL', 'test -s /out/apisix.yaml']
+      # 两个产物都要在：apisix.yaml（路由）+ config.yaml（DNS 解析展开）——
+      # apisix 服务依赖本健康检查，缺任一个都会让它起不来
+      test: ['CMD-SHELL', 'test -s /out/apisix.yaml -a -s /out/config.yaml']
       interval: 5s
       timeout: 3s
       retries: 24
@@ -54,9 +56,17 @@ services:
       - '80:9080'
       - '443:9443'
     volumes:
-      - ./deploy/apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      # config.yaml 与 apisix.yaml 都取 apisix-render 的**渲染产物**（不再是仓库原文件）：
+      # config.yaml 里的上游 DNS 由 render 从 APISIX_DNS_RESOLVER 展开（compose 默认
+      # 127.0.0.11，与旧行为一致），k8s 侧同一模板展开成 CoreDNS 地址——避免两份 config 副本。
       # 命名卷内子路径单文件挂载（compose 长语法 subpath）：render 就地写同一 inode，
       # APISIX 才能看到 mtime 变化并 reload
+      - type: volume
+        source: apisix_conf
+        target: /usr/local/apisix/conf/config.yaml
+        volume:
+          subpath: config.yaml
+        read_only: true
       - type: volume
         source: apisix_conf
         target: /usr/local/apisix/conf/apisix.yaml

@@ -1,0 +1,17 @@
+# kind 无云 LB：把网关 Service 暴露成固定 NodePort，配合 kind-cluster.yaml 的
+# extraPortMappings（30080→宿主 80、30443→宿主 443），本机即可用标准端口访问。
+apiVersion: v1
+kind: Service
+metadata:
+  name: apisix
+spec:
+  type: NodePort
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: 30080
+    - name: https
+      port: 443
+      targetPort: https
+      nodePort: 30443

@@ -1,0 +1,19 @@
+# kind 验收用的站点身份：统一到社群域名（与 APISIX 路由的 hosts 一致），
+# 本机用 `curl -k --resolve lkm-ahz.ltd:30443:127.0.0.1 https://lkm-ahz.ltd:30443/...`
+# 访问，SNI/Host 都正确。
+#
+# 这些是「后端自己的身份」类配置（不由网关键名变量派生，见 DEPLOYMENT.md）：
+# WebAuthn 的 RP_ID/Origin、GitHub OAuth 回调、前端回跳、S3 预签名 URL 的对外 host。
+# 预签名 host 必须与 APISIX MinIO 路由改写后的 Host 一致，否则 S3 SigV4 校验失败。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lkm-config
+data:
+  LKM_RP_ID: lkm-ahz.ltd
+  LKM_ORIGIN: https://lkm-ahz.ltd
+  LKM_GITHUB_REDIRECT_URI: https://lkm-ahz.ltd/api/v1/auth/oauth/github/callback
+  LKM_FRONTEND_CALLBACK: https://lkm-ahz.ltd/login/success
+  LKM_S3_PUBLIC_ENDPOINT_URL: https://lkm-ahz.ltd
+  # 域名 + 回环 + 集群内服务名：前两者给探针与 --resolve 验收，后两者给容器间互调
+  LKM_ALLOWED_HOSTS: lkm-ahz.ltd,www.lkm-ahz.ltd,127.0.0.1,localhost,backend,auth

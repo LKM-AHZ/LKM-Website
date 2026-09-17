@@ -1,0 +1,8 @@
+# 全栈单一命名空间：与单机 compose 的「同一 docker 网络」拓扑等价，
+# 服务间用短名（postgres/redis/pulsar/...）即可直连（同 ns 内 DNS 可解析）。
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lkm
+  labels:
+    app.kubernetes.io/part-of: lkm

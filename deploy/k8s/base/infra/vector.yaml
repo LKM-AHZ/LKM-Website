@@ -1,0 +1,69 @@
+# Vector 日志采集（M5 7.2.6 路 B）：节点级 DaemonSet，读 /var/log/pods 的 CRI 日志
+# → 解析 core/logging.py 的 JSON → 写 ClickHouse lkm.app_logs。
+#
+# 与 compose 的形态差异：compose 是单容器挂 docker.sock + docker json-file 日志目录；
+# k8s 下日志由 kubelet 以 CRI 格式落在节点 /var/log/pods，故改为 DaemonSet + hostPath。
+# 配置见同目录 vector.toml（文件头说明了两版为何不同）。
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vector
+  labels: &labels
+    app.kubernetes.io/name: vector
+    app.kubernetes.io/component: observability
+    app.kubernetes.io/part-of: lkm
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vector
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      # 读节点上的 /var/log/pods 需 root
+      securityContext:
+        runAsUser: 0
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: vector
+          image: timberio/vector:0.43.0-alpine
+          imagePullPolicy: IfNotPresent
+          # 镜像自带 /etc/vector/vector.yaml（demo 配置），而 vector 的默认 config 查找顺序
+          # **yaml 先于 toml** —— 不显式 --config 会加载 demo 而非本挂载，静默采集假数据。
+          args: ['--config', '/etc/vector/vector.toml']
+          env:
+            - name: CLICKHOUSE_USER
+              valueFrom:
+                secretKeyRef: { name: lkm-secrets, key: CLICKHOUSE_USER }
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: lkm-secrets, key: CLICKHOUSE_PASSWORD }
+          volumeMounts:
+            - name: podlogs
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: config
+              mountPath: /etc/vector/vector.toml
+              subPath: vector.toml
+              readOnly: true
+            # file source 的位置数据库（记录各文件读到的 offset），Pod 重建后可续读
+            - name: data
+              mountPath: /var/lib/vector
+          # 不设探针：vector 是「读日志 → 写 CH」的单向管道，没有可断言的对外语义
+          # （internal API 在配置里显式关掉了），readiness 没有消费者；进程崩了容器即退出、
+          # 由 DaemonSet 的默认重启策略拉起。真正的可观测性是 CH 里 app_logs 的增长，
+          # 对齐 compose 侧（同样没有 healthcheck）。
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 512Mi }
+      volumes:
+        - name: podlogs
+          hostPath:
+            path: /var/log/pods
+            type: Directory
+        - name: config
+          configMap:
+            name: vector-config
+        - name: data
+          emptyDir: {}

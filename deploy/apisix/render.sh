@@ -8,6 +8,12 @@
 #   __ALL_HOSTS__          两者并集（ACME challenge / http→https 重定向）
 #   __COMMUNITY_ORIGINS__  CORS allow_origins（https:// + www）
 #   __MAX_BODY_SIZE__      请求体上限（与后端 max_upload_bytes 同源，见 README/路线图）
+#   __UPSTREAM_SUFFIX__    upstream 服务名后缀（compose 空 / k8s `.lkm.svc.cluster.local`）
+#   __DNS_RESOLVER__       上游 DNS（compose 127.0.0.11 / k8s CoreDNS ClusterIP）
+#
+# 本脚本同时渲染**两个**产物：apisix.yaml（路由）与 config.yaml（APISIX 自身配置）。
+# config.yaml 里只有 DNS 解析这一处随运行时变化，故也纳入同一模板展开点，
+# 避免 k8s 侧另存一份 config.yaml 副本（第二真相源）。
 # 域名只需在 APISIX_COMMUNITY_DOMAINS / APISIX_OFFICIAL_DOMAINS 两处改，hosts 与 CORS 来源
 # 一并跟随——此前这两者在模板里各硬编码 12+8 处，改域名必漏。
 # - 缺证书时生成自签占位（CN=域名，1 天有效），保证 APISIX 冷启动即有证书可起。
@@ -21,7 +27,14 @@ COMMUNITY="${APISIX_COMMUNITY_DOMAINS:-lkm-ahz.ltd}"
 OFFICIAL="${APISIX_OFFICIAL_DOMAINS:-lkm-ahz.icu}"
 SRC="${APISIX_SRC:-/src/apisix.yaml}"
 OUT="${APISIX_OUT:-/out/apisix.yaml}"
+SRC_CONFIG="${APISIX_SRC_CONFIG:-/src/config.yaml}"
+OUT_CONFIG="${APISIX_OUT_CONFIG:-/out/config.yaml}"
 CERT_ROOT="${APISIX_CERT_ROOT:-/etc/letsencrypt/live}"
+# upstream 服务名后缀：compose 留空（Docker 内嵌 DNS 解析短名）；
+# k8s 置 `.lkm.svc.cluster.local`（CoreDNS 不补 search domain，裸短名查不到）
+UPSTREAM_SUFFIX="${APISIX_UPSTREAM_SUFFIX:-}"
+# 上游 DNS 解析器：compose 为 Docker 内嵌 DNS；k8s 为 CoreDNS ClusterIP
+DNS_RESOLVER="${APISIX_DNS_RESOLVER:-127.0.0.11}"
 # 请求体上限：与后端 LKM_MAX_UPLOAD_BYTES 取同一来源（compose 下发同一个 env），
 # 使「网关拒收」与「应用校验」用同一个数，不再两处手改。
 MAX_BODY_SIZE="${APISIX_MAX_BODY_SIZE:-104857600}"
@@ -109,6 +122,7 @@ render_once() {
         -e "s|__ALL_HOSTS__|$ALL_HOSTS|g" \
         -e "s|__COMMUNITY_ORIGINS__|$COMMUNITY_ORIGINS|g" \
         -e "s|__MAX_BODY_SIZE__|$MAX_BODY_SIZE|g" \
+        -e "s|__UPSTREAM_SUFFIX__|$UPSTREAM_SUFFIX|g" \
         "$SRC" | awk -v ssl="$ssl_tmp" '
         /^# __SSL_SECTION__$/ {
             while ((getline line < ssl) > 0) print line
@@ -117,9 +131,15 @@ render_once() {
         }
         { print }
     ' > "$OUT.tmp"
+    # ② APISIX 自身配置：仅 DNS 解析一处随运行时变化（compose 内嵌 DNS / k8s CoreDNS）
+    sed -e "s|__DNS_RESOLVER__|$DNS_RESOLVER|g" "$SRC_CONFIG" > "$OUT_CONFIG.tmp"
     # 占位未展开完 → 不覆盖上一版 good config（宁可保持旧配置，也不给 APISIX 送坏 YAML）。
     # 排除 __SSL_SECTION__：模板顶部注释里作为说明文字出现过（非独立占位行），会被带进产物。
-    leftover="$(grep -o '__[A-Z_]*__' "$OUT.tmp" | grep -v '^__SSL_SECTION__$' | sort -u || true)"
+    leftover="$(
+        { grep -o '__[A-Z_]*__' "$OUT.tmp" | grep -v '^__SSL_SECTION__$' || true
+          grep -o '__[A-Z_]*__' "$OUT_CONFIG.tmp" || true
+        } | sort -u
+    )"
     if [ -n "$leftover" ]; then
         echo "[apisix-render] ERROR 仍有未展开占位，保留上一版配置：" >&2
         printf '%s\n' "$leftover" >&2
@@ -128,13 +148,15 @@ render_once() {
     # 就地覆盖（不用 mv）：APISIX 以单文件方式挂载该卷内文件，替换 inode 会导致容器内
     # 挂载仍指向旧文件；同 inode 写入才能被 APISIX 的 yaml provider 监测到 mtime 变化并 reload。
     cat "$OUT.tmp" > "$OUT"
+    cat "$OUT_CONFIG.tmp" > "$OUT_CONFIG"
     echo "[apisix-render] rendered $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 
 for d in $DOMAINS; do ensure_selfsigned "$d"; done
 # 冷启动：展开失败时，只有在**没有**上一版 good config 可兜底的情况下才硬失败
 # （否则 APISIX 无配置可加载；有旧配置则沿用，等下一轮重试）。
-if ! render_once && [ ! -s "$OUT" ]; then
+# 两个产物缺任一都算无兜底：APISIX 少 config.yaml 起不来，少 apisix.yaml 则无路由。
+if ! render_once && { [ ! -s "$OUT" ] || [ ! -s "$OUT_CONFIG" ]; }; then
     exit 1
 fi
 

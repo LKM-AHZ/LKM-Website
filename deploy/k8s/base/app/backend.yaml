@@ -1,0 +1,118 @@
+# backend：FastAPI（REST /api/v1 + GraphQL）+ lag 上报。集群内 8000，对外唯一入口是 APISIX。
+#
+# 探针为什么用 exec 而不是 httpGet：M6.1 的 TrustedHostMiddleware 校验 Host 头，而
+# kubelet 的 httpGet 探针把 Host 设为 **Pod IP**（动态、无法进白名单）→ 一律 400 →
+# 探针长期失败把 Pod 判死。exec 探针从容器内打 127.0.0.1，Host 命中白名单里的回环，
+# 与 compose healthcheck 完全同款（M6.2 的 /liveness 语义不变）。
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  labels: &labels
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/component: app
+    app.kubernetes.io/part-of: lkm
+spec:
+  selector:
+    app.kubernetes.io/name: backend
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/component: app
+    app.kubernetes.io/part-of: lkm
+spec:
+  # 固定 1：backend 在 lifespan 里跑 `alembic upgrade head`（含 auth 库），多副本会并发迁移。
+  # 需要横向扩展时先抽成独立的 migrate Job 再把副本放开，见 README「已知限制」。
+  replicas: 1
+  strategy:
+    # RWO 的 backend_data 卷不允许两 Pod 同时挂载（多节点下会卡在 ContainerCreating），
+    # 故滚动更新期间不并存新旧 Pod
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backend
+        app.kubernetes.io/component: app
+        app.kubernetes.io/part-of: lkm
+    spec:
+      containers:
+        - name: backend
+          image: lkm-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef: { name: lkm-config }
+            - configMapRef: { name: lkm-config-analytics }
+            - secretRef: { name: lkm-secrets }
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          # liveness 只用零外部依赖的 /liveness：DB/Redis/Pulsar/AUTH 任一抖动都不该重启进程，
+          # 依赖是否就绪由 readiness 表达（M6.2 口径）
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/liveness', timeout=5)"
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # readiness 打复合探针（DB+Redis+Pulsar+AUTH，AND 语义）：未就绪返 503 → 摘出
+          # Service endpoints，但**不重启**（与 liveness 分离正是 M6.2 的目的）
+          readinessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/readiness', timeout=5)"
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # 首启要跑 alembic 迁移 + 建连接池，给足冷启动窗口
+          startupProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/liveness', timeout=5)"
+            periodSeconds: 5
+            failureThreshold: 60
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { memory: 2Gi }
+      volumes:
+        # 博客 git 仓库（blog_repos）+ files_store 存量迁移源。
+        # 与 jobs/points worker 共享同一块卷，故用独立 PVC 而非 volumeClaimTemplates。
+        - name: data
+          persistentVolumeClaim:
+            claimName: lkm-backend-data
+---
+# 共享数据卷：backend 与 4 个 worker 都要挂 /data（blog_repos 同卷同路径）。
+# ⚠️ accessModes=ReadWriteOnce 意味着**这些 Pod 必须调度到同一节点**；单机 kind 天然满足。
+# 多节点生产集群请改用 ReadWriteMany 的 StorageClass（NFS/CephFS 等），否则后调度的 Pod
+# 会卡在 ContainerCreating。
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lkm-backend-data
+  labels:
+    app.kubernetes.io/part-of: lkm
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
