@@ -22,7 +22,12 @@
 # 但「已发布未消费」这一窗口没有兜底）。生产不应以本形态自托管，见文件末。
 #
 # 租户/namespace 不再由一次性 Job 建（那样 Pod 重建后没人重建它们）：改为**同 Pod 的
-# sidecar**，Pod 一起即重跑，幂等。效果与 compose 的 `pulsar-init` 等价，且随 Pod 自愈。
+# sidecar**，Pod 一起即重跑，幂等——与 compose 侧 `deploy/pulsar/entrypoint.sh` 的内联初始化
+# 是同一取舍（compose 也于 2026-09-17 从一次性 `pulsar-init` 服务改成了 entrypoint 内联）。
+# 注：本清单探针只验 broker 就绪、不验 namespace，故应用侧在 namespace 建好前可能报
+# `TopicNotFound: Namespace not found` 并自动重试自愈；若要 compose 同口径（healthy 蕴含
+# 初始化完成），把探针命令换成 `bin/pulsar-admin --admin-url http://localhost:8080
+# namespaces list lkm | grep -qx lkm/biz`（`pulsar-admin` 单次约 12s，timeoutSeconds 需放宽）。
 apiVersion: v1
 kind: Service
 metadata:

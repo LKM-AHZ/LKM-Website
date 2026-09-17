@@ -31,13 +31,22 @@
 | `worker-outbox` | `lkm-service:latest` | 无 | outbox relay(`app.core.worker_outbox`) |
 | `postgres` | `postgres:16-alpine` | 仅内网 `5432` | 后端数据库(biz `lkm` + auth `lkm_auth`) |
 | `redis` | `redis:7-alpine` | 仅内网 `6379` | leader 租约、共享限流 / 缓存 |
-| `pulsar` | `apachepulsar/pulsar:3.3.0` | 仅内网 `6650`/`8080` | **消息总线**(standalone,自带 ZK+BookKeeper;6650 broker / 8080 Admin REST) |
-| `pulsar-init` | `apachepulsar/pulsar:3.3.0` | 无 | 一次性:建 `lkm` 租户与 `biz/auth/system` namespace 后退出 |
+| `pulsar` | `apachepulsar/pulsar:3.3.0` | 仅内网 `6650`/`8080` | **消息总线**(standalone,自带 ZK+BookKeeper;6650 broker / 8080 Admin REST)。**无状态化**启动包装,见下 |
 | `minio` | `minio/minio:latest` | 仅容器内 `9000`/`9001` | S3 兼容对象存储:文件库文件与成员头像 |
 
 > `worker*` 与 `backend`/`auth` 共用 `lkm-service:latest` 镜像,仅启动入口不同;各自常驻消费
 > 一个 Pulsar 订阅(get 消费失败重投超限后进死信 topic `system/dlq`,由 `worker-dlq` 落库)。
 > points 拆三个订阅(reward/stats/tasks)消费同一 `biz/points.apply` topic 实现扇出与故障隔离。
+
+> **Pulsar 无状态化(2026-09-17)**:`pulsar` 由 `deploy/pulsar/entrypoint.sh` 包装启动——
+> 每次启动**先清空数据目录**,broker 就绪后**幂等重建** `lkm` 租户与 `biz/auth/system` namespace;
+> healthcheck 语义为「broker 就绪**且** namespace 已建」,故依赖它的 11 个应用服务按
+> `service_healthy` 等它就绪即可(原一次性 `pulsar-init` 服务已随之删除:它只在首次 `up` 时跑,
+> pulsar 重启后不会重跑,正是过去清卷后必须人工介入的根源)。
+> **代价**:pulsar 内「**已发布但未消费**」的消息会在每次重启时丢失(未发布事件仍在 PG
+> `outbox_events`,由 relay 重投;消费端按 `event_id` 幂等去重)。要真正持久,请改用官方 Helm
+> chart(多 bookie、显式端口)或托管服务——单机 compose 里的 standalone 无法既自托管又持久
+> (根因:embedded bookie 每次进程启动随机取端口,ledger 里记的 `IP:端口` 必然失效)。
 
 请求分流(有域名走 443 / 无域名走 80):
 
@@ -160,7 +169,7 @@ cd LKM-Website
 docker compose up -d --build
 ```
 
-首次构建需拉取基础镜像与依赖,可能耗时数分钟。启动顺序由 `depends_on` 健康检查保证:先 `postgres`、`redis`、`minio`、`pulsar` 就绪,再启动 `backend`/`auth` 与各 `worker`,前端 `astro`/`static` 就绪后网关 `apisix` 再启动。
+首次构建需拉取基础镜像与依赖,可能耗时数分钟。启动顺序由 `depends_on` 健康检查保证:先 `postgres`、`redis`、`minio`、`pulsar` 就绪,再启动 `backend`/`auth` 与各 `worker`,前端 `astro`/`static` 就绪后网关 `apisix` 再启动。其中 `pulsar` 的 `healthy` **已蕴含**租户与 namespace 初始化完成(见上「Pulsar 无状态化」),故不存在等待一次性 init 容器的步骤。
 
 ## 三·六、网关：APISIX（M5 7.2.4，全栈唯一网关）
 

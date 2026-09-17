@@ -283,43 +283,37 @@ services:
 
   # Apache Pulsar（M4）：全站消息总线，standalone 自带 ZooKeeper + BookKeeper。
   # broker 6650 / Admin REST 8080 仅内网；backend 与各 worker 经 LKM_PULSAR_URL 连接。
+  #
+  # 无状态化（2026-09-17 根治，见路线图 §8 #32）：启动包装脚本每次清空数据目录 + broker 就绪后
+  # 幂等重建租户/namespace。理由与代价（重启会丢「已发布未消费」窗口）写在
+  # deploy/pulsar/entrypoint.sh 顶部——一句话：standalone 的 bookie 地址每次进程启动都变
+  # （随机端口 + 容器 IP 变化），旧 ledger 必然不可读 → broker 崩溃循环 → 依赖它的 backend 与
+  # 9 个 worker 全卡 Created（本机已复发三次，三条「钉住地址」的路实测均无效）。
   pulsar:
     image: apachepulsar/pulsar:3.3.0
-    command: ['bin/pulsar', 'standalone']
+    entrypoint: ['/bin/sh', '/pulsar-entrypoint.sh']
     environment:
       # standalone 内存受限，避免开发机/小主机被 OOM
       PULSAR_MEM: '-Xms512m -Xmx512m -XX:MaxDirectMemorySize=512m'
     volumes:
       - pulsar_data:/pulsar/data
+      - ./deploy/pulsar/entrypoint.sh:/pulsar-entrypoint.sh:ro
     expose:
       - '6650'
       - '8080'
     healthcheck:
-      test: ['CMD-SHELL', 'bin/pulsar-admin brokers healthcheck']
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 40s
+      # healthy = broker 就绪 **且** 初始化已完成（namespace 存在）。依赖方（backend/auth/worker）
+      # 因此无需再等一次性 init 服务，也不会在 namespace 建好前抢跑订阅。
+      # 注：`pulsar-admin` 是 JVM 客户端，单次调用实测 ~12s（本机负载下），故 timeout 必须放宽到
+      # 25s、interval 30s；且 `namespaces list <tenant>` 输出带租户前缀（`lkm/biz`），grep 须带前缀。
+      test:
+        - 'CMD-SHELL'
+        - 'bin/pulsar-admin --admin-url http://127.0.0.1:8080 namespaces list lkm 2>/dev/null | grep -qx "lkm/biz"'
+      interval: 30s
+      timeout: 25s
+      retries: 6
+      start_period: 90s
     restart: unless-stopped
-    networks:
-      - lkm
-
-  # 一次性初始化：Pulsar 不自动创建 tenant/namespace（allowAutoTenantCreation 默认关），
-  # 建出 lkm 租户与 biz/auth/system 三个 namespace 后退出；worker 以 completed_successfully 依赖它。
-  pulsar-init:
-    image: apachepulsar/pulsar:3.3.0
-    depends_on:
-      pulsar:
-        condition: service_healthy
-    entrypoint: ['/bin/sh', '-c']
-    command:
-      - |
-        bin/pulsar-admin --admin-url http://pulsar:8080 tenants create lkm || true
-        for ns in biz auth system; do
-          bin/pulsar-admin --admin-url http://pulsar:8080 namespaces create lkm/$$ns || true
-        done
-        bin/pulsar-admin --admin-url http://pulsar:8080 tenants list
-    restart: 'no'
     networks:
       - lkm
 
@@ -357,8 +351,6 @@ services:
         condition: service_healthy
       pulsar:
         condition: service_healthy
-      pulsar-init:
-        condition: service_completed_successfully
     environment:
       LKM_ENV: production
       # 公网 Host 白名单（M6.1）：生产必填（缺则进程装配期 fail-fast）。内网服务名/回环
@@ -521,8 +513,6 @@ services:
         condition: service_healthy
       pulsar:
         condition: service_healthy
-      pulsar-init:
-        condition: service_completed_successfully
     environment:
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
@@ -549,8 +539,6 @@ services:
         condition: service_healthy
       pulsar:
         condition: service_healthy
-      pulsar-init:
-        condition: service_completed_successfully
     environment:
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
@@ -603,8 +591,6 @@ services:
         condition: service_healthy
       pulsar:
         condition: service_healthy
-      pulsar-init:
-        condition: service_completed_successfully
     environment:
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
@@ -634,8 +620,6 @@ services:
         condition: service_healthy
       pulsar:
         condition: service_healthy
-      pulsar-init:
-        condition: service_completed_successfully
     environment:
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
@@ -665,8 +649,6 @@ services:
         condition: service_healthy
       pulsar:
         condition: service_healthy
-      pulsar-init:
-        condition: service_completed_successfully
     environment:
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
@@ -696,8 +678,6 @@ services:
         condition: service_healthy
       pulsar:
         condition: service_healthy
-      pulsar-init:
-        condition: service_completed_successfully
     environment:
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
@@ -720,8 +700,6 @@ services:
     depends_on:
       pulsar:
         condition: service_healthy
-      pulsar-init:
-        condition: service_completed_successfully
     environment:
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
@@ -740,8 +718,6 @@ services:
         condition: service_healthy
       pulsar:
         condition: service_healthy
-      pulsar-init:
-        condition: service_completed_successfully
     environment:
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
@@ -769,8 +745,6 @@ services:
         condition: service_healthy
       pulsar:
         condition: service_healthy
-      pulsar-init:
-        condition: service_completed_successfully
     environment:
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
