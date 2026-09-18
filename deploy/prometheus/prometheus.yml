@@ -1,0 +1,19 @@
+# M6.12 监控：Prometheus 抓取配置（compose profile=monitoring / k8s 可选组件）。
+#
+# 只抓 backend：`/metrics` 由 core.metrics.setup_metrics 挂在单体 FastAPI 上；
+# auth 进程（app.main_auth）刻意不挂 /metrics（见 §8 #23 的进程边界取舍），
+# 故 auth 的 QPS/延迟暂不可观测——如需，加 APISIX 侧指标或给 auth 也挂 instrumentator。
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: lkm-backend
+    metrics_path: /metrics
+    static_configs:
+      # compose 服务名；k8s overlay 用 FQDN 覆盖（见 deploy/k8s/README.md）
+      - targets: ["backend:8000"]

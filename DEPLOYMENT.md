@@ -269,6 +269,26 @@ curl -s 'http://<host>/api/v1/admin/analytics/app_logs?limit=5' -b 'lkm_admin_ac
 - CH 未启用 / 不可达时：admin 查询返 **503**（不返空列表），周期导出 no-op 不报错。
 - 回退：`LKM_CLICKHOUSE_ENABLED=false`（默认）+ `docker compose --profile clickhouse down`，不影响主栈。
 
+## 三·九、监控面板（M6.12，profile=monitoring）
+
+Prometheus 抓 `backend` 的 `/metrics`，Grafana 预置「LKM 后端总览」面板。默认不启：
+
+```sh
+# 1) 拉起（根 .env 可设 LKM_GRAFANA_ADMIN_PASSWORD，默认 admin）
+docker compose --profile monitoring up -d prometheus grafana
+
+# 2) 打开面板（默认只绑回环，不对外暴露）
+#    http://127.0.0.1:3000  →  面板「LKM 后端总览」
+```
+
+面板内容：QPS（按 handler）、延迟 P50/P95、5xx 错误率、**outbox 积压**
+（`outbox_pending_count`）、**Pulsar 订阅 lag**（`pulsar_subscription_backlog`）、
+GraphQL P95 与受控拒绝速率。
+
+- 数据源与面板由 `deploy/grafana/provisioning` 预置（改面板改 `deploy/grafana/dashboards/lkm-overview.json`，30 秒自动重载）。
+- **已知限制**：`/metrics` 只挂在单体 `backend`；auth 进程刻意不挂，故面板无 auth 的 QPS/延迟。
+- 回退：`docker compose --profile monitoring down`（保留卷则历史保留；加 `-v` 一并清理）。
+
 ## 三·五、无域名 / 公网 IP 直连(可选)
 
 没有域名时,用公网 IP 直连(如 `http://124.220.55.235`)。需把默认写死的域名 `lkm.s12mc.xyz`

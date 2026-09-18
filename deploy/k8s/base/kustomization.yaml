@@ -30,6 +30,9 @@ resources:
   - infra/vector.yaml
   - infra/otel-collector.yaml
   - infra/prefect.yaml
+  # 监控（M6.12）：可选组件，清单里 replicas: 0 默认不部署
+  - infra/prometheus.yaml
+  - infra/grafana.yaml
   # 应用层
   - app/backend.yaml
   - app/auth.yaml
@@ -66,6 +69,21 @@ configMapGenerator:
   - name: acme-webroot-conf
     files:
       - ../../apisix/acme-webroot.conf
+  # Prometheus 抓取配置 —— 与 compose 挂的是同一文件
+  - name: prometheus-config
+    files:
+      - ../../prometheus/prometheus.yml
+  # Grafana provisioning（数据源 / dashboard provider）与面板 JSON —— 同上，单一来源。
+  # 拆三个 ConfigMap 是因为 generator 以文件 basename 作 key，同名的会互相覆盖。
+  - name: grafana-provisioning-datasources
+    files:
+      - ../../grafana/provisioning/datasources/prometheus.yml
+  - name: grafana-provisioning-dashboards
+    files:
+      - ../../grafana/provisioning/dashboards/lkm.yml
+  - name: grafana-dashboards
+    files:
+      - ../../grafana/dashboards/lkm-overview.json
 
 # 统一打来源标签。includeSelectors=false：各资源的 selector 已在清单里显式写死，
 # 不由 kustomize 代改，避免「改了 kustomization 就打不上/打错 selector」这类隐式耦合。

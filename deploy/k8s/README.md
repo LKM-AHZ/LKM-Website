@@ -118,7 +118,7 @@ kubectl -n lkm exec deploy/backend -- python -c \
 | upstream DNS | Docker 内嵌 DNS `127.0.0.11`，服务短名 | CoreDNS ClusterIP + **FQDN** | lua-resty-dns 是裸查询，CoreDNS 不补 search domain |
 | TLS 证书 | certbot 写共享卷 | Secret `lkm-tls`（外部签发/续期） | k8s 里跨 Pod 共享证书应以 Secret 为载体 |
 | 日志采集 | 挂 docker.sock 读 json-file | DaemonSet 读 `/var/log/pods`（CRI） | 日志格式不同，source 段必然不同 |
-| 可选组件开关 | `--profile` | 副本数（prefect 默认 0） | k8s 无 profile，用 0 副本表达「默认不启用」 |
+| 可选组件开关 | `--profile` | 副本数（prefect / prometheus / grafana 默认 0） | k8s 无 profile，用 0 副本表达「默认不启用」 |
 | Pulsar 数据 | `pulsar_data` 卷持久化 | **emptyDir（不持久化）** | 见上节：账本跨不了 Pod 重建，改以「每次干净启动」换自愈；租户/namespace 由 Pod 内 sidecar 建 |
 | 探针 | healthcheck | liveness / readiness / startup **三分** | 语义沿用 M6.2 的 `/liveness` 与 `/readiness` |
 
@@ -177,8 +177,14 @@ namespace 由**同 Pod 的 `pulsar-init` sidecar** 自动重建（不再依赖�
    （不读就不会连），换来少维护一张专属表。
 6. **Job spec 不可变**：改 `minio-init` / `prefect-init` 的命令前需先
    `kubectl -n lkm delete job <name>`，否则 apply 报错。
+7. **指标只覆盖 backend**：`/metrics` 挂在单体 FastAPI（`app.main`），auth 进程
+   （`app.main_auth`）刻意不挂，故 Grafana 面板看不到 auth 的 QPS/延迟。Prometheus
+   与 Grafana 清单里的容器间地址用的是**短名**（`backend:8000` / `prometheus:9090`），
+   靠 `/etc/resolv.conf` 的 search 域解析（与 APISIX 的 lua-resty-dns 裸查询不同）——
+   若实测解析失败，需在 overlay 里另给一份 FQDN 版配置。Prometheus 数据是 emptyDir，
+   Pod 重建即丢历史（观测数据可重建，不引入 PV 依赖）。
 
-## Prefect / ClickHouse 的启用方式
+## Prefect / ClickHouse / 监控的启用方式
 
 compose 用 `--profile`，k8s 用副本数：
 
@@ -199,6 +205,13 @@ kubectl -n lkm set env deploy/worker LKM_PREFECT_ENABLED=true
 ClickHouse 同理：置 `LKM_CLICKHOUSE_ENABLED=true`，并让 `backend`（admin 只读查询）
 与 `worker`（回落直调导出）重建。向量采集（vector DaemonSet）与 OTel collector
 默认即在跑，无需开关。
+
+监控（M6.12）只需拉起两个 Deployment（配置与 compose 共用同一批文件）：
+
+```sh
+kubectl -n lkm scale deploy/prometheus deploy/grafana --replicas=1
+# Grafana：kubectl -n lkm port-forward svc/grafana 3000:3000（默认 admin/admin）
+```
 
 回退：副本置 0 + 变量置 false。
 

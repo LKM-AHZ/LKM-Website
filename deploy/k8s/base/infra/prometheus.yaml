@@ -1,0 +1,78 @@
+# Prometheus（M6.12）：抓 backend 的 /metrics。
+#
+# 与 compose 共用同一份 deploy/prometheus/prometheus.yml（configMapGenerator 直接引用，
+# 不留副本）。**可选组件**：与 prefect 同款，用副本数控制开关（默认 0 = 不部署），
+# 因为 k8s 没有 compose 的 --profile 机制。
+#
+# 已知取舍：配置文件里 targets 写的是短名 `backend:8000`，k8s 下靠容器 /etc/resolv.conf
+# 的 search 域（lkm.svc.cluster.local）解析——与 APISIX 的 lua-resty-dns 裸查询不同，
+# Prometheus（Go）会应用 search 域。若实测解析失败，需为 k8s overlay 单独给一份
+# FQDN 版配置（届时在 README 差异表登记）。
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/component: observability
+    app.kubernetes.io/part-of: lkm
+spec:
+  selector:
+    app.kubernetes.io/name: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/component: observability
+    app.kubernetes.io/part-of: lkm
+spec:
+  replicas: 0 # 可选组件：需要时改 1（compose 侧对应 --profile monitoring）
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prometheus
+        app.kubernetes.io/component: observability
+        app.kubernetes.io/part-of: lkm
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.54.1
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.retention.time=15d
+            # 单副本 + emptyDir：指标是「可重建的观测数据」，不引入持久卷依赖
+            - --storage.tsdb.path=/prometheus
+          ports:
+            - name: http
+              containerPort: 9090
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus/prometheus.yml
+              subPath: prometheus.yml
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+          readinessProbe:
+            httpGet: { path: /-/ready, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 256Mi }
+            limits: { memory: 1Gi }
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: data
+          emptyDir: {}

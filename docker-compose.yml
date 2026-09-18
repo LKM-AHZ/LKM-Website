@@ -18,7 +18,7 @@ services:
       - ./deploy/apisix:/src:ro
       - certbot_conf:/etc/letsencrypt
       - apisix_conf:/out
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     healthcheck:
       # 两个产物都要在：apisix.yaml（路由）+ config.yaml（DNS 解析展开）——
       # apisix 服务依赖本健康检查，缺任一个都会让它起不来
@@ -36,7 +36,7 @@ services:
     volumes:
       - ./deploy/apisix/acme-webroot.conf:/etc/nginx/conf.d/default.conf:ro
       - certbot_www:/var/www/certbot:ro
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -81,7 +81,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -92,7 +92,7 @@ services:
       - ./deploy/certbot/entrypoint.sh:/certbot-entrypoint.sh:ro
       - certbot_conf:/etc/letsencrypt
       - certbot_www:/var/www/certbot
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     depends_on:
       - apisix
     networks:
@@ -110,7 +110,7 @@ services:
       PORT: 4321
       API_URL: http://backend:8000
       PUBLIC_SITE_URL: https://lkm-ahz.ltd
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     healthcheck:
       test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:4321/robots.txt']
       interval: 30s
@@ -132,7 +132,7 @@ services:
     image: lkm-official-static:latest
     ports:
       - '${LKM_STATIC_PORT:-8082}:80'
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -149,7 +149,7 @@ services:
       - '4317'
       - '4318'
       - '8888'
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -179,7 +179,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -201,7 +201,45 @@ services:
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./deploy/clickhouse/vector.toml:/etc/vector/vector.toml:ro
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
+    networks:
+      - lkm
+
+  # Prometheus 指标抓取（M6.12，profile=monitoring）：只抓 backend 的 /metrics
+  # （auth 进程刻意不挂 /metrics，见部署文档「已知限制」）。默认不启。
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    profiles: ['monitoring']
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    expose:
+      - '9090'
+    restart: ${LKM_RESTART_POLICY:-no}
+    networks:
+      - lkm
+
+  # Grafana 总览面板（M6.12，profile=monitoring）：数据源与 dashboard 均由
+  # deploy/grafana/provisioning 预置（QPS/P50/P95/错误率/outbox 积压/Pulsar lag）。
+  # 默认只绑回环，公网暴露请自行经网关加鉴权。
+  grafana:
+    image: grafana/grafana:11.2.0
+    profiles: ['monitoring']
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${LKM_GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - '127.0.0.1:3000:3000'
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -224,7 +262,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -242,7 +280,7 @@ services:
       SITE_URL: ${INFISICAL_SITE_URL:-http://localhost:8085}
     ports:
       - '${LKM_INFISICAL_PORT:-8085}:8080'
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -256,7 +294,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       # S5-A2 Step3：首启 initdb 补建独立 AUTH 库 lkm_auth(仅空数据卷首次执行)；只读挂载。
       - ./deploy/initdb:/docker-entrypoint-initdb.d:ro
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
       interval: 10s
@@ -271,7 +309,7 @@ services:
     command: ['redis-server', '--appendonly', 'yes']
     volumes:
       - redis_data:/data
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 10s
@@ -313,7 +351,7 @@ services:
       timeout: 25s
       retries: 6
       start_period: 90s
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -418,7 +456,7 @@ services:
       LKM_CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-change-me-clickhouse}
     volumes:
       - backend_data:/data
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     healthcheck:
       # 打 /liveness（零外部依赖）：进程存活即心跳 OK。依赖是否就绪由 /readiness 表达
       # （未就绪返 503），避免 DB/Redis/Pulsar/AUTH 任一抖动就把容器判死重启（M6.2）。
@@ -487,7 +525,7 @@ services:
       LKM_INFISICAL_SECRET_PATH: ${LKM_INFISICAL_SECRET_PATH:-/}
       LKM_INFISICAL_CLIENT_ID: ${LKM_INFISICAL_CLIENT_ID:-}
       LKM_INFISICAL_CLIENT_SECRET: ${LKM_INFISICAL_CLIENT_SECRET:-}
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     healthcheck:
       test:
         [
@@ -525,7 +563,7 @@ services:
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
       LKM_DB_USER: ${POSTGRES_USER:-lkm}
       LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -575,7 +613,7 @@ services:
       LKM_CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-change-me-clickhouse}
     volumes:
       - backend_data:/data
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -606,7 +644,7 @@ services:
       LKM_BLOG_REPO_DIR: /data/blog_repos   # 与 backend 同卷同路径
     volumes:
       - backend_data:/data
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -635,7 +673,7 @@ services:
       LKM_BLOG_REPO_DIR: /data/blog_repos
     volumes:
       - backend_data:/data
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -664,7 +702,7 @@ services:
       LKM_BLOG_REPO_DIR: /data/blog_repos
     volumes:
       - backend_data:/data
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -690,7 +728,7 @@ services:
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
       LKM_DB_USER: ${POSTGRES_USER:-lkm}
       LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -722,7 +760,7 @@ services:
       LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
       LKM_AUTH_HTTP_URL: ${LKM_AUTH_HTTP_URL:-http://auth:8001}
       LKM_AUTH_HTTP_TOKEN: ${LKM_AUTH_HTTP_TOKEN:?生产需设置 LKM_AUTH_HTTP_TOKEN}
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -738,7 +776,7 @@ services:
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_PULSAR_URL: pulsar://pulsar:6650
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -761,7 +799,7 @@ services:
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
       LKM_DB_USER: ${POSTGRES_USER:-lkm}
       LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -789,7 +827,7 @@ services:
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
       LKM_DB_USER: ${POSTGRES_USER:-lkm}
       LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -814,7 +852,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -842,7 +880,7 @@ services:
       timeout: 5s
       retries: 10
       start_period: 40s
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -862,7 +900,7 @@ services:
       - sh
       - -c
       - prefect work-pool create "$$LKM_PREFECT_WORK_POOL" --type process || true; python -m app.flows.deploy
-    restart: 'no'
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -904,7 +942,7 @@ services:
       LKM_CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-change-me-clickhouse}
       PREFECT_API_URL: http://prefect-server:4200/api
     command: ['prefect', 'worker', 'start', '--pool', '${LKM_PREFECT_WORK_POOL:-lkm}', '--type', 'process']
-    restart: unless-stopped
+    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
@@ -920,6 +958,8 @@ volumes:
   redis_data:
   minio_data:
   pulsar_data:
+  prometheus_data:
+  grafana_data:
 
 networks:
   lkm:
