@@ -23,6 +23,7 @@
 | `worker` | `lkm-service:latest` | 无 | jobs + user-invalidate 订阅。`python -m app.core.worker_default` |
 | `worker-send` | `lkm-service:latest` | 无 | 发送订阅。`python -m app.core.worker_send` |
 | `worker-notify` | `lkm-service:latest` | 无 | 对象事件登记订阅。`python -m app.core.worker_notify` |
+| `worker-notification` | `lkm-service:latest` | 无 | 站内信生成订阅。`python -m app.core.worker_notification` |
 | `worker-points-reward` | `lkm-service:latest` | 无 | points 奖励入账订阅。`python -m app.core.worker_points_reward` |
 | `worker-points-stats` | `lkm-service:latest` | 无 | points 行为计数/成就订阅。`python -m app.core.worker_points_stats` |
 | `worker-points-tasks` | `lkm-service:latest` | 无 | points 每日任务订阅。`python -m app.core.worker_points_tasks` |
@@ -36,11 +37,12 @@
 
 > `worker*` 与 `backend`/`auth` 共用 `lkm-service:latest` 镜像,仅启动入口不同;各自常驻消费
 > 一个 Pulsar 订阅(get 消费失败重投超限后进死信 topic `system/dlq`,由 `worker-dlq` 落库)。
-> points 拆三个订阅(reward/stats/tasks)消费同一 `biz/points.apply` topic 实现扇出与故障隔离。
+> points 拆三个订阅(reward/stats/tasks)消费同一 `biz/points.apply` topic 实现扇出与故障隔离;
+> `worker-notification`(M6.8)以第四个订阅消费同一 topic 生成站内信,同样独立记账、互不阻塞。
 
 > **Pulsar 无状态化(2026-09-17)**:`pulsar` 由 `deploy/pulsar/entrypoint.sh` 包装启动——
 > 每次启动**先清空数据目录**,broker 就绪后**幂等重建** `lkm` 租户与 `biz/auth/system` namespace;
-> healthcheck 语义为「broker 就绪**且** namespace 已建」,故依赖它的 11 个应用服务按
+> healthcheck 语义为「broker 就绪**且** namespace 已建」,故依赖它的 12 个应用服务按
 > `service_healthy` 等它就绪即可(原一次性 `pulsar-init` 服务已随之删除:它只在首次 `up` 时跑,
 > pulsar 重启后不会重跑,正是过去清卷后必须人工介入的根源)。
 > **代价**:pulsar 内「**已发布但未消费**」的消息会在每次重启时丢失(未发布事件仍在 PG

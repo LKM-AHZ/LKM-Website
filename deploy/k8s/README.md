@@ -14,7 +14,7 @@ deploy/k8s/
 │   ├── kustomization.yaml     # 用 configMapGenerator 直接引用仓库既有部署资产
 │   ├── app-config.yaml        # 非敏感配置（三张表：公共 / AUTH 库 / 分析+编排）
 │   ├── infra/                 # postgres redis pulsar minio clickhouse vector otel prefect
-│   ├── app/                   # backend auth workers(×9) frontend(astro+static)
+│   ├── app/                   # backend auth workers(×10) frontend(astro+static)
 │   └── gateway/               # apisix(+render init/sidecar) acme-webroot 网关配置
 └── overlays/
     ├── kind/                  # 本地单节点验收（NodePort + 站点身份）

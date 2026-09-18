@@ -694,6 +694,38 @@ services:
     networks:
       - lkm
 
+  # M6.8：消费 biz/points.apply 生成站内信（与 points 三订阅同 topic 不同订阅，故障隔离）。
+  # 需 auth 读缝（触发者展示名），与 backend 同款配置。
+  worker-notification:
+    image: lkm-service:latest
+    command: ['python', '-m', 'app.core.worker_notification']
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      pulsar:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+    environment:
+      LKM_ENV: production
+      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
+      LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
+      LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
+      LKM_REDIS_URL: redis://redis:6379/0
+      LKM_PULSAR_URL: pulsar://pulsar:6650
+      LKM_DB_HOST: postgres
+      LKM_DB_PORT: 5432
+      LKM_DB_NAME: ${POSTGRES_DB:-lkm}
+      LKM_DB_USER: ${POSTGRES_USER:-lkm}
+      LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
+      LKM_AUTH_HTTP_URL: ${LKM_AUTH_HTTP_URL:-http://auth:8001}
+      LKM_AUTH_HTTP_TOKEN: ${LKM_AUTH_HTTP_TOKEN:?生产需设置 LKM_AUTH_HTTP_TOKEN}
+    restart: unless-stopped
+    networks:
+      - lkm
+
   worker-scheduler:
     image: lkm-service:latest
     command: ['python', '-m', 'app.core.worker_scheduler']

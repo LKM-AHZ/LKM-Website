@@ -114,6 +114,39 @@ spec:
             requests: { cpu: 100m, memory: 256Mi }
             limits: { memory: 512Mi }
 ---
+# 站内信生成（M6.8）：消费 biz/points.apply 生成通知并 WS 推送
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-notification
+  labels:
+    app.kubernetes.io/name: worker-notification
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: lkm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: worker-notification
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: worker-notification
+        app.kubernetes.io/component: worker
+        app.kubernetes.io/part-of: lkm
+    spec:
+      containers:
+        - name: worker-notification
+          image: lkm-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ['python', '-m', 'app.core.worker_notification']
+          envFrom:
+            - configMapRef: { name: lkm-config }
+            - secretRef: { name: lkm-secrets }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
+---
 # 死信落库：消费 system/dlq 落到 event_failures，供分析管道导出与人工排查
 apiVersion: apps/v1
 kind: Deployment
