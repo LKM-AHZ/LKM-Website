@@ -8,7 +8,7 @@
 
 ## 架构概览
 
-单机 docker-compose 编排,APISIX 为唯一对外入口(**全栈唯一网关**;nginx 已彻底移除):
+单机 docker-compose 编排,APISIX 为唯一对外入口(**全栈唯一网关**;nginx 已移除):
 
 | 服务 | 镜像 | 端口(对外) | 职责 |
 |---|---|---|---|
@@ -30,7 +30,7 @@
 | `worker-scheduler` | `lkm-service:latest` | 无 | cron 触发发布(`app.core.worker_scheduler`) |
 | `worker-dlq` | `lkm-service:latest` | 无 | 死信落库(`app.core.worker_dlq`) |
 | `worker-outbox` | `lkm-service:latest` | 无 | outbox relay(`app.core.worker_outbox`) |
-| `postgres` | `postgres:16-alpine` | 仅内网 `5432` | 后端数据库(biz `lkm` + auth `lkm_auth`) |
+| `postgres` | `timescale/timescaledb:latest-pg16` | 仅内网 `5432` | 后端数据库(biz `lkm` + auth `lkm_auth`);outbox 两表为 hypertable |
 | `redis` | `redis:7-alpine` | 仅内网 `6379` | leader 租约、共享限流 / 缓存 |
 | `pulsar` | `apachepulsar/pulsar:3.3.0` | 仅内网 `6650`/`8080` | **消息总线**(standalone,自带 ZK+BookKeeper;6650 broker / 8080 Admin REST)。**无状态化**启动包装,见下 |
 | `minio` | `minio/minio:latest` | 仅容器内 `9000`/`9001` | S3 兼容对象存储:文件库文件与成员头像 |
@@ -84,7 +84,7 @@ LKM-Website/                  # 根仓库(含 docker-compose.yml 与本教程)
 ├── DEPLOYMENT.md
 ├── dev.bat / dev.ps1 / dev.sh
 ├── deploy/
-│   ├── initdb/               # PostgreSQL 首启初始化脚本(auth 独立库建库)
+│   ├── initdb/               # PostgreSQL 首启初始化脚本(auth 独立库建库、timescaledb 扩展)
 │   ├── apisix/               # 全站公网入口 APISIX 声明式路由/SSL 渲染/冒烟脚本
 │   └── certbot/              # certbot 常驻入口脚本(webroot 申请与续期)
 ├── LKM-official-website/     # 前端仓库(含前端 Dockerfile)
@@ -424,9 +424,16 @@ kubectl kustomize deploy/k8s/overlays/kind --load-restrictor LoadRestrictionsNon
 
 ## 数据库
 
-### 默认方案：docker 内置 PostgreSQL
+### 默认方案：docker 内置 PostgreSQL(TimescaleDB)
 
-`docker compose up` 会自动拉取 `postgres:16-alpine` 镜像并启动;后端首次启动时通过 Alembic 自动建表,无需手动初始化。
+`docker compose up` 会自动拉取 `timescale/timescaledb:latest-pg16` 镜像并启动;后端首次启动时自动建表(默认通道 `LKM_USE_ALEMBIC=false` 走 `create_all`,见后端 README),无需手动初始化。
+
+**为什么是 TimescaleDB 版**:`outbox_events`/`outbox_archived` 被装配为 **hypertable**(按 `created_at` 自动时间分区 + 冷历史列式压缩 + 保留策略兜底),详见《执行路线图》§8 #40。该引擎是 PG16 的超集,其余功能与 `postgres:16-alpine` 无差别;`prefect-postgres`、`infisical-db` 仍是原镜像。
+
+两点部署注意:
+
+- **hypertable 的每个唯一索引必须含分区列** → 这两张表的主键是 `(created_at, id)`。因此**从旧数据卷升级不能就地生效**:`create_all` 通道只增不改(PK 是破坏性变更),需重建数据卷 `docker compose down -v`(注意会清空 `lkm`/`lkm_auth` 全部数据)后重起。开发期无生产数据,按蓝图「不做存量迁移」口径直接重建。
+- 引擎不可用时(如误用普通 PG 镜像或手工安装的主机 PG)**不会导致启动失败**:`init_db` 会告警并降级为**普通表**——主键多一列 `created_at` 无副作用,outbox 投递语义完全不变,只是失去分区裁剪/压缩。
 
 连接数据库:
 
@@ -461,6 +468,8 @@ docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
 ### 可选方案：主机手动安装 PostgreSQL
 
 若需复用主机已有数据库实例,可在主机直接安装 PostgreSQL 并让后端连接外部库。
+
+> **注意**:此路径下**没有 TimescaleDB**,outbox 两表会降级为普通表(启动时告警、不影响功能,但没有分区裁剪与压缩)。要用 hypertable 请装 `timescaledb` 版并预加载 `shared_preload_libraries`,或直接用上面的 docker 方案。
 
 1. 安装并启动:
 
@@ -557,7 +566,7 @@ cd LKM-service
 
 - **后端反复重启(Exited 3)**:通常是密钥缺失或过短。确认 `.env` 中三个密钥已设置为强随机值,并 `docker compose up -d` 重读。
 - **上传大文件被拒**:APISIX 路由已设 `client-control.max_body_size: 104857600`(100m),与后端 `max_upload_bytes` 对齐;更大文件需同时改 `deploy/apisix/apisix.yaml` 与后端配置。
-- **数据库**:使用 PostgreSQL(`postgres:16-alpine` 服务,卷持久化)。后端经 `LKM_DB_*` 环境变量以 `postgresql+asyncpg` 连接;首次启动时 alembic 自动建表。
+- **数据库**:使用 PostgreSQL(`timescale/timescaledb:latest-pg16` 服务,卷持久化)。后端经 `LKM_DB_*` 环境变量以 `postgresql+asyncpg` 连接;首次启动时自动建表(默认走 `create_all` 通道)。**换库/改 schema 后需重建数据卷**(`docker compose down -v`,见「数据库」章节)。
 - **换域名**:网关侧只需在 `.env` 改 `LKM_COMMUNITY_DOMAINS` / `LKM_OFFICIAL_DOMAINS`(hosts、CORS 来源、MinIO Host、证书 SNI 全量跟随,见「单一来源」),再 `docker compose up -d apisix-render` 重渲染;此外还要改后端**自身身份**类配置 `LKM_ALLOWED_HOSTS`/`LKM_ORIGIN`/`LKM_RP_ID`/`LKM_GITHUB_REDIRECT_URI`/`LKM_FRONTEND_CALLBACK`/`LKM_S3_PUBLIC_ENDPOINT_URL` 与前端 `PUBLIC_SITE_URL`/`PUBLIC_BASE_PATH`,并重新签发证书。
 
 - **头像/文件上传 404**:MinIO 桶未创建(S3 不自动建桶)。先 `mc mb .../lkm` 建桶(见上文「MinIO 首次初始化」)。

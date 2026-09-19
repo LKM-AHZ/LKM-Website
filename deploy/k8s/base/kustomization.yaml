@@ -42,10 +42,12 @@ resources:
   - gateway/apisix.yaml
 
 configMapGenerator:
-  # PostgreSQL 首启初始化脚本（建 AUTH 独立库 lkm_auth）—— 与 compose 挂的是同一文件
+  # PostgreSQL 首启初始化脚本（建 AUTH 独立库 lkm_auth、建 timescaledb 扩展）
+  # —— 与 compose 挂的是同一批文件
   - name: postgres-initdb
     files:
       - ../../initdb/01-auth-db.sh
+      - ../../initdb/02-timescaledb.sh
   # ClickHouse 建库建表 DDL（含各表 TTL）—— 与 compose 挂的是同一文件
   - name: clickhouse-initdb
     files:

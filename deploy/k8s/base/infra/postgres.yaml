@@ -40,12 +40,14 @@ spec:
         app.kubernetes.io/part-of: lkm
     spec:
       securityContext:
-        # postgres:16-alpine 的官方 entrypoint 需以 root 启动后降权到 postgres（uid 70）
+        # timescale/timescaledb 基于 alpine，官方 entrypoint 同样以 root 启动后降权到
+        # postgres（uid 70），故沿用与 postgres:16-alpine 相同的 uid/fsGroup。
         runAsUser: 0
         fsGroup: 70
       containers:
         - name: postgres
-          image: postgres:16-alpine
+          # TimescaleDB 版 PG16（批 2）：outbox 两表是 hypertable，见 compose 同名注释。
+          image: timescale/timescaledb:latest-pg16
           imagePullPolicy: IfNotPresent
           ports:
             - name: postgres

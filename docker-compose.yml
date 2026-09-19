@@ -285,7 +285,12 @@ services:
       - lkm
 
   postgres:
-    image: postgres:16-alpine
+    # TimescaleDB 版 PG16（批 2）：outbox_events/outbox_archived 是 hypertable，需该引擎
+    # （官方镜像已配 shared_preload_libraries=timescaledb，扩展由 deploy/initdb 与应用侧
+    # init_db 幂等补建）。仅主库换，prefect-postgres / infisical-db 仍是 postgres:16-alpine。
+    # ⚠️ 从 postgres:16-alpine **就地换镜像**不会改动既有数据卷的 schema：hypertable 的
+    # 主键必须含分区列 created_at，旧卷需重建（或手工迁移），见 DEPLOYMENT.md。
+    image: timescale/timescaledb:latest-pg16
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-lkm}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}

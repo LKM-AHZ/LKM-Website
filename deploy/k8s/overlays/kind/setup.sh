@@ -20,7 +20,9 @@ LOADRESTRICTOR="--load-restrictor LoadRestrictionsNone"
 # 三个本地构建的镜像（不存在任何 registry，必须注入）
 LOCAL_IMAGES="lkm-service:latest lkm-official-website:latest lkm-official-static:latest"
 # 中间件镜像：宿主机 docker 已有 compose 拉过的那份，注入即免出网
-INFRA_IMAGES="apachepulsar/pulsar:3.3.0 postgres:16-alpine redis:7-alpine \
+# 主库用 TimescaleDB 版（hypertable）；prefect 自带的 prefect-postgres 仍是 postgres:16-alpine，
+# 故两者都要注入。
+INFRA_IMAGES="apachepulsar/pulsar:3.3.0 timescale/timescaledb:latest-pg16 postgres:16-alpine redis:7-alpine \
 minio/minio:latest clickhouse/clickhouse-server:24.8-alpine timberio/vector:0.43.0-alpine \
 otel/opentelemetry-collector-contrib:0.109.0 apache/apisix:3.9.0-debian alpine:3.19 nginx:1.27-alpine"
 
