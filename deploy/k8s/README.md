@@ -11,7 +11,8 @@
 
 - `kubectl` 与集群版本兼容；客户端支持 Kustomize。
 - 本地验收安装 kind，且宿主机 `80/443` 未被其他服务占用。
-- 已构建并让集群可拉取 `lkm-service`、`lkm-official-website`、`lkm-official-static` 镜像。
+- 已构建并让集群可拉取 `lkm-service`、`lkm-official-website`、`lkm-official-static` 镜像；
+  启用 bot 时还需要 `lkm-bot`（`docker compose --profile bot build lkmbot`）。
 - 根目录 `.env` 已按 `.env.example` 配置；Secret 生成脚本只输出到标准输出，不应重定向后提交。
 - 生产集群已准备 StorageClass、负载均衡、DNS、正式证书和备份方案。
 
@@ -25,7 +26,7 @@ deploy/k8s/
 │   ├── kustomization.yaml     # 用 configMapGenerator 直接引用仓库既有部署资产
 │   ├── app-config.yaml        # 非敏感配置（三张表：公共 / AUTH 库 / 分析+编排）
 │   ├── infra/                 # postgres redis pulsar minio clickhouse vector otel prefect
-│   ├── app/                   # backend auth workers(×10) frontend(astro+static)
+│   ├── app/                   # backend auth workers(×10) frontend(astro+static) lkmbot(可选,replicas 0)
 │   └── gateway/               # apisix(+render init/sidecar) acme-webroot 网关配置
 └── overlays/
     ├── kind/                  # 本地单节点验收（NodePort + 站点身份）
@@ -106,7 +107,7 @@ kubectl -n lkm get pods                      # 期望：除 prefect-* 外全部 
 kubectl -n lkm get jobs                      # minio-init / prefect-init 完成
 ```
 
-网关冒烟（复用 compose 的同一脚本，13 项断言）：
+网关冒烟（复用 compose 的同一脚本，14 项断言；`SMOKE_BOT=1` 且 bot 已 scale 起来时再加 1 项）：
 
 ```sh
 # kind：宿主机 80/443 已映射到 NodePort，脚本按 SNI 走域名
@@ -129,7 +130,7 @@ kubectl -n lkm exec deploy/backend -- python -c \
 | upstream DNS | Docker 内嵌 DNS `127.0.0.11`，服务短名 | CoreDNS ClusterIP + **FQDN** | lua-resty-dns 是裸查询，CoreDNS 不补 search domain |
 | TLS 证书 | certbot 写共享卷 | Secret `lkm-tls`（外部签发/续期） | k8s 里跨 Pod 共享证书应以 Secret 为载体 |
 | 日志采集 | 挂 docker.sock 读 json-file | DaemonSet 读 `/var/log/pods`（CRI） | 日志格式不同，source 段必然不同 |
-| 可选组件开关 | `--profile` | 副本数（prefect / prometheus / grafana 默认 0） | k8s 无 profile，用 0 副本表达「默认不启用」 |
+| 可选组件开关 | `--profile` | 副本数（prefect / prometheus / grafana / lkmbot 默认 0） | k8s 无 profile，用 0 副本表达「默认不启用」 |
 | Pulsar 数据 | `pulsar_data` 卷持久化 | **emptyDir（不持久化）** | 见上节：账本跨不了 Pod 重建，改以「每次干净启动」换自愈；租户/namespace 由 Pod 内 sidecar 建 |
 | 探针 | healthcheck | liveness / readiness / startup **三分** | 语义沿用 M6.2 的 `/liveness` 与 `/readiness` |
 
@@ -189,11 +190,23 @@ namespace 由**同 Pod 的 `pulsar-init` sidecar** 自动重建（不再依赖�
 6. **Job spec 不可变**：改 `minio-init` / `prefect-init` 的命令前需先
    `kubectl -n lkm delete job <name>`，否则 apply 报错。
 7. **指标只覆盖 backend**：`/metrics` 挂在单体 FastAPI（`app.main`），auth 进程
-   （`app.main_auth`）刻意不挂，故 Grafana 面板看不到 auth 的 QPS/延迟。Prometheus
+   （`auth.main`）刻意不挂，故 Grafana 面板看不到 auth 的 QPS/延迟。Prometheus
    与 Grafana 清单里的容器间地址用的是**短名**（`backend:8000` / `prometheus:9090`），
-   靠 `/etc/resolv.conf` 的 search 域解析（与 APISIX 的 lua-resty-dns 裸查询不同）——
-   若实测解析失败，需在 overlay 里另给一份 FQDN 版配置。Prometheus 数据是 emptyDir，
-   Pod 重建即丢历史（观测数据可重建，不引入 PV 依赖）。
+   靠 `/etc/resolv.conf` 的 search 域解析（与 APISIX 的 lua-resty-dns 裸查询不同）。
+   **2026-09-19 已在 kind 上实测通过**：Pod 内 `resolv.conf` 为
+   `search lkm.svc.cluster.local svc.cluster.local cluster.local`（`ndots:5`），短名
+   `backend` 解析到 ClusterIP；把 prometheus 拉起（`replicas: 1`）后其
+   `/api/v1/targets` 显示 `http://backend:8000/metrics` 已进入抓取——`health=down`
+   仅因当时 backend Pod 未就绪（`connection refused`），**不是解析失败**。
+   结论：**无需在 overlay 里另给 FQDN 版配置**。
+   Prometheus 数据是 emptyDir，Pod 重建即丢历史（观测数据可重建，不引入 PV 依赖）。
+8. **bot 的沙箱（shipyard）在集群内不交付**：Bay 经 Docker Engine API 在**宿主** spawn 兄弟
+   容器、把宿主路径 bind 进沙箱、并让其加入一个 Docker 网络——k8s 节点多为 containerd
+   （没有 docker.sock），spawn 出的容器也不受 k8s 调度与网络命名空间管理（kind 节点内更无从谈起）。
+   因此 `deploy/k8s/` 只交付 `app/lkmbot.yaml`（可选组件，默认 0 副本），**没有** shipyard 清单。
+   需要沙箱时把 bot 指向**集群外**的 Bay：面板「配置 → 沙箱」里填 `shipyard_neo_endpoint`
+   （新 Bay）或 `sandbox.shipyard_endpoint`（旧 Bay）+ access token。bot 默认
+   `computer_use_runtime: none`，不接沙箱不影响其余功能。
 
 ## Prefect / ClickHouse / 监控的启用方式
 
@@ -222,6 +235,14 @@ ClickHouse 同理：置 `LKM_CLICKHOUSE_ENABLED=true`，并让 `backend`（admin
 ```sh
 kubectl -n lkm scale deploy/prometheus deploy/grafana --replicas=1
 # Grafana：kubectl -n lkm port-forward svc/grafana 3000:3000（默认 admin/admin）
+```
+
+bot 面板同理（镜像需先构建并让集群可拉取，kind 用 `setup.sh` 注入 `lkm-bot:latest`）：
+
+```sh
+kubectl -n lkm scale deploy/lkmbot --replicas=1
+# 面板经网关 https://bot.lkm-ahz.ltd 访问；证书按 gen-tls.sh 的键名（bot.lkm-ahz.ltd_*）导入
+# 初始密码来自 Secret 的 LKM_BOT_DASHBOARD_PASSWORD（未配则看 Pod 日志里的随机密码）
 ```
 
 回退：副本置 0 + 变量置 false。

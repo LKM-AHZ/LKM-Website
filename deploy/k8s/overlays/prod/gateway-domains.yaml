@@ -11,5 +11,7 @@ metadata:
 data:
   APISIX_COMMUNITY_DOMAINS: lkm-ahz.ltd
   APISIX_OFFICIAL_DOMAINS: lkm-ahz.icu
+  APISIX_BOT_DOMAINS: bot.lkm-ahz.ltd
+  APISIX_BOT_MAX_BODY_SIZE: "550000000"
   APISIX_DNS_RESOLVER: 10.96.0.10
   APISIX_UPSTREAM_SUFFIX: .lkm.svc.cluster.local

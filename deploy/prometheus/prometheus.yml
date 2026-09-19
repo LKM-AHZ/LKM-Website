@@ -1,7 +1,7 @@
 # M6.12 监控：Prometheus 抓取配置（compose profile=monitoring / k8s 可选组件）。
 #
 # 只抓 backend：`/metrics` 由 core.metrics.setup_metrics 挂在单体 FastAPI 上；
-# auth 进程（app.main_auth）刻意不挂 /metrics（见 §8 #23 的进程边界取舍），
+# auth 进程（auth.main）刻意不挂 /metrics（见 §8 #23 的进程边界取舍），
 # 故 auth 的 QPS/延迟暂不可观测——如需，加 APISIX 侧指标或给 auth 也挂 instrumentator。
 global:
   scrape_interval: 15s

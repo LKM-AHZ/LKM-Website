@@ -1,4 +1,4 @@
-# AUTH 独立进程（B1.1）：与 backend 同镜像、异 entrypoint，跑 app.main_auth。
+# AUTH 独立进程（B1.1）：与 backend 同镜像、异 entrypoint，跑 auth.main。
 # 对外认证面经 APISIX 反代接出；集群内 8001。
 #
 # 它同时持有 biz 库与 auth 库两条连接：auth 域自足（LKM_AUTH_DB_*，users/profiles 的真身），
@@ -43,7 +43,7 @@ spec:
         - name: auth
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
-          command: ['python', '-m', 'app.main_auth']
+          command: ['python', '-m', 'auth.main']
           ports:
             - name: http
               containerPort: 8001

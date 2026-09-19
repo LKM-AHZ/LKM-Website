@@ -38,6 +38,8 @@ resources:
   - app/auth.yaml
   - app/workers.yaml
   - app/frontend.yaml
+  # bot 面板（可选组件：replicas 0 默认不部署，见清单顶部说明）
+  - app/lkmbot.yaml
   # 网关
   - gateway/apisix.yaml
 

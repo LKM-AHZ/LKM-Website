@@ -13,6 +13,7 @@
 | 后端接口和测试 | [LKM-service/README.md](./LKM-service/README.md) | 运行时 `/docs`、`/redoc` |
 | 动态前端开发 | [LKM-official-website/README.md](./LKM-official-website/README.md) | `CODING_STANDARDS.md`、`AGENTS.md` |
 | 静态官网开发 | [LKM-official-static/README.md](./LKM-official-static/README.md) | `package.json` |
+| 社区机器人（LKM Bot） | [DEPLOYMENT.md](./DEPLOYMENT.md) 的「LKM Bot」一节 | [LKM-bot/README_zh.md](./LKM-bot/README_zh.md)（上游文档） |
 | VS Code 扩展 | [LKM-on-VSCode/README.md](./LKM-on-VSCode/README.md) | 扩展 `package.json` |
 | 理解后端目标架构 | [后端规划.md](./LKM社区开发方案/后端规划.md) | [执行路线图.md](./LKM社区开发方案/执行路线图.md) |
 
@@ -31,6 +32,9 @@
 - 动态前端：`README.md` 讲架构，`GETTING_STARTED.md` 面向新人，`CODING_STANDARDS.md` 定义门禁，`AGENTS.md` 记录代码代理约束。
 - 后端：`README.md` 讲服务边界、运行、迁移与验证；接口字段以运行时 OpenAPI 为准。
 - 静态站：`README.md` 讲双语内容结构、构建和验证。
+- 社区机器人：上游 AstrBot 文档在 `LKM-bot/docs/`（平台接入、provider 配置等）；**部署**以根
+  `DEPLOYMENT.md` 为准——bot 自带的 `compose.yml`/`k8s/` 示例已删除，收编进根编排，上游文档
+  里指向它们的步骤在本仓库不再适用。
 - VS Code 扩展：`README.md` 讲安装、账号、同步行为和限制。
 
 ### 规划文档

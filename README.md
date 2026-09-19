@@ -1,6 +1,6 @@
 # LKM Website 全栈项目
 
-LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 SSR 网站、纯静态官网、FastAPI 后端和 VS Code 博客扩展组成，根目录负责统一启动、容器编排和跨项目文档。
+LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 SSR 网站、纯静态官网、FastAPI 后端、社区机器人面板和 VS Code 博客扩展组成，根目录负责统一启动、容器编排和跨项目文档。
 
 ## 项目组成
 
@@ -9,6 +9,7 @@ LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 S
 | `LKM-official-website/` | Astro 7、Vue 3、React、Tailwind CSS 4 | `4321` | 社区与动态官网，SSR 运行 |
 | `LKM-official-static/` | Astro 7、Tailwind CSS 4 | `4321`（独立启动时） | 纯静态官网构建 |
 | `LKM-service/` | FastAPI、SQLAlchemy、PostgreSQL、Pulsar | `8000` / `8001` | 业务 API、AUTH 服务及后台 worker |
+| `LKM-bot/` | Python、AstrBot fork | `6185`（仅经网关 `bot.` 子域） | 社区机器人面板，可选组件（`--profile bot`） |
 | `LKM-on-VSCode/` | TypeScript、VS Code Extension API | — | 博客仓库克隆、编辑与同步 |
 | `deploy/` | APISIX、Kustomize、可观测性配置 | `80` / `443` | Compose/Kubernetes 部署资产 |
 
@@ -84,6 +85,10 @@ cd ../LKM-service
 uv run pytest
 uv run ty check
 uv run ruff check
+
+# 社区机器人面板（可选组件，默认不随主栈起）
+cd ../LKM-bot
+python -m pytest
 
 # VS Code 扩展
 cd ../LKM-on-VSCode

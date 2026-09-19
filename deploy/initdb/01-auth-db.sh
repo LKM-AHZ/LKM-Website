@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # S5-A2 Step3：postgres 首启 initdb 时补建「独立 AUTH 库」lkm_auth。
 #
-# 背景：auth 独立进程(app.main_auth)的 DB 面须连独立的 auth 库(= S5 拆库目标)，
+# 背景：auth 独立进程(auth.main)的 DB 面须连独立的 auth 库(= S5 拆库目标)，
 # 而非单体 biz 库 lkm。标准 postgres:16-alpine 镜像只按 POSTGRES_DB 建 lkm，
 # 此脚本经 /docker-entrypoint-initdb.d 挂载，仅首次(空数据卷)初始化时执行一次
 # (被 /usr/local/bin/docker-entrypoint.sh 顺序调用,见镜像文档)；此处再叠一层

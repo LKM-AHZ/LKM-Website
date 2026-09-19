@@ -5,9 +5,12 @@
 #   __SSL_SECTION__        certbot 证书 → 内联 PEM 的 ssls 段（standalone 只收内联 PEM）
 #   __COMMUNITY_HOSTS__    社区域名 + www（各 API/认证路由的 hosts）
 #   __OFFICIAL_HOSTS__     官网域名 + www
-#   __ALL_HOSTS__          两者并集（ACME challenge / http→https 重定向）
+#   __BOT_HOSTS__          bot 面板域名（**不含 www**：bot 面板没有 www 变体）
+#   __ALL_HOSTS__          三者并集（ACME challenge / http→https 重定向）
 #   __COMMUNITY_ORIGINS__  CORS allow_origins（https:// + www）
 #   __MAX_BODY_SIZE__      请求体上限（与后端 max_upload_bytes 同源，见 README/路线图）
+#   __BOT_MAX_BODY_SIZE__  bot 面板请求体上限（**独立来源** LKM_BOT_MAX_UPLOAD_BYTES：
+#                          bot 允许单文件 512MB，远大于社群站的 100MB，不可复用上面那个）
 #   __UPSTREAM_SUFFIX__    upstream 服务名后缀（compose 空 / k8s `.lkm.svc.cluster.local`）
 #   __DNS_RESOLVER__       上游 DNS（compose 127.0.0.11 / k8s CoreDNS ClusterIP）
 #
@@ -25,6 +28,9 @@ set -e
 # 社区域名（承载 /api、/graphql、前台与后台认证面）与官网域名（静态站）
 COMMUNITY="${APISIX_COMMUNITY_DOMAINS:-lkm-ahz.ltd}"
 OFFICIAL="${APISIX_OFFICIAL_DOMAINS:-lkm-ahz.icu}"
+# LKM Bot 面板域名（独立子域，见路线图 §8 登记）。与两个主域名并列 DOMAINS：
+# 证书/SNI/ACME 一并对齐——换域名只改这一个变量。
+BOT="${APISIX_BOT_DOMAINS:-bot.lkm-ahz.ltd}"
 SRC="${APISIX_SRC:-/src/apisix.yaml}"
 OUT="${APISIX_OUT:-/out/apisix.yaml}"
 SRC_CONFIG="${APISIX_SRC_CONFIG:-/src/config.yaml}"
@@ -38,6 +44,11 @@ DNS_RESOLVER="${APISIX_DNS_RESOLVER:-127.0.0.11}"
 # 请求体上限：与后端 LKM_MAX_UPLOAD_BYTES 取同一来源（compose 下发同一个 env），
 # 使「网关拒收」与「应用校验」用同一个数，不再两处手改。
 MAX_BODY_SIZE="${APISIX_MAX_BODY_SIZE:-104857600}"
+# bot 面板请求体上限：与 bot 路由**独立**（compose 由 .env 的 LKM_BOT_MAX_UPLOAD_BYTES 下发，
+# k8s 直接放 lkm-gateway-config——它只有网关消费，无应用侧同源对象），
+# 默认 550000000 ≈ 550MB（bot 应用侧单文件上限 512MB + multipart 开销）。刻意不复用
+# MAX_BODY_SIZE：那个数被社群站后端与网关共用，改它会把社群站的上限一起抬高。
+BOT_MAX_BODY_SIZE="${APISIX_BOT_MAX_BODY_SIZE:-550000000}"
 # RS256 网关验签（批 5）：公钥 PEM 文件路径（未配置/文件不存在 → 网关不做 JWT 校验）。
 # 公钥非机密，但由部署期生成，故以文件挂载而非写进模板；consumer/claim/cookie 三项
 # 必须与 LKM-service 侧 jwt_keys.GATEWAY_KEY 及 admin 会话 cookie 名一致（有静态测试锁）。
@@ -50,7 +61,7 @@ RENDER_ONCE="${APISIX_RENDER_ONCE:-0}"
 
 # 证书按域名逐个签发目录，故 DOMAINS 为并集；hosts/origins 则分域展开
 # （不带引号：后续用于 for 循环词分割）
-DOMAINS="$COMMUNITY $OFFICIAL"
+DOMAINS="$COMMUNITY $OFFICIAL $BOT"
 
 # 下列变量注入 YAML 数组/标量，只用逗号+空格分隔，不含 sed 分隔符 `|` 与换行
 hosts_of() {  # hosts_of "<空格分隔域名>" → "d1, www.d1, d2, www.d2"
@@ -62,7 +73,10 @@ hosts_of() {  # hosts_of "<空格分隔域名>" → "d1, www.d1, d2, www.d2"
 }
 COMMUNITY_HOSTS="$(hosts_of "$COMMUNITY")"
 OFFICIAL_HOSTS="$(hosts_of "$OFFICIAL")"
-ALL_HOSTS="$COMMUNITY_HOSTS, $OFFICIAL_HOSTS"
+# bot 面板**不用 hosts_of**：它会补 www.，而 bot 子域没有 www 变体（补出来只会多一个
+# 永远不解析、也不该进证书 SNI 的 www.bot.*）。多域名用逗号展开，写法与 hosts_of 一致。
+BOT_HOSTS="$(printf '%s' "$BOT" | sed 's/ /, /g')"
+ALL_HOSTS="$COMMUNITY_HOSTS, $OFFICIAL_HOSTS, $BOT_HOSTS"
 # MinIO 路由的 Host 改写目标：取社群主域名（裸域，不带 www）——须与后端
 # LKM_S3_PUBLIC_ENDPOINT_URL 的 host 一致，否则 S3 预签名校验失败
 COMMUNITY_DOMAIN="${COMMUNITY%% *}"
@@ -103,8 +117,17 @@ ssl_block() {
             fi
             count=$((count + 1))
             echo "  - snis:"
-            echo "    - $d"
-            echo "    - www.$d"
+            # SNI 列表必须与路由 hosts 一致：主域名带 www，bot 子域不带（无 www 变体，
+            # 由 __BOT_HOSTS__ 的展开规则决定）
+            case " $BOT " in
+                *" $d "*)
+                    echo "    - $d"
+                    ;;
+                *)
+                    echo "    - $d"
+                    echo "    - www.$d"
+                    ;;
+            esac
             echo "    cert: |"
             sed 's/^/      /' "$cert"
             echo "    key: |"
@@ -165,9 +188,11 @@ render_once() {
         -e "s|__COMMUNITY_HOSTS__|$COMMUNITY_HOSTS|g" \
         -e "s|__COMMUNITY_DOMAIN__|$COMMUNITY_DOMAIN|g" \
         -e "s|__OFFICIAL_HOSTS__|$OFFICIAL_HOSTS|g" \
+        -e "s|__BOT_HOSTS__|$BOT_HOSTS|g" \
         -e "s|__ALL_HOSTS__|$ALL_HOSTS|g" \
         -e "s|__COMMUNITY_ORIGINS__|$COMMUNITY_ORIGINS|g" \
         -e "s|__MAX_BODY_SIZE__|$MAX_BODY_SIZE|g" \
+        -e "s|__BOT_MAX_BODY_SIZE__|$BOT_MAX_BODY_SIZE|g" \
         -e "s|__UPSTREAM_SUFFIX__|$UPSTREAM_SUFFIX|g" \
         "$SRC" | awk -v ssl="$ssl_tmp" -v jwtc="$jwt_c_tmp" -v jwtr="$jwt_r_tmp" '
         /^# __SSL_SECTION__$/ {

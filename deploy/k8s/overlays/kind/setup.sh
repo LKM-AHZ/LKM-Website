@@ -17,8 +17,10 @@ KUBECTL="${KUBECTL:-kubectl}"
 KIND="${KIND:-kind}"
 LOADRESTRICTOR="--load-restrictor LoadRestrictionsNone"
 
-# 三个本地构建的镜像（不存在任何 registry，必须注入）
-LOCAL_IMAGES="lkm-service:latest lkm-official-website:latest lkm-official-static:latest"
+# 四个本地构建的镜像（不存在任何 registry，必须注入）。
+# lkm-bot 属可选组件（base 里 replicas: 0）：镜像不存在时脚本只提示「由节点自行拉取」，
+# 主栈验收不受影响；要验收 bot 先 `docker compose --profile bot build lkmbot`。
+LOCAL_IMAGES="lkm-service:latest lkm-official-website:latest lkm-official-static:latest lkm-bot:latest"
 # 中间件镜像：宿主机 docker 已有 compose 拉过的那份，注入即免出网
 # 主库用 TimescaleDB 版（hypertable）；prefect 自带的 prefect-postgres 仍是 postgres:16-alpine，
 # 故两者都要注入。

@@ -1,0 +1,113 @@
+# LKM Bot 社区机器人面板（AstrBot fork）：**可选组件**。
+# compose 侧由 `profiles: ['bot']` 隔离，k8s 无 profile 机制 → 用 `replicas: 0` 表达
+# 「默认不部署」（与 prefect/prometheus/grafana 同款手法）。启用：
+#   kubectl -n lkm scale deploy/lkmbot --replicas=1
+#
+# 与 compose 的差异及原因：
+#  1) data 由宿主机 bind 改 **PVC**：bot 的 data（sqlite、plugins、config）是有状态的单写者，
+#     PVC 是集群里表达持久化的唯一形态。配 `strategy: Recreate`——Recreate 而非 RollingUpdate，
+#     因为 RWO 卷不能被两个 Pod 同时挂载（滚动更新会卡在新 Pod 起不来），且 SQLite 双写会损坏。
+#  2) **不交付 shipyard 沙箱清单**：Bay 经 Docker Engine API 在宿主 spawn 兄弟容器并 bind
+#     宿主机路径，而 k8s 节点多为 containerd（无 docker.sock），spawn 出的容器也不受 k8s
+#     调度与网络命名空间管理。需要沙箱时指向**集群外**的 Bay，见 README「已知限制」。
+#  3) 探针用 **tcpSocket**：bot 没有公开的健康端点，`/api/v1/*` 又绕过面板鉴权中间件
+#     （探活语义不真），故「端口在听」才是这个面板的正确就绪语义（同 acme-webroot 的教训）。
+apiVersion: v1
+kind: Service
+metadata:
+  name: lkmbot
+  labels: &labels
+    app.kubernetes.io/name: lkmbot
+    app.kubernetes.io/component: app
+    app.kubernetes.io/part-of: lkm
+spec:
+  selector:
+    app.kubernetes.io/name: lkmbot
+  ports:
+    - name: http
+      port: 6185
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lkmbot
+  labels:
+    app.kubernetes.io/name: lkmbot
+    app.kubernetes.io/component: app
+    app.kubernetes.io/part-of: lkm
+spec:
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lkmbot
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lkmbot
+        app.kubernetes.io/component: app
+        app.kubernetes.io/part-of: lkm
+    spec:
+      containers:
+        - name: lkmbot
+          image: lkm-bot:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 6185
+          env:
+            - name: TZ
+              value: Asia/Shanghai
+            # 显式固定 data 路径（默认取 cwd，入口一改就漂移）
+            - name: ASTRBOT_ROOT
+              value: /LKMBot
+            # 必须 0.0.0.0：绑回环会让面板的「默认密码免校验」判定成立，且网关打 Pod IP 连不上
+            - name: DASHBOARD_HOST
+              value: 0.0.0.0
+            - name: DASHBOARD_PORT
+              value: "6185"
+            # 面板初始密码：**只取这一个键**（不 envFrom 整张 lkm-secrets——那会把 JWT/DB/
+            # 对象存储密钥一并灌进 bot 进程，见 app-config.yaml 的「谁真的用」原则）。
+            # optional=true：未在 .env 配该项时 Secret 里没有这个键，Pod 仍应正常起
+            # （面板自生成随机密码并打到日志）。
+            - name: ASTRBOT_DASHBOARD_INITIAL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: lkm-secrets
+                  key: LKM_BOT_DASHBOARD_PASSWORD
+                  optional: true
+          volumeMounts:
+            - name: data
+              mountPath: /LKMBot/data
+          startupProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 15
+          livenessProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 150m, memory: 384Mi }
+            limits: { memory: 1Gi }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: lkmbot-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lkmbot-data
+  labels:
+    app.kubernetes.io/part-of: lkm
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      # sqlite + 插件 + 会话数据；5Gi 给足余量（上传件走网关但不落这里，落 data/temp）
+      storage: 5Gi

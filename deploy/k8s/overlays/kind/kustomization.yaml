@@ -22,7 +22,7 @@ patches:
   - path: patch-apisix-nodeport.yaml
   - path: site-identity.yaml
 
-# 三个本地构建的镜像不进任何 registry，由 kind load docker-image 直接塞进节点。
+# 四个本地构建的镜像不进任何 registry，由 kind load docker-image 直接塞进节点。
 # imagePullPolicy 在 base 里已是 IfNotPresent，故节点优先用本地镜像、不去远端拉。
 images:
   - name: lkm-service
@@ -30,4 +30,8 @@ images:
   - name: lkm-official-website
     newTag: latest
   - name: lkm-official-static
+    newTag: latest
+  # bot 面板（可选组件，base 里 replicas: 0）：要启用得先
+  # `docker compose --profile bot build lkmbot` 再注入节点，见 setup.sh
+  - name: lkm-bot
     newTag: latest

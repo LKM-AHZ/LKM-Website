@@ -43,14 +43,16 @@ cat <<EOF
   私钥（仅 auth 侧挂载，勿下发）：$PRIV
   公钥（backend/网关挂载）：      $PUB
 
-启用方式（compose）：
-  1) compose 已挂载 ./deploy/jwt/keys:/etc/lkm/jwt:ro，并给 auth 下发
-     LKM_JWT_PRIVATE_KEY_FILE=/etc/lkm/jwt/jwt-private.pem
-     LKM_JWT_PUBLIC_KEY_FILE=/etc/lkm/jwt/jwt-public.pem
-     backend 只下发 LKM_JWT_PUBLIC_KEY_FILE（无需私钥）。
-  2) 重启容器：docker compose up -d --no-deps auth backend
-     以及网关（apisix-render 会把公钥渲染进消费者）：
-     docker compose up -d --no-deps apisix-render apisix
+启用方式（compose）——**两步缺一不可**：
+  1) 在根 .env 里显式指定**容器内路径**（compose 只挂载 ./deploy/jwt/keys 目录，
+     env 变量默认取空 → 不设则 RS256 不启用、静默回落 HS256）：
+       LKM_JWT_PRIVATE_KEY_FILE=/etc/lkm/jwt/jwt-private.pem
+       LKM_JWT_PUBLIC_KEY_FILE=/etc/lkm/jwt/jwt-public.pem
+     auth 用私钥签发；backend 与网关只用公钥验签（挂载的是整个目录，私钥文件对
+     backend 可见但无任何变量引用它）。
+  2) 重建容器（env 变了，restart 不够）：
+       docker compose up -d --force-recreate auth backend apisix-render apisix
+     网关侧由 apisix-render 把公钥渲染进消费者。
   3) 存量 token 已在批 1 重建库时全部失效，可直接设 LKM_JWT_HS_FALLBACK=false 关掉 HS。
 
 k8s：

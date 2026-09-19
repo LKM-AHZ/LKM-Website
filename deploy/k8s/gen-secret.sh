@@ -95,6 +95,9 @@ stringData:
   INFISICAL_DB_PASSWORD: "$(get INFISICAL_DB_PASSWORD change-me-infisical-db)"
   INFISICAL_ENCRYPTION_KEY: "$(get INFISICAL_ENCRYPTION_KEY change-me)"
   INFISICAL_AUTH_SECRET: "$(get INFISICAL_AUTH_SECRET change-me)"
+  # bot 面板初始密码（可选组件）。**不 require**：未配就不出这个键，bot 的
+  # secretKeyRef 是 optional=true → Pod 照常起，面板自生成随机密码打到日志。
+  LKM_BOT_DASHBOARD_PASSWORD: "$(get LKM_BOT_DASHBOARD_PASSWORD)"
 $(jwt_public_block)
 YAML
 

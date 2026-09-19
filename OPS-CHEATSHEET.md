@@ -14,7 +14,7 @@
 | 事项 | 命令 |
 |---|---|
 | SSH 登录 | `ssh ubuntu@<公网IP>`(密码见部署信息) |
-| 项目根目录 | `~/LKM-Website`(含 `docker-compose.yml` 与三个子仓库) |
+| 项目根目录 | `~/LKM-Website`(含 `docker-compose.yml` 与四个子仓库,其中 bot 仅 `--profile bot` 用到) |
 | 容器日志 | 见下方「日志」小节 |
 
 > 提示:服务器对密码 SSH 有 fail2ban 限速,短时间多次失败会封禁来源 IP 一段时间;
@@ -40,6 +40,11 @@ docker compose up -d --force-recreate worker worker-send   # 让 worker 吃到�
 docker compose restart backend
 docker compose stop certbot        # 无域名时 certbot 空跑,可停掉减日志噪音
 
+# 机器人面板(可选组件,主栈 up 不会起它)
+docker compose --profile bot up -d --build    # 起面板(含 shipyard 沙箱)
+docker compose --profile bot down             # 收掉;bot 数据在宿主机目录,不受 -v 影响
+docker compose --profile bot logs -f lkmbot
+
 # 健康检查(后端依赖 DB+Redis;astro 依赖后端就绪后才由 APISIX 拉起)
 curl http://127.0.0.1/api/v1/health
 # 期望 {"code":0,"msg":"OK","data":{"status":"ok","db":{"status":"up"},"redis":{"status":"up"}}}
@@ -58,6 +63,7 @@ docker compose logs -f apisix       # 网关(唯一对外入口,访问日志在�
 docker compose logs -f worker       # 任务队列消费
 docker compose logs -f worker-send  # 发送队列
 docker compose logs -f minio        # MinIO
+docker compose --profile bot logs -f lkmbot   # 机器人面板(可选组件)
 
 # 只看最近 N 行 / 过滤
 docker logs --tail 60 <容器名>
@@ -123,6 +129,9 @@ docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
 ## 六、证书 / HTTPS
 
 - **有域名**:`docker compose run --rm --entrypoint certbot certbot certonly --webroot -w /var/www/certbot -d <域名>`;续期由 certbot 每 12h 自动 + `apisix-render` 每 6h 重渲染触发 APISIX reload。
+- **bot 子域**:面板域名(`LKM_BOT_DOMAINS`,默认 `bot.lkm-ahz.ltd`)需**单独首签**并先加 DNS:
+  `docker compose run --rm --entrypoint certbot certbot certonly --webroot -w /var/www/certbot -d bot.lkm-ahz.ltd`;
+  render 按 `<证书目录>/bot.lkm-ahz.ltd/` 取证书,缺证书时退回自签占位(面板仍可访问,浏览器告警)。
 - **无域名(自签)**:`apisix-render` 缺证书时自动生成自签占位(CN=域名),443 可用但浏览器告警;http 由 APISIX 301 到 https。
 
 ## 七、常见故障速查(本次实战踩坑)
@@ -138,6 +147,12 @@ docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
 | worker `cron ValueError` | arq `weekday` 简写错 | `'thu'`→`'thurs'`(arq 的 WEEKDAYS 是三/四字母) |
 | 首页 502 SSR 崩,`Cannot find package 'tailwind-merge'` | `tailwind-merge` 在 devDeps 但被 SSR 运行时 import;runner 用 `--prod` | 挪到 dependencies 并更新 pnpm-lock.yaml 后重建 |
 | admin 登录后文件上传/危险操作被拒 | 见「管理员」节(需 2FA / 走 https) | 后台走 `https://<IP>`;危险操作需先验 2FA |
+| `https://bot.<域名>` 502/503 | lkmbot 未起(可选组件,主栈 up 不含它) | `docker compose --profile bot up -d lkmbot` |
+| bot 面板上传大文件被 413 | 网关 `LKM_BOT_MAX_UPLOAD_BYTES` 被改小(独立于社群站的 100MB) | 恢复默认 `550000000` 并 `docker compose up -d apisix-render apisix` |
+| shipyard 起不来沙箱,日志找不到 bind 源 | `LKM_BOT_SHIP_DATA_DIR` 不是宿主机**绝对**路径(或 compose 不在仓库根执行) | 在 `.env` 写绝对路径后 `docker compose --profile bot up -d shipyard` |
+| bot 沙箱功能不生效(无报错) | 默认 `booter=shipyard_neo` 与旧 Bay 不匹配,且 `computer_use_runtime=none` | 面板「配置 → 沙箱」把 booter 改 `shipyard`、endpoint 填 `http://shipyard:8156` |
+| bot 数据目录删不掉/权限拒绝 | `./LKM-bot/data` 由容器以 root 写入(bind 而非命名卷,沙箱需宿主路径) | 用 `sudo rm -rf` 或 `docker compose --profile bot down` 后清理 |
+| `apisix-render` 反复退出,日志停在证书生成 | 新并入的 bot 域需 `apk add openssl` 而容器出不了网(与「删卷后需预置自签证书」同坑) | 宿主 `openssl` 预生成 `bot.<域名>/{fullchain,privkey}.pem` 写入 `certbot_conf` 卷;或先放行该容器出网 |
 
 ## 八、备份(数据持久化)
 
@@ -151,6 +166,9 @@ docker compose exec minio sh -c 'mc alias set m http://localhost:9000 "$MINIO_RO
 # 后端卷(博客 git 仓库 blog_repos 等)
 docker run --rm -v lkm_backend_data:/data -v "$PWD":/backup alpine \
   tar czf /backup/backend_files_$(date +%F).tar.gz -C /data .
+
+# 机器人数据(面板 sqlite/插件/配置,宿主机 bind 目录;shipyard 卷另算)
+tar czf bot_data_$(date +%F).tar.gz -C LKM-bot/data . 2>/dev/null || true
 
 ## 九、运维工具箱(tools/ 与 scripts/)
 

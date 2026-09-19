@@ -1,3 +1,12 @@
+# OTel 采集变量（worker / scheduler / outbox / dlq 等非 ASGI 进程共用）。
+# 这些进程没有 FastAPI app，但同样需要 provider 才能导出消费/调度/发布 span 与
+# inject 进消息的 trace 上下文。默认关；配合 `--profile otel --profile signoz` 与
+# LKM_OTEL_ENABLED=true 生效。backend/auth 各自显式声明（服务名后缀不同）。
+x-otel-env: &otel-env
+  LKM_OTEL_ENABLED: ${LKM_OTEL_ENABLED:-false}
+  LKM_OTEL_EXPORTER_OTLP_ENDPOINT: ${LKM_OTEL_EXPORTER_OTLP_ENDPOINT:-}
+  LKM_OTEL_SAMPLE_RATIO: ${LKM_OTEL_SAMPLE_RATIO:-0.1}
+
 services:
   # ── APISIX 网关 ──
   # standalone 模式（yaml config_provider，无 etcd）：路由模板 deploy/apisix/apisix.yaml 中的
@@ -12,7 +21,12 @@ services:
       # 网关配置的**单一来源**：路由 hosts 与 CORS 来源由域名变量展开，请求体上限与后端LKM_MAX_UPLOAD_BYTES 取同一个 env。
       APISIX_COMMUNITY_DOMAINS: ${LKM_COMMUNITY_DOMAINS:-lkm-ahz.ltd}
       APISIX_OFFICIAL_DOMAINS: ${LKM_OFFICIAL_DOMAINS:-lkm-ahz.icu}
+      # bot 面板子域名（profile=bot 才用得上，但占位展开与证书 SNI 与是否起 bot 无关，
+      # 故无条件下发，保持「域名单一来源」不被 profile 切碎）
+      APISIX_BOT_DOMAINS: ${LKM_BOT_DOMAINS:-bot.lkm-ahz.ltd}
       APISIX_MAX_BODY_SIZE: ${LKM_MAX_UPLOAD_BYTES:-104857600}
+      # bot 面板请求体上限：与上面那个**独立**（bot 单文件 512MB > 社群站 100MB）
+      APISIX_BOT_MAX_BODY_SIZE: ${LKM_BOT_MAX_UPLOAD_BYTES:-550000000}
       # RS256 网关验签（批 5）：RSA 公钥 PEM 文件（容器内路径）。留空 → 网关不做 JWT
       # 校验（应用层照常验签），保持既有部署零改动可升级。生成：sh deploy/jwt/gen-keys.sh
       APISIX_JWT_PUBLIC_KEY_FILE: ${LKM_JWT_PUBLIC_KEY_FILE:-}
@@ -136,6 +150,81 @@ services:
     restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
+
+  # ── LKM Bot 社区机器人面板（AstrBot fork，profile=bot 可选组件）──
+  # 启用：docker compose --profile bot up -d --build
+  # 对外只经网关 bot.lkm-ahz.ltd（`deploy/apisix/apisix.yaml` 的 bot-* 路由），
+  # **刻意不发布 6185**：面板是管理员面，多一个宿主端口就多一个绕过网关限流的入口。
+  # 6199（OneBot v11 / NapCat WebSocket）同样不发布，接法见 DEPLOYMENT.md「LKM Bot」一节。
+  lkmbot:
+    profiles: ['bot']
+    build:
+      context: ./LKM-bot
+      dockerfile: Dockerfile
+    image: lkm-bot:latest
+    environment:
+      TZ: Asia/Shanghai
+      # 显式固定 data 路径（默认取 cwd，入口一改就漂移）
+      ASTRBOT_ROOT: /LKMBot
+      # 必须 0.0.0.0：绑回环会让面板的「默认密码免校验」判定成立（见 auth_service.py），
+      # 且网关打容器 IP 会连不上
+      DASHBOARD_HOST: 0.0.0.0
+      DASHBOARD_PORT: '6185'
+      # 首启面板初始密码；留空则面板自生成随机密码并打到日志
+      ASTRBOT_DASHBOARD_INITIAL_PASSWORD: ${LKM_BOT_DASHBOARD_PASSWORD:-}
+    # 上游 compose 原有的加固项（根 compose 其余服务都没有，属有益偏离，已登记）
+    security_opt:
+      - no-new-privileges:true
+    # 用宿主机 bind 而非命名卷：shipyard 要把宿主机路径 bind 进它 spawn 的沙箱容器
+    # （命名卷没有可用的宿主路径）
+    volumes:
+      - ./LKM-bot/data:/LKMBot/data
+    healthcheck:
+      # bot 没有公开的健康端点，/api/v1/* 又绕过面板鉴权中间件（探活语义不真），故用
+      # 「端口在听」——与 acme-webroot 的就绪语义同理
+      test:
+        ['CMD-SHELL', 'python -c "import socket; socket.create_connection((\"127.0.0.1\", 6185), 3)"']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: ${LKM_RESTART_POLICY:-no}
+    networks:
+      - lkm
+
+  # ── bot 代码沙箱（上游旧版 Shipyard Bay，profile=bot 可选）──
+  # ⚠️ 安全面：挂 docker.sock ≈ 把宿主机 root 交给容器；仅 profile=bot 启用，用完 down。
+  # ⚠️ 与 bot 默认 booter 不匹配：bot 默认 sandbox.booter=shipyard_neo，而本服务是**旧 Bay**。
+  #    要生效需在面板「配置 → 沙箱」把 booter 改成 shipyard 并填 endpoint http://shipyard:8156
+  #    + 这里的 ACCESS_TOKEN（见 DEPLOYMENT.md）。
+  # ⚠️ SHIP_DATA_DIR 是**宿主机绝对路径**（bay 原样交给 Docker API 做 bind），默认取自
+  #    ${PWD}，故必须从仓库根执行 compose；换目录执行会指向错误位置。
+  shipyard:
+    profiles: ['bot']
+    image: soulter/shipyard-bay:latest
+    environment:
+      PORT: '8156'
+      DATABASE_URL: sqlite+aiosqlite:///./data/bay.db
+      ACCESS_TOKEN: ${LKM_BOT_SHIP_ACCESS_TOKEN:-change-me-shipyard}
+      MAX_SHIP_NUM: ${LKM_BOT_SHIP_MAX_NUM:-10}
+      BEHAVIOR_AFTER_MAX_SHIP: reject
+      DOCKER_IMAGE: soulter/shipyard-ship:latest
+      # 沙箱容器落在**独立网络**（不是 lkm）：否则被 spawn 的容器能直连
+      # postgres/redis/minio，是一条真实越权路径。名字须与下面 networks.bot_sandbox.name 一致。
+      DOCKER_NETWORK: lkm-bot-sandbox
+      SHIP_DATA_DIR: ${LKM_BOT_SHIP_DATA_DIR:-${PWD}/LKM-bot/data/shipyard/ship_mnt_data}
+      DEFAULT_SHIP_CPUS: ${LKM_BOT_SHIP_CPUS:-1.0}
+      DEFAULT_SHIP_MEMORY: ${LKM_BOT_SHIP_MEMORY:-512m}
+    volumes:
+      - lkmbot_shipyard_data:/app/data
+      # 与 bot 共享 temp：面板落盘的上传件要能被沙箱读到
+      - ./LKM-bot/data/temp:/LKMBot/data/temp
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: ${LKM_RESTART_POLICY:-no}
+    # 两个网络都要：在 lkm 上 bot 面板才连得到它，在 bot_sandbox 上它才管得到沙箱容器
+    networks:
+      - lkm
+      - bot_sandbox
 
   # OpenTelemetry Collector（M5 7.2.2，profile=otel）：默认不启，不影响主栈。
   # 启用：LKM_OTEL_ENABLED=true 且 LKM_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318/v1/traces
@@ -487,12 +576,12 @@ services:
       - lkm
 
   # AUTH 独立进程：与单体的 backend 同镜像(同代码库/同配置源)、异 command。
-  # 跑只读/认证面 `app.main_auth:app`，自持 DB+Redis 依赖与专属 /liveness|/readiness 健康缝。
+  # 跑只读/认证面 `auth.main:app`，自持 DB+Redis 依赖与专属 /liveness|/readiness 健康缝。
   # 纯增量、不改单体拓扑：仅内网暴露(无主机端口映射，B1.2 才由 APISIX 反代接出)。
   # healthcheck 打本进程自己的 /liveness：进程能应答即心跳 OK；依赖就绪由 below depends_on 判定。
   auth:
     image: lkm-service:latest
-    command: ['python', '-m', 'app.main_auth']
+    command: ['python', '-m', 'auth.main']
     depends_on:
       postgres:
         condition: service_healthy
@@ -573,6 +662,7 @@ services:
       pulsar:
         condition: service_healthy
     environment:
+      <<: *otel-env
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
@@ -599,6 +689,7 @@ services:
       pulsar:
         condition: service_healthy
     environment:
+      <<: *otel-env
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
@@ -651,6 +742,7 @@ services:
       pulsar:
         condition: service_healthy
     environment:
+      <<: *otel-env
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
@@ -680,6 +772,7 @@ services:
       pulsar:
         condition: service_healthy
     environment:
+      <<: *otel-env
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
@@ -709,6 +802,7 @@ services:
       pulsar:
         condition: service_healthy
     environment:
+      <<: *otel-env
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
@@ -738,6 +832,7 @@ services:
       pulsar:
         condition: service_healthy
     environment:
+      <<: *otel-env
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
@@ -768,6 +863,7 @@ services:
       auth:
         condition: service_healthy
     environment:
+      <<: *otel-env
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
@@ -792,6 +888,7 @@ services:
       pulsar:
         condition: service_healthy
     environment:
+      <<: *otel-env
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
@@ -810,6 +907,7 @@ services:
       pulsar:
         condition: service_healthy
     environment:
+      <<: *otel-env
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
@@ -837,6 +935,7 @@ services:
       pulsar:
         condition: service_healthy
     environment:
+      <<: *otel-env
       LKM_ENV: production
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
@@ -1180,9 +1279,18 @@ volumes:
   signoz_clickhouse_scripts:
   signoz_sqlite:
   signoz_zookeeper:
+  # bot 沙箱 Bay 自身的数据（bay.db / ship 元数据）；沙箱内文件走宿主机 bind（SHIP_DATA_DIR）
+  lkmbot_shipyard_data:
 
 networks:
   lkm:
+    driver: bridge
+  # bot 代码沙箱专用网络（profile=bot）。显式 name：shipyard 的 DOCKER_NETWORK 环境变量按
+  # **字面网络名**让 Docker API 把沙箱容器接进来，compose 默认的 `<项目>_<键>` 前缀名对不上。
+  # 独立于 lkm 是本网络存在的唯一理由：沙箱里跑的是模型生成的代码，不能让它够到
+  # postgres/redis/minio。
+  bot_sandbox:
+    name: lkm-bot-sandbox
     driver: bridge
   # SigNoz 专用内网：其 otel-collector-config.yaml 里写死 `tcp://clickhouse:9000`，
   # 而本仓日志分析库的服务名也叫 `clickhouse`——用独立网络彻底隔离，避免同名歧义。

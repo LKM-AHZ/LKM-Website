@@ -364,5 +364,49 @@ routes:
       service_name: "static__UPSTREAM_SUFFIX__:80"
       pass_host: pass
 
+  # ── LKM Bot 面板（bot 子域名）──
+  # 独立 host 而非路径前缀：面板自带 API 与社群站同为绝对路径 /api/v1/*，同 host 下路径
+  # 前缀方案会与 backend 路由正面冲突（详见路线图 §8 登记）。
+  # 登录写面限流「网关那一半」，分工同社群站 auth-login：这里按 remote_addr 粗粒度削峰
+  # （policy=local 各实例独立计数，把洪水挡在应用前）；面板另有应用内令牌桶
+  # （astrbot/dashboard/server.py）。不挂 cors：同源面板用不到，且 cors 插件在
+  # allow_credential=true 下禁 `*`，多挂一处就多一处「整条路由校验失败不加载」的面。
+  - id: bot-auth-login
+    uri: /api/v1/auth/login*
+    hosts: [__BOT_HOSTS__]
+    priority: 150
+    plugins:
+      limit-count:
+        count: 60
+        time_window: 60
+        key: remote_addr
+        policy: local
+        rejected_code: 429
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "lkmbot__UPSTREAM_SUFFIX__:6185"
+      pass_host: pass
+
+  # 面板其余流量（含面板 WebSocket）→ lkmbot:6185。
+  # 必须 enable_websocket：面板实时通道（/api/v1/live-chat/ws、/unified-chat/ws、
+  # /api/v1/chat/ws）都落在本 catchall，不开 upgrade 会被 APISIX 剥掉 Upgrade/Connection 头。
+  # body 上限刻意用 **独立** 的 __BOT_MAX_BODY_SIZE__（compose 来源 .env 的
+  # LKM_BOT_MAX_UPLOAD_BYTES，k8s 来源 lkm-gateway-config）：bot 允许单文件 512MB，远大于
+  # 社群站的 100MB，复用 __MAX_BODY_SIZE__ 会把 bot 上传打死。
+  - id: bot-dashboard
+    uri: /*
+    hosts: [__BOT_HOSTS__]
+    priority: 10
+    enable_websocket: true
+    plugins:
+      client-control:
+        max_body_size: __BOT_MAX_BODY_SIZE__
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "lkmbot__UPSTREAM_SUFFIX__:6185"
+      pass_host: pass
+
 # __SSL_SECTION__
 #END
