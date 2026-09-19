@@ -51,6 +51,9 @@ spec:
             - configMapRef: { name: lkm-config }
             - configMapRef: { name: lkm-config-authdb }
             - secretRef: { name: lkm-secrets }
+            # RS256/JWKS（批 5）：私钥只下发到签发方 auth。optional=true —— 未生成
+            # 密钥时该 Secret 不存在，Pod 仍应正常起（沿用 HS256），不能硬依赖。
+            - secretRef: { name: lkm-jwt-signing, optional: true }
           # 与 backend 同款 exec 探针（原因见 backend.yaml 顶部注释：httpGet 的 Host 是 Pod IP，
           # 会被 TrustedHost 判 400）
           livenessProbe:

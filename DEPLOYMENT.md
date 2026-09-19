@@ -2,13 +2,9 @@
 
 本文档说明如何把 LKM 网站(前端 Astro + 后端 FastAPI)通过 APISIX 统一入口部署到生产主机。
 
-> **当前实际部署为「测试 IP 直连」模式**:无正式域名,对外走测试 IP `124.220.55.235`(HTTP 为主 +
-> 自签证书兜底)。下文把「正式域名 + Let's Encrypt」作为可选路径,与「三·五 无域名/公网 IP 直连」
-> 一节并列;当前线上的镜像与配置已按测试 IP 部署。
-
 ## 架构概览
 
-单机 docker-compose 编排,APISIX 为唯一对外入口(**全栈唯一网关**;nginx 已移除):
+单机 docker-compose 编排（支持k8s）,APISIX 为唯一对外入口(nginx 已移除):
 
 | 服务 | 镜像 | 端口(对外) | 职责 |
 |---|---|---|---|
@@ -40,7 +36,7 @@
 > points 拆三个订阅(reward/stats/tasks)消费同一 `biz/points.apply` topic 实现扇出与故障隔离;
 > `worker-notification`(M6.8)以第四个订阅消费同一 topic 生成站内信,同样独立记账、互不阻塞。
 
-> **Pulsar 无状态化(2026-09-17)**:`pulsar` 由 `deploy/pulsar/entrypoint.sh` 包装启动——
+> **Pulsar 无状态化**:`pulsar` 由 `deploy/pulsar/entrypoint.sh` 包装启动——
 > 每次启动**先清空数据目录**,broker 就绪后**幂等重建** `lkm` 租户与 `biz/auth/system` namespace;
 > healthcheck 语义为「broker 就绪**且** namespace 已建」,故依赖它的 12 个应用服务按
 > `service_healthy` 等它就绪即可(原一次性 `pulsar-init` 服务已随之删除:它只在首次 `up` 时跑,
@@ -61,18 +57,20 @@
               └─ 其余         ──> astro:4321     (SSR)
 ```
 
-后端 REST 前缀为 `/api/v1`,GraphQL 为 `/graphql`。APISIX 用 Docker 内嵌 DNS(`dns_resolver: ['127.0.0.11']` + `discovery_type: dns`)在运行时动态解析 `backend`/`astro`,不依赖启动期 DNS。
+后端 REST 前缀为 `/api/vN`,GraphQL 为 `/graphql`。APISIX 用 Docker 内嵌 DNS(`dns_resolver: ['127.0.0.11']` + `discovery_type: dns`)在运行时动态解析 `backend`/`astro`,不依赖启动期 DNS。
 
-> `static` 服务(**纯静态官网**)不挂在 APISIX 的主域名路由下,由独立容器输出并映射到主机 `${LKM_STATIC_PORT:-8082}` 端口,可直接从 `http://<主机IP>:8082` 访问(经 APISIX 的 `.icu` 域名路由亦可)。
+> `static` 服务(**纯静态官网**)不挂在 APISIX 的主域名路由下,由独立容器输出并映射到主机 `${LKM_STATIC_PORT:-8082}` 端口,可直接从 `http://<主机IP>:8082` 访问(经 APISIX 的域名路由亦可)。
 
 ## 前置条件
 
 - 一台有公网 IP 的 Linux 主机,防火墙/安全组放行 `80` 与 `443` 端口。
   > MinIO 不开放独立公网端口:对象存储经 APISIX `/lkm/` 路径转发到 `minio:9000`(仅内网),
   > 浏览器访问经 APISIX 统一入口即可,无需在安全组另开 9000。
-- **域名可选**:有域名走 `lkm.s12mc.xyz` + Let's Encrypt 正式证书;**无域名可用公网 IP 直连**——
+- **域名可选**:有域名走 `lkm.s12mc.xyz`（或其他以解析域名） + Let's Encrypt 正式证书;**无域名可用公网 IP 直连**——
   此时走 **HTTP(80)+自签证书(443)** 模式(见下文「无域名/IP 直连」一节),浏览器访问 IP 即可。
 - 已安装 Docker 与 Docker Compose 插件(`docker compose version` 可正常输出)。
+- 如果需要 k8s 则需要安装 kubeadm 或使用发行版。
+- 已有 k8s 集群的情况下只需要安装 kubectl 不需要安装全套。
 
 ## 一、获取代码
 
@@ -82,7 +80,6 @@
 LKM-Website/                  # 根仓库(含 docker-compose.yml 与本教程)
 ├── docker-compose.yml
 ├── DEPLOYMENT.md
-├── dev.bat / dev.ps1 / dev.sh
 ├── deploy/
 │   ├── initdb/               # PostgreSQL 首启初始化脚本(auth 独立库建库、timescaledb 扩展)
 │   ├── apisix/               # 全站公网入口 APISIX 声明式路由/SSL 渲染/冒烟脚本
@@ -153,6 +150,18 @@ MINIO_ROOT_PASSWORD=<强随机密码>
 # 可选:GitHub OAuth 登录(不启用可留空)
 LKM_GITHUB_CLIENT_ID=
 LKM_GITHUB_CLIENT_SECRET=
+
+# 可选:RS256/JWKS 非对称签发(批 5)。不配则沿用上面的 HS256 对称密钥,行为不变。
+# 启用后 auth 持私钥签发,backend 与 APISIX 网关只用公钥验签(验签方拿不到签发能力)。
+#   1) sh deploy/jwt/gen-keys.sh        # 生成 deploy/jwt/keys/{jwt-private,jwt-public}.pem
+#   2) 打开下面两行(值是**容器内**路径;compose 已把该目录只读挂到 /etc/lkm/jwt)
+# LKM_JWT_PRIVATE_KEY_FILE=/etc/lkm/jwt/jwt-private.pem
+# LKM_JWT_PUBLIC_KEY_FILE=/etc/lkm/jwt/jwt-public.pem
+#   3) docker compose up -d --no-deps auth backend apisix-render apisix
+#   4) 确认无回归后关掉 HS 回退完成切换(批 1 已重建库、无存量 token,可直接关)
+# LKM_JWT_HS_FALLBACK=false
+# 注:网关验签目前挂在后台会话端点 /api/v1/admin/auth/me(公开只读接口必须保持匿名);
+#    公钥可经 https://<社群域名>/.well-known/jwks.json 获取。
 ```
 
 生成随机密钥:
@@ -173,7 +182,7 @@ docker compose up -d --build
 
 首次构建需拉取基础镜像与依赖,可能耗时数分钟。启动顺序由 `depends_on` 健康检查保证:先 `postgres`、`redis`、`minio`、`pulsar` 就绪,再启动 `backend`/`auth` 与各 `worker`,前端 `astro`/`static` 就绪后网关 `apisix` 再启动。其中 `pulsar` 的 `healthy` **已蕴含**租户与 namespace 初始化完成(见上「Pulsar 无状态化」),故不存在等待一次性 init 容器的步骤。
 
-## 三·六、网关：APISIX（M5 7.2.4，全栈唯一网关）
+## 三·六、网关：APISIX
 
 接入层为 **APISIX standalone**（无 etcd，路由声明式来自 `deploy/apisix/apisix.yaml`）：
 
@@ -187,10 +196,7 @@ docker compose up -d --build
   登录限流是**两层分工而非重复**——网关按 IP 粗粒度削峰（`policy: local`、60/60s），
   应用做账号级精确锁定（用户名级 + 真实 IP 级 Redis 滑动窗口，IP 取自网关注入的 `X-Real-IP`）。
   两层数值刻意不同，不要当成"重复"去同步。
-- **nginx 已彻底移除**：旧网关曾以 `profiles: ["nginx-gateway"]` 作回退路径保留，但它已与 APISIX 路由分叉
-  （如 `/api/` 未开 WS upgrade → `/api/v1/ws/events` 经回退路径不可用），成为一份会腐烂的第二真相源；
-  回退机制改由 git 承担（`git revert` / 检出历史 tag 得到的是「当时一致」的整套配置）。
-  全栈仅存的 nginx 镜像是 `acme-webroot` 与官网 `static` 两处**静态文件服务器**角色（非网关），二者与
+- **nginx 已彻底移除**：全栈仅存的 nginx 镜像是 `acme-webroot` 与官网 `static` 两处**静态文件服务器**角色（非网关），二者与
   APISIX 是互补关系而非重叠。
 
 **运行时冒烟/验收**（网关 up 后，在仓库根执行）：
@@ -200,9 +206,9 @@ sh deploy/apisix/smoke.sh 127.0.0.1          # 13 项：301/健康/GraphQL/官�
 SMOKE_HEAVY=1 sh deploy/apisix/smoke.sh      # 追加 100m 上传边界（真发 ~101MB）
 ```
 
-脚本用 `--resolve <域名>:<端口>:127.0.0.1` 保证 TLS SNI 正确（APISIX 按 SNI 选证书，直连 IP 无 SNI 会握手失败），并用 `--noproxy '*'` 绕过宿主机代理。2026-09-14 真机全栈验证 13/13 绿，详见 `LKM社区开发方案/执行路线图.md` §7.2.4 / §8 #19。
+脚本用 `--resolve <域名>:<端口>:127.0.0.1` 保证 TLS SNI 正确（APISIX 按 SNI 选证书，直连 IP 无 SNI 会握手失败），并用 `--noproxy '*'` 绕过宿主机代理。
 
-## 三·七、Prefect 编排（M5 7.2.5，profile=prefect）
+## 三·七、Prefect 编排
 
 复杂数据管道（首期为 `user_dim` 报表宽表对账/回填）由 Prefect flow 编排，APScheduler 仍只做简单 cron 触发入口。默认**不启用**——cron 消费者直调既有 ETL，行为与现状一致。
 
@@ -234,7 +240,7 @@ docker compose exec prefect-worker python -m app.flows.user_dim --backfill --ids
 - 触发失败 **fail-open 回落直调**，crash-safety 对账不会因编排层故障丢跑；`LKM_PREFECT_ENABLED=false` 即整体回退。
 - flow 复用既有 ETL 入口，保持「命令数恒定 / 跨 auth+业务双会话 / 幂等」不变量。
 
-## 三·八、ClickHouse 分析管道（M5 7.2.6，profile=clickhouse）
+## 三·八、ClickHouse 分析管道
 
 日志 / 失败事件 / 审计的检索与分析，两路数据：**vector** 采集各容器 stdout/stderr 的结构化 JSON 日志 → `lkm.app_logs`；**Prefect flow** 周期把 `event_failures`（业务库）+ `audit_logs`（auth 独立库）按水位增量导出到 CH。默认**不启用**——导出 no-op、admin 分析查询端点返 503。
 
@@ -269,7 +275,7 @@ curl -s 'http://<host>/api/v1/admin/analytics/app_logs?limit=5' -b 'lkm_admin_ac
 - CH 未启用 / 不可达时：admin 查询返 **503**（不返空列表），周期导出 no-op 不报错。
 - 回退：`LKM_CLICKHOUSE_ENABLED=false`（默认）+ `docker compose --profile clickhouse down`，不影响主栈。
 
-## 三·九、监控面板（M6.12，profile=monitoring）
+## 三·九、监控面板
 
 Prometheus 抓 `backend` 的 `/metrics`，Grafana 预置「LKM 后端总览」面板。默认不启：
 
@@ -288,6 +294,38 @@ GraphQL P95 与受控拒绝速率。
 - 数据源与面板由 `deploy/grafana/provisioning` 预置（改面板改 `deploy/grafana/dashboards/lkm-overview.json`，30 秒自动重载）。
 - **已知限制**：`/metrics` 只挂在单体 `backend`；auth 进程刻意不挂，故面板无 auth 的 QPS/延迟。
 - 回退：`docker compose --profile monitoring down`（保留卷则历史保留；加 `-v` 一并清理）。
+
+## 三·十、SigNoz 自托管 APM（可选）
+
+链路追踪后端：应用 span → 本栈的 `otel-collector` → SigNoz → ClickHouse → UI。默认不启。
+
+```sh
+# 1) 拉起采集与追踪后端（两个 profile 都要：otel 是应用侧采集器，signoz 是后端）
+#    并让应用开始产生 span
+#    （根 .env：LKM_OTEL_ENABLED=true、LKM_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318/v1/traces）
+docker compose --profile otel --profile signoz up -d
+
+# 2) 首次必须注册组织（SignNoz 的 opamp 下发配置需要 orgId；
+#    未注册时 collector 会一直处于「只起 extension、不监听 4318」的状态）
+curl -s -X POST http://127.0.0.1:8080/api/v1/register -H 'Content-Type: application/json' \
+  -d '{"name":"Admin","email":"admin@example.com","password":"<强密码>","orgName":"LKM"}'
+docker compose restart signoz-otel-collector   # 注册后立即重连，否则等 30s 重试
+
+# 3) 打开 UI（只绑回环；SigNoz 无内置鉴权，勿直接暴露公网）
+#    http://127.0.0.1:8080  →  Services / Traces
+```
+
+- **资源占用大**：SigNoz 自带一套 ClickHouse + ZooKeeper（与日志分析用的 `profile: clickhouse`
+  **不是同一套**，两者 schema 不兼容，刻意各自独立）。建议空闲内存 ≥4GB。
+- **配置单一来源**：`deploy/signoz/` 是 SigNoz 官方 **v0.128.0** `deploy/{docker,common}` 的
+  vendor 副本（上游 main 已改用 Foundry 安装，故钉死 tag）。**不要手改这些文件**——升级即整目录替换；
+  环境差异（主机名解析）用 compose 网络别名吸收，不改配置。
+- **已知限制**：
+  - `signoz-init-clickhouse` 需容器出网拉 `histogramQuantile` UDF；离线环境下会跳过，
+    ClickHouse 照常可用，只有用到该函数的查询（部分告警/面板）会报函数缺失。
+  - `signoz-otel-collector` 的 OTLP 端口（4317/4318）**不发布到宿主**，仅经应用侧 collector 进入；
+    外部代理需自行经网关加鉴权后再放行。
+- 回退：`docker compose --profile signoz down`（数据在 `signoz_*` 命名卷里，加 `-v` 一并清理）。
 
 ## 三·五、无域名 / 公网 IP 直连(可选)
 
@@ -311,8 +349,7 @@ LKM_FRONTEND_CALLBACK: http://124.220.55.235/login/success
 #    deploy/apisix/config.yaml 的 redirect.https_port 与 dns 解析按需调整
 ```
 
-> **注**：网关自 M5 7.2.4 起为 APISIX，无域名/IP 直连改造只需改上述第 3 步（`deploy/apisix/` 下两个
-> YAML），未在本教程展开。
+> **注**：网关为 APISIX，无域名/IP 直连改造只需改上述第 3 步（`deploy/apisix/` 下两个YAML），未在本教程展开。
 
 - **certbot 服务可停**(`docker compose stop certbot`):无域名不签正式证书,其会循环空跑 renew 报错污染日志。
 - **403 后台明文限制**:admin 后台 cookie 带 `Secure`,**纯 HTTP(80)下浏览器不发送** → 后台登录会话无法保持。

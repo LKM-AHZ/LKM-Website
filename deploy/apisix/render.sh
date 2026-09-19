@@ -38,6 +38,13 @@ DNS_RESOLVER="${APISIX_DNS_RESOLVER:-127.0.0.11}"
 # 请求体上限：与后端 LKM_MAX_UPLOAD_BYTES 取同一来源（compose 下发同一个 env），
 # 使「网关拒收」与「应用校验」用同一个数，不再两处手改。
 MAX_BODY_SIZE="${APISIX_MAX_BODY_SIZE:-104857600}"
+# RS256 网关验签（批 5）：公钥 PEM 文件路径（未配置/文件不存在 → 网关不做 JWT 校验）。
+# 公钥非机密，但由部署期生成，故以文件挂载而非写进模板；consumer/claim/cookie 三项
+# 必须与 LKM-service 侧 jwt_keys.GATEWAY_KEY 及 admin 会话 cookie 名一致（有静态测试锁）。
+JWT_PUBLIC_KEY_FILE="${APISIX_JWT_PUBLIC_KEY_FILE:-}"
+JWT_CONSUMER="${APISIX_JWT_CONSUMER:-lkm_rs256}"
+JWT_KEY_CLAIM="${APISIX_JWT_KEY_CLAIM:-lkm}"
+JWT_COOKIE="${APISIX_JWT_COOKIE:-admin_session}"
 # APISIX_RENDER_ONCE=1 → 只渲染一次后退出（测试用；生产默认常驻循环）
 RENDER_ONCE="${APISIX_RENDER_ONCE:-0}"
 
@@ -111,10 +118,49 @@ ssl_block() {
     return 0
 }
 
+jwt_sections() {
+    # $1=consumers 段输出文件，$2=路由内 plugins 段输出文件。
+    # 未配置公钥文件 → 两个文件都留空（网关不做 JWT 校验，应用层照常验签）。
+    c_out="$1"
+    r_out="$2"
+    : > "$c_out"
+    : > "$r_out"
+    if [ -z "$JWT_PUBLIC_KEY_FILE" ] || [ ! -f "$JWT_PUBLIC_KEY_FILE" ]; then
+        echo "[apisix-render] 未配置 APISIX_JWT_PUBLIC_KEY_FILE（或文件不存在）：网关不做 JWT 验签" >&2
+        return 0
+    fi
+    {
+        echo "consumers:"
+        echo "  - username: $JWT_CONSUMER"
+        echo "    plugins:"
+        echo "      jwt-auth:"
+        echo "        key: $JWT_KEY_CLAIM"
+        echo "        algorithm: RS256"
+        echo "        public_key: |"
+        sed 's/^/          /' "$JWT_PUBLIC_KEY_FILE"
+        # APISIX 3.9 的 jwt-auth consumer schema 在 algorithm=RS256 时**强制要求**
+        # private_key 字段（dependencies.oneOf 的 required），而验签路径只用 public_key
+        # （jwt-auth.lua 的 algorithm_handler 只取 keypair 的第一个返回值）。故这里填同一份
+        # **公钥**：网关因此不持有任何可用于签发的密钥。data_plane 模式下 Admin API 关闭，
+        # 插件的签发端点不可达，填错也无签发面。改动此处前请先读路线图 §8 的登记。
+        echo "        private_key: |"
+        sed 's/^/          /' "$JWT_PUBLIC_KEY_FILE"
+    } > "$c_out"
+    {
+        echo "      jwt-auth:"
+        echo "        cookie: $JWT_COOKIE"
+    } > "$r_out"
+    echo "[apisix-render] 网关 JWT 验签已启用（consumer=$JWT_CONSUMER alg=RS256）"
+}
+
 render_once() {
     ssl_tmp=/tmp/ssls.yaml
+    jwt_c_tmp=/tmp/jwt_consumers.yaml
+    jwt_r_tmp=/tmp/jwt_route.yaml
     ssl_block "$ssl_tmp"
-    # 顺序：先展开标量/列表占位（sed），再整段替换 SSL 占位（awk 多行读入）
+    jwt_sections "$jwt_c_tmp" "$jwt_r_tmp"
+    # 顺序：先展开标量/列表占位（sed），再整段替换多行占位（awk 读入文件）：
+    # __SSL_SECTION__（证书）/ __JWT_CONSUMERS_SECTION__（网关验签消费者）/ __JWT_ROUTE_SECTION__（路由内插件）
     sed \
         -e "s|__COMMUNITY_HOSTS__|$COMMUNITY_HOSTS|g" \
         -e "s|__COMMUNITY_DOMAIN__|$COMMUNITY_DOMAIN|g" \
@@ -123,10 +169,20 @@ render_once() {
         -e "s|__COMMUNITY_ORIGINS__|$COMMUNITY_ORIGINS|g" \
         -e "s|__MAX_BODY_SIZE__|$MAX_BODY_SIZE|g" \
         -e "s|__UPSTREAM_SUFFIX__|$UPSTREAM_SUFFIX|g" \
-        "$SRC" | awk -v ssl="$ssl_tmp" '
+        "$SRC" | awk -v ssl="$ssl_tmp" -v jwtc="$jwt_c_tmp" -v jwtr="$jwt_r_tmp" '
         /^# __SSL_SECTION__$/ {
             while ((getline line < ssl) > 0) print line
             close(ssl)
+            next
+        }
+        /^# __JWT_CONSUMERS_SECTION__$/ {
+            while ((getline line < jwtc) > 0) print line
+            close(jwtc)
+            next
+        }
+        /^[[:space:]]*# __JWT_ROUTE_SECTION__$/ {
+            while ((getline line < jwtr) > 0) print line
+            close(jwtr)
             next
         }
         { print }

@@ -1,5 +1,5 @@
 services:
-  # ── APISIX 网关（M5 7.2.4）：全栈唯一网关；nginx 网关已于 2026-09-16 彻底移除 ──
+  # ── APISIX 网关 ──
   # standalone 模式（yaml config_provider，无 etcd）：路由模板 deploy/apisix/apisix.yaml 中的
   # `# __SSL_SECTION__` 占位由 apisix-render 用 certbot 证书渲染为内联 PEM 的 ssls 段，
   # 写入 apisix_conf 卷，APISIX 监测 mtime 自动 reload。
@@ -9,13 +9,17 @@ services:
     image: alpine:3.19
     entrypoint: ['sh', '/src/render.sh']
     environment:
-      # 网关配置的**单一来源**：路由 hosts 与 CORS 来源由域名变量展开，请求体上限与后端
-      # LKM_MAX_UPLOAD_BYTES 取同一个 env。改域名/改上限只需动 .env 一处。
+      # 网关配置的**单一来源**：路由 hosts 与 CORS 来源由域名变量展开，请求体上限与后端LKM_MAX_UPLOAD_BYTES 取同一个 env。
       APISIX_COMMUNITY_DOMAINS: ${LKM_COMMUNITY_DOMAINS:-lkm-ahz.ltd}
       APISIX_OFFICIAL_DOMAINS: ${LKM_OFFICIAL_DOMAINS:-lkm-ahz.icu}
       APISIX_MAX_BODY_SIZE: ${LKM_MAX_UPLOAD_BYTES:-104857600}
+      # RS256 网关验签（批 5）：RSA 公钥 PEM 文件（容器内路径）。留空 → 网关不做 JWT
+      # 校验（应用层照常验签），保持既有部署零改动可升级。生成：sh deploy/jwt/gen-keys.sh
+      APISIX_JWT_PUBLIC_KEY_FILE: ${LKM_JWT_PUBLIC_KEY_FILE:-}
     volumes:
       - ./deploy/apisix:/src:ro
+      # RSA 公钥（只读）。目录不存在时 docker 会建空目录 → 网关验签自动关闭，不硬失败。
+      - ./deploy/jwt/keys:/etc/lkm/jwt:ro
       - certbot_conf:/etc/letsencrypt
       - apisix_conf:/out
     restart: ${LKM_RESTART_POLICY:-no}
@@ -41,7 +45,6 @@ services:
       - lkm
 
   apisix:
-    # 固定精确小版本：浮动 tag `3.9-debian` 在国内镜像源常拉取失败，3.9.0-debian 可稳定获取
     image: apache/apisix:3.9.0-debian
     depends_on:
       apisix-render:
@@ -74,8 +77,6 @@ services:
           subpath: apisix.yaml
         read_only: true
     healthcheck:
-      # 镜像内无 curl/wget（仅 bash），用 bash /dev/tcp 探监听端口存活即可：任意 HTTP 响应都算
-      # 进程在（不依赖 /apisix/status 契约）。曾误用 curl 导致容器长期 unhealthy 而流量正常。
       test: ['CMD-SHELL', 'bash -c "exec 3<>/dev/tcp/127.0.0.1/9080"']
       interval: 15s
       timeout: 5s
@@ -153,7 +154,7 @@ services:
     networks:
       - lkm
 
-  # ClickHouse 分析库（M5 7.2.6，profile=clickhouse）：默认不启，不影响主栈。
+  # ClickHouse 分析库：默认不启，不影响主栈。
   # 承载 app_logs（vector 采集）+ event_failures/audit_logs（周期增量导出）。
   # 启用：置 LKM_CLICKHOUSE_ENABLED=true + LKM_CLICKHOUSE_* 后
   # `docker compose --profile clickhouse up -d`。DDL 由 deploy/clickhouse/init.sql
@@ -183,7 +184,7 @@ services:
     networks:
       - lkm
 
-  # Vector 日志采集（M5 7.2.6 路 B，profile=clickhouse）：读 Docker 容器日志 →
+  # Vector 日志采集：读 Docker 容器日志 →
   # 解析 core/logging.py 的 JSON → 写 lkm.app_logs。需挂 docker socket 与日志目录。
   vector:
     image: timberio/vector:0.43.0-alpine
@@ -205,7 +206,7 @@ services:
     networks:
       - lkm
 
-  # Prometheus 指标抓取（M6.12，profile=monitoring）：只抓 backend 的 /metrics
+  # Prometheus 指标抓取：只抓 backend 的 /metrics
   # （auth 进程刻意不挂 /metrics，见部署文档「已知限制」）。默认不启。
   prometheus:
     image: prom/prometheus:v2.54.1
@@ -222,7 +223,7 @@ services:
     networks:
       - lkm
 
-  # Grafana 总览面板（M6.12，profile=monitoring）：数据源与 dashboard 均由
+  # Grafana 总览面板：数据源与 dashboard 均由
   # deploy/grafana/provisioning 预置（QPS/P50/P95/错误率/outbox 积压/Pulsar lag）。
   # 默认只绑回环，公网暴露请自行经网关加鉴权。
   grafana:
@@ -243,7 +244,7 @@ services:
     networks:
       - lkm
 
-  # Infisical 密钥管理（M5 7.2.3，profile=infisical）：默认不启，不影响主栈。
+  # Infisical 密钥管理：默认不启，不影响主栈。
   # 首启后到 Web UI 建项目 + universal-auth machine identity，把 client id/secret 与
   # project id 填回根 .env（LKM_INFISICAL_*），并置 LKM_INFISICAL_ENABLED=true；
   # 应用经 deploy/docker-entrypoint.sh → app.core.secrets_bootstrap 启动前拉取注入。
@@ -285,10 +286,10 @@ services:
       - lkm
 
   postgres:
-    # TimescaleDB 版 PG16（批 2）：outbox_events/outbox_archived 是 hypertable，需该引擎
+    # TimescaleDB 版 PG16 ：outbox_events/outbox_archived 是 hypertable，需该引擎
     # （官方镜像已配 shared_preload_libraries=timescaledb，扩展由 deploy/initdb 与应用侧
     # init_db 幂等补建）。仅主库换，prefect-postgres / infisical-db 仍是 postgres:16-alpine。
-    # ⚠️ 从 postgres:16-alpine **就地换镜像**不会改动既有数据卷的 schema：hypertable 的
+    # 从 postgres:16-alpine **就地换镜像**不会改动既有数据卷的 schema：hypertable 的
     # 主键必须含分区列 created_at，旧卷需重建（或手工迁移），见 DEPLOYMENT.md。
     image: timescale/timescaledb:latest-pg16
     environment:
@@ -324,7 +325,7 @@ services:
     networks:
       - lkm
 
-  # Apache Pulsar（M4）：全站消息总线，standalone 自带 ZooKeeper + BookKeeper。
+  # Apache Pulsar：全站消息总线，standalone 自带 ZooKeeper + BookKeeper。
   # broker 6650 / Admin REST 8080 仅内网；backend 与各 worker 经 LKM_PULSAR_URL 连接。
   #
   # 无状态化（2026-09-17 根治，见路线图 §8 #32）：启动包装脚本每次清空数据目录 + broker 就绪后
@@ -396,7 +397,7 @@ services:
         condition: service_healthy
     environment:
       LKM_ENV: production
-      # 公网 Host 白名单（M6.1）：生产必填（缺则进程装配期 fail-fast）。内网服务名/回环
+      # 公网 Host 白名单：生产必填（缺则进程装配期 fail-fast）。内网服务名/回环
       # 必须列入，否则容器 healthcheck 直连 127.0.0.1 会被 TrustedHost 判 400 → 长期 unhealthy。
       # CORS 不在此下发：生产不挂应用层 CORS，唯一权威是 APISIX 的 cors 插件
       # （deploy/apisix/apisix.yaml），来源白名单在 render.sh 里由域名变量展开。
@@ -412,7 +413,7 @@ services:
       LKM_PULSAR_URL: pulsar://pulsar:6650
       # lag 上报（M4）：API 进程周期拉 Admin REST 统计订阅 msgBacklog → Prometheus
       LKM_PULSAR_ADMIN_URL: http://pulsar:8080
-      # AUTH 内部读写缝（B1.3）：S5 拆库后 users/profiles 只在 auth 独立库，业务库无 users 表。
+      # AUTH 内部读写缝：S5 拆库后 users/profiles 只在 auth 独立库，业务库无 users 表。
       # 未配齐（URL/token）→ seam 关闭，snapshot 回落业务库直查 users 会 UndefinedTable，
       # 身份展示读 + 考试解锁/项目升权写全线报错。故生产必须成对配置。
       LKM_AUTH_HTTP_URL: ${LKM_AUTH_HTTP_URL:-http://auth:8001}
@@ -434,17 +435,21 @@ services:
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
+      # RS256/JWKS（批 5）：单体是**验签方**，只挂公钥（绝不下发私钥，否则可自造 token）。
+      # 留空 → 沿用 HS256（`jwt_hs_fallback` 亦须为 true，否则 token 一律拒）。
+      LKM_JWT_PUBLIC_KEY_FILE: ${LKM_JWT_PUBLIC_KEY_FILE:-}
+      LKM_JWT_HS_FALLBACK: ${LKM_JWT_HS_FALLBACK:-true}
       LKM_GITHUB_CLIENT_ID: ${LKM_GITHUB_CLIENT_ID:-}
       LKM_GITHUB_CLIENT_SECRET: ${LKM_GITHUB_CLIENT_SECRET:-}
       LKM_RP_ID: 124.220.55.235
       LKM_ORIGIN: http://124.220.55.235
       LKM_GITHUB_REDIRECT_URI: http://124.220.55.235/api/v1/auth/oauth/github/callback
       LKM_FRONTEND_CALLBACK: http://124.220.55.235/login/success
-      # 链路追踪（M5 7.2.2）：默认关；起 otel profile 并指 ENDPOINT 才生效
+      # 链路追踪：默认关；起 otel profile 并指 ENDPOINT 才生效
       LKM_OTEL_ENABLED: ${LKM_OTEL_ENABLED:-false}
       LKM_OTEL_EXPORTER_OTLP_ENDPOINT: ${LKM_OTEL_EXPORTER_OTLP_ENDPOINT:-}
       LKM_OTEL_SAMPLE_RATIO: ${LKM_OTEL_SAMPLE_RATIO:-0.1}
-      # Infisical 密钥管理（M5 7.2.3）：默认关；起 infisical profile 并配齐 ID/secret 才拉取
+      # Infisical 密钥管理：默认关；起 infisical profile 并配齐 ID/secret 才拉取
       LKM_INFISICAL_ENABLED: ${LKM_INFISICAL_ENABLED:-false}
       LKM_INFISICAL_REQUIRED: ${LKM_INFISICAL_REQUIRED:-false}
       LKM_INFISICAL_SITE_URL: ${LKM_INFISICAL_SITE_URL:-http://infisical:8080}
@@ -453,7 +458,7 @@ services:
       LKM_INFISICAL_SECRET_PATH: ${LKM_INFISICAL_SECRET_PATH:-/}
       LKM_INFISICAL_CLIENT_ID: ${LKM_INFISICAL_CLIENT_ID:-}
       LKM_INFISICAL_CLIENT_SECRET: ${LKM_INFISICAL_CLIENT_SECRET:-}
-      # ClickHouse 分析库（M5 7.2.6）：backend 承载 admin 只读查询；默认关（查询端点 503）
+      # ClickHouse 分析库：backend 承载 admin 只读查询；默认关（查询端点 503）
       LKM_CLICKHOUSE_ENABLED: ${LKM_CLICKHOUSE_ENABLED:-false}
       LKM_CLICKHOUSE_URL: ${LKM_CLICKHOUSE_URL:-http://clickhouse:8123}
       LKM_CLICKHOUSE_DATABASE: ${LKM_CLICKHOUSE_DATABASE:-lkm}
@@ -461,10 +466,12 @@ services:
       LKM_CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-change-me-clickhouse}
     volumes:
       - backend_data:/data
+      # RSA 公钥（只读）：单体只验签，故只挂公钥。
+      - ./deploy/jwt/keys:/etc/lkm/jwt:ro
     restart: ${LKM_RESTART_POLICY:-no}
     healthcheck:
       # 打 /liveness（零外部依赖）：进程存活即心跳 OK。依赖是否就绪由 /readiness 表达
-      # （未就绪返 503），避免 DB/Redis/Pulsar/AUTH 任一抖动就把容器判死重启（M6.2）。
+      # （未就绪返 503），避免 DB/Redis/Pulsar/AUTH 任一抖动就把容器判死重启。
       test:
         [
           'CMD',
@@ -479,7 +486,7 @@ services:
     networks:
       - lkm
 
-  # AUTH 独立进程（B1.1）：与单体的 backend 同镜像(同代码库/同配置源)、异 command。
+  # AUTH 独立进程：与单体的 backend 同镜像(同代码库/同配置源)、异 command。
   # 跑只读/认证面 `app.main_auth:app`，自持 DB+Redis 依赖与专属 /liveness|/readiness 健康缝。
   # 纯增量、不改单体拓扑：仅内网暴露(无主机端口映射，B1.2 才由 APISIX 反代接出)。
   # healthcheck 打本进程自己的 /liveness：进程能应答即心跳 OK；依赖就绪由 below depends_on 判定。
@@ -496,7 +503,13 @@ services:
       LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
-      # 公网 Host 白名单（M6.1）：与 backend 同值；auth 亦承载对外认证面。
+      # RS256/JWKS（批 5）：AUTH 是**签发方**，持私钥；公钥同时下发供 JWKS 端点发布。
+      # 两处留空 → 沿用 HS256。`LKM_JWT_HS_FALLBACK=false` 即「关 HS」的最终切换开关
+      # （批 1 已重建库、无存量 token，可直接关）。
+      LKM_JWT_PRIVATE_KEY_FILE: ${LKM_JWT_PRIVATE_KEY_FILE:-}
+      LKM_JWT_PUBLIC_KEY_FILE: ${LKM_JWT_PUBLIC_KEY_FILE:-}
+      LKM_JWT_HS_FALLBACK: ${LKM_JWT_HS_FALLBACK:-true}
+      # 公网 Host 白名单：与 backend 同值；auth 亦承载对外认证面。
       # CORS 同 backend：生产唯一权威是 APISIX，不在此下发。
       LKM_ALLOWED_HOSTS: ${LKM_ALLOWED_HOSTS:-lkm-ahz.ltd,www.lkm-ahz.ltd,backend,auth,localhost,127.0.0.1}
       LKM_REDIS_URL: redis://redis:6379/0
@@ -517,11 +530,11 @@ services:
       # 的 _require_internal_token）；不设 URL 避免本进程 snapshot 自打自的回路。
       LKM_AUTH_HTTP_TOKEN: ${LKM_AUTH_HTTP_TOKEN:?生产需设置 LKM_AUTH_HTTP_TOKEN}
       LKM_RP_ID: ${LKM_RP_ID:-124.220.55.235}
-      # 链路追踪（M5 7.2.2）：auth 进程独立 service.name 后缀 -auth
+      # 链路追踪：auth 进程独立 service.name 后缀 -auth
       LKM_OTEL_ENABLED: ${LKM_OTEL_ENABLED:-false}
       LKM_OTEL_EXPORTER_OTLP_ENDPOINT: ${LKM_OTEL_EXPORTER_OTLP_ENDPOINT:-}
       LKM_OTEL_SAMPLE_RATIO: ${LKM_OTEL_SAMPLE_RATIO:-0.1}
-      # Infisical 密钥管理（M5 7.2.3）：auth 进程同样启动前拉取
+      # Infisical 密钥管理：auth 进程同样启动前拉取
       LKM_INFISICAL_ENABLED: ${LKM_INFISICAL_ENABLED:-false}
       LKM_INFISICAL_REQUIRED: ${LKM_INFISICAL_REQUIRED:-false}
       LKM_INFISICAL_SITE_URL: ${LKM_INFISICAL_SITE_URL:-http://infisical:8080}
@@ -530,6 +543,9 @@ services:
       LKM_INFISICAL_SECRET_PATH: ${LKM_INFISICAL_SECRET_PATH:-/}
       LKM_INFISICAL_CLIENT_ID: ${LKM_INFISICAL_CLIENT_ID:-}
       LKM_INFISICAL_CLIENT_SECRET: ${LKM_INFISICAL_CLIENT_SECRET:-}
+    volumes:
+      # 私钥 + 公钥（只读）：仅 auth 侧挂私钥，其余容器只挂同一目录里的公钥。
+      - ./deploy/jwt/keys:/etc/lkm/jwt:ro
     restart: ${LKM_RESTART_POLICY:-no}
     healthcheck:
       test:
@@ -602,14 +618,14 @@ services:
       LKM_AUTH_DB_NAME: ${LKM_AUTH_DB:-lkm_auth}
       LKM_AUTH_DB_USER: ${POSTGRES_USER:-lkm}
       LKM_AUTH_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
-      # Prefect 编排（M5 7.2.5）：默认关。开启后 cron 对账改为触发 Prefect deployment，
+      # Prefect 编排：默认关。开启后 cron 对账改为触发 Prefect deployment，
       # 触发失败 fail-open 回落直调。需同时 `--profile prefect up -d` 起 server/worker。
       LKM_PREFECT_ENABLED: ${LKM_PREFECT_ENABLED:-false}
       LKM_PREFECT_API_URL: ${LKM_PREFECT_API_URL:-}
       LKM_PREFECT_DEPLOYMENT: ${LKM_PREFECT_DEPLOYMENT:-}
       LKM_PREFECT_ANALYTICS_DEPLOYMENT: ${LKM_PREFECT_ANALYTICS_DEPLOYMENT:-}
       LKM_PREFECT_API_TOKEN: ${LKM_PREFECT_API_TOKEN:-}
-      # ClickHouse 分析管道（M5 7.2.6）：回落直调导出（auth.tasks → analytics_body）需连
+      # ClickHouse 分析管道：回落直调导出（auth.tasks → analytics_body）需连
       # CH；默认关则 no-op。触发成功时重活在 prefect-worker 内，此处仅回落路径用。
       LKM_CLICKHOUSE_ENABLED: ${LKM_CLICKHOUSE_ENABLED:-false}
       LKM_CLICKHOUSE_URL: ${LKM_CLICKHOUSE_URL:-http://clickhouse:8123}
@@ -622,7 +638,7 @@ services:
     networks:
       - lkm
 
-  # points 三订阅扇出（M4）：同一 topic biz/points.apply 挂三个 Shared subscription，
+  # points 三订阅扇出：同一 topic biz/points.apply 挂三个 Shared subscription，
   # 各由独立进程消费（reward / stats / tasks），真实故障隔离——停一个不影响其余。
   worker-points-reward:
     image: lkm-service:latest
@@ -737,7 +753,7 @@ services:
     networks:
       - lkm
 
-  # M6.8：消费 biz/points.apply 生成站内信（与 points 三订阅同 topic 不同订阅，故障隔离）。
+  # 消费 biz/points.apply 生成站内信（与 points 三订阅同 topic 不同订阅，故障隔离）。
   # 需 auth 读缝（触发者展示名），与 backend 同款配置。
   worker-notification:
     image: lkm-service:latest
@@ -836,8 +852,8 @@ services:
     networks:
       - lkm
 
-  # ── Prefect 编排（M5 7.2.5，profile=prefect）：复杂数据管道 flow 的 server/worker ──
-  # 蓝图《后端规划.md》§调度：APScheduler 只做简单 cron 触发入口（cron.* 经总线），
+  # ── Prefect 编排：复杂数据管道 flow 的 server/worker ──
+  # 调度：APScheduler 只做简单 cron 触发入口（cron.* 经总线），
   # DAG/失败重试/回填由 Prefect flow 编排。默认不启；启用：
   #   根 .env 置 LKM_PREFECT_ENABLED/API_URL/DEPLOYMENT（见 .env.example）
   #   docker compose --profile prefect up -d
@@ -951,6 +967,200 @@ services:
     networks:
       - lkm
 
+  # ══════════════════════════════════════════════════════════════════════════
+  # SigNoz 自托管（批 6，profile=signoz）：APM/链路追踪后端。**默认不启**。
+  #
+  # 与下面两个 profile 刻意隔离，互不共用实例：
+  #   - `profile: clickhouse` 的 `clickhouse` 是**日志/审计分析库**（app_logs 等）；
+  #   - `profile: otel` 的 `otel-collector` 是**应用侧采集器**：它把 span 经 otlphttp
+  #     转给本组的 `signoz-otel-collector`（见 deploy/otel/otel-collector.yaml）。
+  # SigNoz 自带一套 ClickHouse + ZooKeeper，两者 schema 完全不同，混用必冲突，故各起一套。
+  #
+  # 起：`docker compose --profile signoz up -d`（连同 otel 链路请写
+  #     `--profile otel --profile signoz`，并置 LKM_OTEL_ENABLED=true）。
+  # 停：`docker compose --profile signoz down`（数据在 signoz-* 命名卷里，down 不删）。
+  #
+  # 资源占用大（ClickHouse + ZooKeeper + collector + UI，内存建议 ≥4GB 空闲）；
+  # UI 只绑回环 127.0.0.1:8080，公网暴露请自行经网关加鉴权。
+  #
+  # 配置来源：SigNoz 官方 **v0.128.0** 的 deploy/{docker,common}（vendor 到 deploy/signoz/，
+  # 保持单一来源、不手改；升级即整目录替换）。注意上游 main 已改用 Foundry 安装，
+  # 故这里**钉死 tag**而不是跟 main（路线图 §8 有登记）。
+  signoz-init-clickhouse:
+    image: clickhouse/clickhouse-server:25.5.6
+    profiles: ['signoz']
+    # 一次性：拉取 histogramQuantile UDF 可执行文件到共享卷（custom-function.xml 引用它）。
+    # 这一步**需要容器出网**（GitHub Releases）；受限网络下会失败，此时 ClickHouse 仍能起，
+    # 但用到 histogramQuantile 的查询（部分告警/面板）会报函数缺失。
+    command:
+      - bash
+      - -c
+      - |
+        version="v0.0.1"
+        node_os=$$(uname -s | tr '[:upper:]' '[:lower:]')
+        node_arch=$$(uname -m | sed s/aarch64/arm64/ | sed s/x86_64/amd64/)
+        echo "Fetching histogram-binary for $${node_os}/$${node_arch}"
+        cd /tmp
+        # 拉取失败**不阻断**：ClickHouse 照常启动，只有用到 histogramQuantile 的查询会报函数缺失。
+        # 否则受限网络下 init 非零退出 → depends_on service_completed_successfully 卡住整个 SigNoz。
+        wget -O histogram-quantile.tar.gz "https://github.com/SigNoz/signoz/releases/download/histogram-quantile%2F$${version}/histogram-quantile_$${node_os}_$${node_arch}.tar.gz" \
+          && tar -xvzf histogram-quantile.tar.gz \
+          && mv histogram-quantile /var/lib/clickhouse/user_scripts/histogramQuantile \
+          || echo "[signoz-init] histogramQuantile UDF 拉取失败（离线/受限网络），跳过"
+
+    volumes:
+      - signoz_clickhouse_scripts:/var/lib/clickhouse/user_scripts/
+    restart: 'no'
+    networks:
+      - signoz
+
+  signoz-zookeeper:
+    image: signoz/zookeeper:3.7.1
+    profiles: ['signoz']
+    user: root
+    # 官方 cluster.xml 里 ZooKeeper 主机名写死为 `zookeeper-1`，故在此打网络别名，
+    # 保持 vendored 配置逐字节不改（改配置会与上游脱钩，升级即冲突）。
+    networks:
+      signoz:
+        aliases:
+          - zookeeper-1
+    volumes:
+      - signoz_zookeeper:/bitnami/zookeeper
+    environment:
+      ZOO_SERVER_ID: '1'
+      ALLOW_ANONYMOUS_LOGIN: 'yes'
+      ZOO_AUTOPURGE_INTERVAL: '1'
+      ZOO_ENABLE_PROMETHEUS_METRICS: 'yes'
+      ZOO_PROMETHEUS_METRICS_PORT_NUMBER: '9141'
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'curl -s -m 2 http://localhost:8080/commands/ruok | grep error | grep null',
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: ${LKM_RESTART_POLICY:-no}
+
+  signoz-clickhouse:
+    image: clickhouse/clickhouse-server:25.5.6
+    profiles: ['signoz']
+    tty: true
+    depends_on:
+      signoz-init-clickhouse:
+        condition: service_completed_successfully
+      signoz-zookeeper:
+        condition: service_healthy
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: '1'
+    volumes:
+      - ./deploy/signoz/clickhouse/config.xml:/etc/clickhouse-server/config.xml:ro
+      - ./deploy/signoz/clickhouse/users.xml:/etc/clickhouse-server/users.xml:ro
+      - ./deploy/signoz/clickhouse/custom-function.xml:/etc/clickhouse-server/custom-function.xml:ro
+      - ./deploy/signoz/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - signoz_clickhouse_scripts:/var/lib/clickhouse/user_scripts/
+      - signoz_clickhouse:/var/lib/clickhouse/
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', '0.0.0.0:8123/ping']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: ${LKM_RESTART_POLICY:-no}
+    networks:
+      signoz:
+        # 官方配置里主机名写死 `clickhouse`（otel-collector-config.yaml 的 DSN、
+        # cluster.xml 的 distributed DDL 目标），故在本专用网络上打该别名。
+        # 与日志分析用的 `clickhouse` 服务不冲突：它在 lkm 网络，两网互不可见。
+        aliases:
+          - clickhouse
+
+  # 一次性：建库建表（bootstrap + sync up + async up），跑完即退。
+  signoz-migrator:
+    image: signoz/signoz-otel-collector:v0.144.5
+    profiles: ['signoz']
+    depends_on:
+      signoz-clickhouse:
+        condition: service_healthy
+    entrypoint: ['/bin/sh']
+    command:
+      - -c
+      - |
+        /signoz-otel-collector migrate bootstrap &&
+        /signoz-otel-collector migrate sync up &&
+        /signoz-otel-collector migrate async up
+    environment:
+      SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_DSN: tcp://signoz-clickhouse:9000
+      SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_CLUSTER: cluster
+      SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_REPLICATION: 'true'
+      SIGNOZ_OTEL_COLLECTOR_TIMEOUT: 10m
+    restart: 'no'
+    networks:
+      - signoz
+
+  signoz-otel-collector:
+    image: signoz/signoz-otel-collector:v0.144.5
+    profiles: ['signoz']
+    depends_on:
+      signoz-clickhouse:
+        condition: service_healthy
+    entrypoint: ['/bin/sh']
+    command:
+      - -c
+      - |
+        /signoz-otel-collector migrate sync check &&
+        /signoz-otel-collector --config=/etc/otel-collector-config.yaml --manager-config=/etc/manager-config.yaml --copy-path=/var/tmp/collector-config.yaml
+    volumes:
+      - ./deploy/signoz/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+      - ./deploy/signoz/otel-collector-opamp-config.yaml:/etc/manager-config.yaml:ro
+    environment:
+      OTEL_RESOURCE_ATTRIBUTES: host.name=signoz-host,os.type=linux
+      LOW_CARDINAL_EXCEPTION_GROUPING: 'false'
+      SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_DSN: tcp://signoz-clickhouse:9000
+      SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_CLUSTER: cluster
+      SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_REPLICATION: 'true'
+      SIGNOZ_OTEL_COLLECTOR_TIMEOUT: 10m
+    expose:
+      - '4317'
+      - '4318'
+    restart: ${LKM_RESTART_POLICY:-no}
+    # 同时挂 lkm：应用侧 `otel-collector`（profile otel）要把 span 转进来。
+    # 不发布 4317/4318 到宿主：外部代理应经应用侧 collector 或自行网关加鉴权。
+    networks:
+      - lkm
+      - signoz
+
+  signoz:
+    image: signoz/signoz:v0.128.0
+    profiles: ['signoz']
+    depends_on:
+      signoz-clickhouse:
+        condition: service_healthy
+    environment:
+      SIGNOZ_ALERTMANAGER_PROVIDER: signoz
+      SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN: tcp://signoz-clickhouse:9000
+      SIGNOZ_SQLSTORE_SQLITE_PATH: /var/lib/signoz/signoz.db
+      # UI 自身会话签名密钥（非应用 JWT）。生产请覆盖为强随机值。
+      SIGNOZ_TOKENIZER_JWT_SECRET: ${LKM_SIGNOZ_JWT_SECRET:-change-me-signoz-ui}
+    volumes:
+      - signoz_sqlite:/var/lib/signoz/
+    # 只绑回环：SigNoz UI 无内置鉴权，别直接暴露公网（与 grafana 同款取舍）。
+    ports:
+      - '127.0.0.1:8080:8080'
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'localhost:8080/api/v1/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: ${LKM_RESTART_POLICY:-no}
+    networks:
+      - signoz
+
 volumes:
   certbot_conf:
   certbot_www:
@@ -965,7 +1175,16 @@ volumes:
   pulsar_data:
   prometheus_data:
   grafana_data:
+  # SigNoz 自托管（批 6）：数据卷独立命名，与日志分析用的 clickhouse_data 互不相通
+  signoz_clickhouse:
+  signoz_clickhouse_scripts:
+  signoz_sqlite:
+  signoz_zookeeper:
 
 networks:
   lkm:
+    driver: bridge
+  # SigNoz 专用内网：其 otel-collector-config.yaml 里写死 `tcp://clickhouse:9000`，
+  # 而本仓日志分析库的服务名也叫 `clickhouse`——用独立网络彻底隔离，避免同名歧义。
+  signoz:
     driver: bridge

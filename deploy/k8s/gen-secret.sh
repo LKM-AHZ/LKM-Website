@@ -52,6 +52,16 @@ done
 PG_USER="$(get POSTGRES_USER lkm)"
 MINIO_USER="$(get MINIO_ROOT_USER lkmadmin)"
 
+# RS256 密钥 PEM（由 deploy/jwt/gen-keys.sh 生成；可用 *_PATH 覆盖）。
+JWT_PUB_FILE="${JWT_PUBLIC_KEY_PATH:-$ROOT/deploy/jwt/keys/jwt-public.pem}"
+JWT_PRIV_FILE="${JWT_PRIVATE_KEY_PATH:-$ROOT/deploy/jwt/keys/jwt-private.pem}"
+
+jwt_public_block() {
+    [ -f "$JWT_PUB_FILE" ] || return 0
+    printf '  LKM_JWT_PUBLIC_KEY: |\n'
+    sed 's/^/    /' "$JWT_PUB_FILE"
+}
+
 # Secret 的键集 = 应用/中间件消费的全部敏感项。POSTGRES_PASSWORD 与 LKM_DB_PASSWORD 等
 # 同值多键是刻意的：让各 Pod 直接 envFrom 这一张表即可，不必在 Deployment 里到处写
 # secretKeyRef 做逐键映射（少一层易漏的间接）。
@@ -85,4 +95,31 @@ stringData:
   INFISICAL_DB_PASSWORD: "$(get INFISICAL_DB_PASSWORD change-me-infisical-db)"
   INFISICAL_ENCRYPTION_KEY: "$(get INFISICAL_ENCRYPTION_KEY change-me)"
   INFISICAL_AUTH_SECRET: "$(get INFISICAL_AUTH_SECRET change-me)"
+$(jwt_public_block)
 YAML
+
+# ── RS256/JWKS（批 5）：公钥并入 lkm-secrets（非机密，各 Pod 都要能验签）；私钥单独成
+#    Secret `lkm-jwt-signing`，**只**给 auth（签发方）。未生成密钥时两者都不出现：
+#    应用沿用 HS256、网关不做 JWT 校验——与 compose 的「留空即降级」同一口径。
+if [ -f "$JWT_PRIV_FILE" ]; then
+    # 多文档须显式 `---` 分隔，否则它会被并进上一个文档（键重复 → kubectl 报错）
+    cat <<YAML
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lkm-jwt-signing
+  namespace: $NS
+  labels:
+    app.kubernetes.io/part-of: lkm
+type: Opaque
+stringData:
+  LKM_JWT_PRIVATE_KEY: |
+$(sed 's/^/    /' "$JWT_PRIV_FILE")
+YAML
+fi
+
+if [ ! -f "$JWT_PUB_FILE" ]; then
+    echo "[gen-secret] 未找到 $JWT_PUB_FILE：未启用 RS256（网关不做 JWT 验签）" >&2
+fi

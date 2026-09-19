@@ -9,3 +9,5 @@ LKM-official-website/
 LKM-service/
 LKM-on-VSCode/
 LKM-official-static/
+# RS256/JWKS 密钥（批 5）：部署期由 deploy/jwt/gen-keys.sh 生成，绝不入库
+deploy/jwt/keys/

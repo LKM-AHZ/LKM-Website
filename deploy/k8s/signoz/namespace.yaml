@@ -1,0 +1,7 @@
+# SigNoz 专用 namespace：与 lkm 隔离，避免与日志分析用的 ClickHouse 争同名 Service。
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: signoz
+  labels:
+    app.kubernetes.io/part-of: lkm

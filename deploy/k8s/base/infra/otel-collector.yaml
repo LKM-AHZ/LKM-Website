@@ -1,6 +1,23 @@
-# OpenTelemetry Collector（M5 7.2.2）：接收应用 OTLP traces，debug 输出。
-# 与 compose 一致：默认不接线，应用侧需置 LKM_OTEL_ENABLED=true +
-# LKM_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318/v1/traces 才产生 span。
+# OpenTelemetry Collector（M5 7.2.2；批 6 起 export 到 SigNoz）：接收应用 OTLP traces，
+# debug + otlphttp 双路出（配置见 deploy/otel/otel-collector.yaml，compose/k8s 共用一份）。
+# 应用侧需置 LKM_OTEL_ENABLED=true + LKM_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318/v1/traces。
+---
+# SigNoz 的 collector 在独立 namespace `signoz`（见 deploy/k8s/signoz/），而本 collector 的
+# 配置里写的是短名 `signoz-otel-collector:4318`（compose 同源，跨 namespace 解析不到）。
+# 这里用一个 ExternalName Service 把该短名在本 namespace 内补上——**不复制配置**，
+# 且未安装 SigNoz 时它只是解析不到后端（连接被拒，与 compose 未起 profile 同款 fail-open）。
+apiVersion: v1
+kind: Service
+metadata:
+  name: signoz-otel-collector
+  labels:
+    app.kubernetes.io/name: signoz-otel-collector
+    app.kubernetes.io/component: observability
+    app.kubernetes.io/part-of: lkm
+spec:
+  type: ExternalName
+  externalName: signoz-otel-collector.signoz.svc.cluster.local
+---
 apiVersion: v1
 kind: Service
 metadata:

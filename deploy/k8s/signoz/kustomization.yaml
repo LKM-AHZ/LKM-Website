@@ -1,0 +1,38 @@
+# SigNoz 自托管（批 6）——**独立的 kustomization**，不属于 base，需显式 apply。
+#
+# 为什么不放进 base：SigNoz 自带的 ClickHouse 与 ZooKeeper，其官方配置
+# （deploy/signoz/clickhouse/cluster.xml 等）把主机名**写死**为 `clickhouse` / `zookeeper-1`，
+# 而 base 里日志分析用的 ClickHouse Service 已经叫 `clickhouse` —— 同 namespace 下两个同名
+# Service 直接冲突。放进**独立 namespace `signoz`** 才能在保持上游配置逐字节不改的前提下
+# 让两套栈并存（DNS 分别为 clickhouse.lkm 与 clickhouse.signoz）。这与 compose 侧「用独立
+# docker network 隔离」是同一个取舍，两种运行时的形态对应。
+#
+# 另：各 workload 都写 `replicas: 0`（复用 prometheus/grafana 的「副本数 0 = 默认不启用」
+# 机制）——apply 本目录只是把清单放进集群，真正启用还要 scale（见 README）。
+#
+# 构建与部署（与 base 一样需要放开加载限制，因为 configMapGenerator 引用 base 之外的资产）：
+#   kubectl kustomize deploy/k8s/signoz --load-restrictor LoadRestrictionsNone | kubectl apply -f -
+#   kubectl -n signoz scale statefulset/signoz-clickhouse statefulset/signoz-zookeeper \
+#     deployment/signoz deployment/signoz-otel-collector --replicas=1
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: signoz
+
+resources:
+  - namespace.yaml
+  - signoz.yaml
+
+configMapGenerator:
+  # 与 compose 挂的是同一批文件（vendor 自 SigNoz 官方 v0.128.0 deploy/），
+  # 单一来源、不复制副本。
+  - name: signoz-clickhouse-config
+    files:
+      - ../../signoz/clickhouse/config.xml
+      - ../../signoz/clickhouse/users.xml
+      - ../../signoz/clickhouse/custom-function.xml
+      - ../../signoz/clickhouse/cluster.xml
+  - name: signoz-otel-config
+    files:
+      - ../../signoz/otel-collector-config.yaml
+      - ../../signoz/otel-collector-opamp-config.yaml

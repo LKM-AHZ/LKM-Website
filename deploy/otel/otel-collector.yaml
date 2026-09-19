@@ -1,6 +1,12 @@
-# OpenTelemetry Collector（M5 7.2.2）：接收应用 OTLP/HTTP traces，本地 debug 输出。
-# 需接外部 SigNoz 时，在 exporters 下加 otlphttp（endpoint 指向 SigNoz OTLP ingestion），
-# 并把它加入 traces 管线的 exporters 列表；applications 侧只改 LKM_OTEL_EXPORTER_OTLP_ENDPOINT。
+# OpenTelemetry Collector（M5 7.2.2；批 6 接入 SigNoz）：接收应用 OTLP traces 后**双路出**——
+# debug（本地观测，始终保留）与 otlphttp（转发给自托管 SigNoz 的 collector）。
+#
+# 链路：应用 → 本 collector → `signoz-otel-collector`（profile signoz）→ ClickHouse → SigNoz UI。
+# `signoz-otel-collector` 同时挂在 lkm 网络，故此处按服务名直连。
+#
+# **未起 signoz profile 时**：otlphttp 连不上会在日志里重试报错、span 最终丢弃——这是刻意
+# 保留的 fail-open，debug 输出与应用侧均不受影响。嫌吵可临时把 otlphttp 从下面 exporters
+# 列表移除（或改用 `--profile otel --profile signoz` 一并起）。
 receivers:
   otlp:
     protocols:
@@ -15,6 +21,12 @@ processors:
 exporters:
   debug:
     verbosity: normal
+  # SigNoz OTLP/HTTP ingestion。collector 侧只收 span（traces 管线），
+  # 故只需 traces 端点；路径由 exporter 自动拼 /v1/traces。
+  otlphttp:
+    endpoint: http://signoz-otel-collector:4318
+    tls:
+      insecure: true
 
 service:
   # Collector 自身内部指标（含 otelcol_receiver_accepted_spans_total），供验收抓取
@@ -25,4 +37,4 @@ service:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [debug, otlphttp]

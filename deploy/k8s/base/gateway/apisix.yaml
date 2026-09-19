@@ -79,9 +79,15 @@ spec:
             - name: APISIX_UPSTREAM_SUFFIX
               valueFrom:
                 configMapKeyRef: { name: lkm-gateway-config, key: APISIX_UPSTREAM_SUFFIX }
+            # RS256 网关验签（批 5）：公钥来自 lkm-secrets 卷里的文件；Secret 里没有
+            # 该键时 render.sh 自动停用网关验签（文件不存在 → 不展开消费者段）。
+            - name: APISIX_JWT_PUBLIC_KEY_FILE
+              value: /etc/lkm/secrets/LKM_JWT_PUBLIC_KEY
           volumeMounts:
             - name: src
               mountPath: /src
+            - name: jwtpub
+              mountPath: /etc/lkm/secrets
               readOnly: true
             - name: rendered
               mountPath: /out
@@ -110,9 +116,15 @@ spec:
             - name: APISIX_UPSTREAM_SUFFIX
               valueFrom:
                 configMapKeyRef: { name: lkm-gateway-config, key: APISIX_UPSTREAM_SUFFIX }
+            # RS256 网关验签（批 5）：公钥来自 lkm-secrets 卷里的文件；Secret 里没有
+            # 该键时 render.sh 自动停用网关验签（文件不存在 → 不展开消费者段）。
+            - name: APISIX_JWT_PUBLIC_KEY_FILE
+              value: /etc/lkm/secrets/LKM_JWT_PUBLIC_KEY
           volumeMounts:
             - name: src
               mountPath: /src
+            - name: jwtpub
+              mountPath: /etc/lkm/secrets
               readOnly: true
             - name: rendered
               mountPath: /out
@@ -165,6 +177,10 @@ spec:
         - name: src
           configMap:
             name: apisix-templates
+        - name: jwtpub
+          secret:
+            secretName: lkm-secrets
+            optional: true
         - name: rendered
           emptyDir: {}
         # Secret 的键名不能含 `/`，故用扁平键名 + projected 的 items.path 还原成

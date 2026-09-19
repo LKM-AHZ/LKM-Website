@@ -21,6 +21,10 @@ global_rules:
             X-Forwarded-For: "$remote_addr"
             X-Forwarded-Proto: "$scheme"
 
+# RS256 网关验签的消费者（批 5）。该段由 render.sh 从 RSA **公钥** 文件展开；未配置公钥
+# 时整段为空——此时网关不做 JWT 校验，应用层仍照常验签（功能不降级，只是少一道边缘拦截）。
+# __JWT_CONSUMERS_SECTION__
+
 routes:
   # ── ACME http-01：两域名的 challenge 走微型静态 responder（非网关角色）──
   - id: acme-challenge
@@ -90,6 +94,11 @@ routes:
     hosts: [__COMMUNITY_HOSTS__]
     priority: 140
     plugins:
+      # RS256 网关验签（批 5）：校验后台会话 cookie 的 RS256 签名，不合法直接 401，
+      # 不把无效 token 放进后端。未配置公钥时本段为空（见 template 顶部说明）。
+      # 只挂在这一条**明确需要登录**的端点上——`/api/*` 前缀下大量公开只读接口
+      # （内容/检索/GraphQL）必须保持匿名可访问，不能在 api-prefix 上全局开启。
+      # __JWT_ROUTE_SECTION__
       client-control:
         # 与后端 LKM_MAX_UPLOAD_BYTES 同源（render.sh 从同一 env 展开），禁两处手改
         max_body_size: __MAX_BODY_SIZE__
