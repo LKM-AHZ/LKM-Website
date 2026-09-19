@@ -2,6 +2,19 @@
 
 本文档说明如何把 LKM 网站(前端 Astro + 后端 FastAPI)通过 APISIX 统一入口部署到生产主机。
 
+> 本文档用于**首次部署、升级和回滚**。已部署环境的日常命令见
+> [OPS-CHEATSHEET.md](./OPS-CHEATSHEET.md)，文档职责见 [DOCUMENTATION.md](./DOCUMENTATION.md)。
+> 示例中的域名、IP、用户名和密码均为占位符；不要把真实密钥写入本文档或提交到 Git。
+
+## 部署前检查清单
+
+- 服务器时间同步正常，公网安全组只开放实际需要的 `80/443` 和 SSH 端口。
+- 已从 `.env.example` 创建 `.env`，并替换所有密码、JWT/TOTP/验证码密钥及内部 token。
+- `docker compose config --quiet` 成功，且渲染结果中没有空的必填变量。
+- 域名 DNS 已指向目标主机；无域名部署已接受自签证书的限制。
+- 已确定 PostgreSQL、MinIO 和后端数据卷的备份位置及恢复负责人。
+- 生产环境不会直接暴露 PostgreSQL、Redis、Pulsar、MinIO 管理端口或 Grafana 默认密码。
+
 ## 架构概览
 
 单机 docker-compose 编排（支持k8s）,APISIX 为唯一对外入口(nginx 已移除):
@@ -66,7 +79,7 @@
 - 一台有公网 IP 的 Linux 主机,防火墙/安全组放行 `80` 与 `443` 端口。
   > MinIO 不开放独立公网端口:对象存储经 APISIX `/lkm/` 路径转发到 `minio:9000`(仅内网),
   > 浏览器访问经 APISIX 统一入口即可,无需在安全组另开 9000。
-- **域名可选**:有域名走 `lkm.s12mc.xyz`（或其他以解析域名） + Let's Encrypt 正式证书;**无域名可用公网 IP 直连**——
+- **域名可选**:有域名走 `.env` 中 `LKM_COMMUNITY_DOMAINS` / `LKM_OFFICIAL_DOMAINS` 配置的地址 + Let's Encrypt 正式证书;**无域名可用公网 IP 直连**——
   此时走 **HTTP(80)+自签证书(443)** 模式(见下文「无域名/IP 直连」一节),浏览器访问 IP 即可。
 - 已安装 Docker 与 Docker Compose 插件(`docker compose version` 可正常输出)。
 - 如果需要 k8s 则需要安装 kubeadm 或使用发行版。
@@ -74,7 +87,7 @@
 
 ## 一、获取代码
 
-三个仓库需按如下目录结构放置(根仓库为编排入口,两个子项目各自独立):
+生产 Compose 使用四个仓库：根仓库作为编排入口，动态前端、静态官网与后端三个子项目各自独立：
 
 ```
 LKM-Website/                  # 根仓库(含 docker-compose.yml 与本教程)
@@ -85,15 +98,17 @@ LKM-Website/                  # 根仓库(含 docker-compose.yml 与本教程)
 │   ├── apisix/               # 全站公网入口 APISIX 声明式路由/SSL 渲染/冒烟脚本
 │   └── certbot/              # certbot 常驻入口脚本(webroot 申请与续期)
 ├── LKM-official-website/     # 前端仓库(含前端 Dockerfile)
+├── LKM-official-static/      # 静态官网仓库(含 static.Dockerfile)
 └── LKM-service/              # 后端仓库(含后端 Dockerfile)
 ```
 
 示例:
 
 ```sh
-git clone https://github.com/Alma1314/LKM-Website.git
+git clone https://github.com/LKM-AHZ/LKM-Website.git
 cd LKM-Website
 git clone https://github.com/LKM-AHZ/LKM-official-website.git
+git clone https://github.com/LKM-AHZ/LKM-official-static.git
 git clone https://github.com/LKM-AHZ/LKM-service.git
 ```
 
@@ -145,7 +160,7 @@ MINIO_ROOT_PASSWORD=<强随机密码>
 # S3 预签名直传/下载的公网地址(浏览器直连 MinIO 用)。
 # 默认走站点公网地址经 APISIX /lkm/ 转发(MinIO 不打公网端口),一般无需改动。
 # 若 MinIO 暴露了另外的公网端口,改成对应的地址即可。
-# LKM_S3_PUBLIC_ENDPOINT_URL=http://124.220.55.235
+# LKM_S3_PUBLIC_ENDPOINT_URL=https://lkm-ahz.ltd
 
 # 可选:GitHub OAuth 登录(不启用可留空)
 LKM_GITHUB_CLIENT_ID=
@@ -171,7 +186,7 @@ openssl rand -hex 48
 ```
 
 > 若启用 GitHub OAuth,需在 GitHub App 后台把回调地址设为
-> `https://lkm.s12mc.xyz/api/v1/auth/oauth/github/callback`。
+> `https://lkm-ahz.ltd/api/v1/auth/oauth/github/callback`（若更换域名，OAuth 平台配置也必须同步）。
 
 ## 三、构建并启动
 
@@ -329,21 +344,21 @@ docker compose restart signoz-otel-collector   # 注册后立即重连，否则�
 
 ## 三·五、无域名 / 公网 IP 直连(可选)
 
-没有域名时,用公网 IP 直连(如 `http://124.220.55.235`)。需把默认写死的域名 `lkm.s12mc.xyz`
+没有域名时,用公网 IP 直连(如 `http://<公网IP>`)。需把域名配置
 替换为你的公网 IP,并把访问方式从「强制 HTTPS」改为「HTTP 为主 + 自签证书兜底」。
 
 改造点(改了如下文件,按你机器 IP 替换,勿再 clone 到默认域名配置):
 
 ```sh
 # 1. 根仓库 docker-compose.yml:后端域名变量改成 IP(HTTP)
-LKM_RP_ID: 124.220.55.235
-LKM_ORIGIN: http://124.220.55.235
-LKM_GITHUB_REDIRECT_URI: http://124.220.55.235/api/v1/auth/oauth/github/callback
-LKM_FRONTEND_CALLBACK: http://124.220.55.235/login/success
+LKM_RP_ID: <公网IP>
+LKM_ORIGIN: http://<公网IP>
+LKM_GITHUB_REDIRECT_URI: http://<公网IP>/api/v1/auth/oauth/github/callback
+LKM_FRONTEND_CALLBACK: http://<公网IP>/login/success
 
 # 2. 前端
-#    src/data/config.yaml:site 改 http://124.220.55.235
-#    astro.config.ts:allowedHosts 加 "124.220.55.235"
+#    src/data/config.yaml:site 改为 http://<公网IP>
+#    如启用了开发服务器 Host 限制，将 <公网IP> 加入对应 allowlist
 
 # 3. deploy/apisix/apisix.yaml:各路由 hosts 列（IP 无法配 hosts，需另加按 priority 兜底的路由）；
 #    deploy/apisix/config.yaml 的 redirect.https_port 与 dns 解析按需调整
@@ -354,7 +369,7 @@ LKM_FRONTEND_CALLBACK: http://124.220.55.235/login/success
 - **certbot 服务可停**(`docker compose stop certbot`):无域名不签正式证书,其会循环空跑 renew 报错污染日志。
 - **403 后台明文限制**:admin 后台 cookie 带 `Secure`,**纯 HTTP(80)下浏览器不发送** → 后台登录会话无法保持。
   后台请走 **`https://IP`**(自签证书,浏览器首次点"继续访问/信任")。普通用户前台走 JWT,HTTP 下正常。
-- 浏览器访问 `http://124.220.55.235` 即可查看站点。
+- 浏览器访问 `http://<公网IP>` 即可查看站点。
 
 ## 四、首次签发 HTTPS 证书
 
@@ -362,7 +377,7 @@ LKM_FRONTEND_CALLBACK: http://124.220.55.235/login/success
 
 ```sh
 docker compose run --rm --entrypoint certbot certbot certonly --webroot \
-  -w /var/www/certbot -d lkm.s12mc.xyz
+  -w /var/www/certbot -d lkm-ahz.ltd
 
 # 触发 apisix-render 立即重渲染（把新证书内联进 ssls 段），APISIX 监测到文件变化自动 reload
 docker compose restart apisix-render
@@ -375,29 +390,29 @@ docker compose restart apisix-render
 
 ```sh
 # 首页
-curl -I https://lkm.s12mc.xyz/
+curl -I https://lkm-ahz.ltd/
 
 # HTTP 应 301 到 HTTPS
-curl -I http://lkm.s12mc.xyz/
+curl -I http://lkm-ahz.ltd/
 
 # 后端健康检查
-curl https://lkm.s12mc.xyz/api/v1/health
+curl https://lkm-ahz.ltd/api/v1/health
 # 期望: {"code":0,"msg":"OK","data":{"status":"ok"}}
 
 # GraphQL(示例查询)
-curl -X POST https://lkm.s12mc.xyz/graphql \
+curl -X POST https://lkm-ahz.ltd/graphql \
   -H 'Content-Type: application/json' \
   -d '{"query":"{ __typename }"}'
 
 # 静态资源缓存头(应含 Cache-Control: public, immutable)
-curl -I https://lkm.s12mc.xyz/_astro/<某资源路径>
+curl -I https://lkm-ahz.ltd/_astro/<某资源路径>
 
 # 成员头像(头像已对象存储化,key 形如 avatars/<uid>/v<ms>.webp,经 /avatar/{user_id} 读取)
-curl -I https://lkm.s12mc.xyz/api/v1/avatar/<user_id>
+curl -I https://lkm-ahz.ltd/api/v1/avatar/<user_id>
 # 期望: 200(头像由后端从 S3 流式返回)
 
 # 证书链与有效期
-openssl s_client -connect lkm.s12mc.xyz:443 </dev/null 2>/dev/null | openssl x509 -noout -dates
+openssl s_client -connect lkm-ahz.ltd:443 </dev/null 2>/dev/null | openssl x509 -noout -dates
 ```
 
 ## 六、证书续期(自动)

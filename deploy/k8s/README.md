@@ -4,6 +4,17 @@
 清单与 compose **逐服务对应**，不是另一套架构；差异只在「compose 有而 k8s 没有」的机制上，
 每一处都在下面「与 compose 的差异」列明。
 
+> 本文档假定读者已了解根级 [部署说明](../../DEPLOYMENT.md)。当前清单首先服务于 kind
+> 单节点验收；生产使用前必须逐项处理本文“已知限制”，不能把 kind overlay 原样视作生产方案。
+
+## 前置条件
+
+- `kubectl` 与集群版本兼容；客户端支持 Kustomize。
+- 本地验收安装 kind，且宿主机 `80/443` 未被其他服务占用。
+- 已构建并让集群可拉取 `lkm-service`、`lkm-official-website`、`lkm-official-static` 镜像。
+- 根目录 `.env` 已按 `.env.example` 配置；Secret 生成脚本只输出到标准输出，不应重定向后提交。
+- 生产集群已准备 StorageClass、负载均衡、DNS、正式证书和备份方案。
+
 ## 目录
 
 ```

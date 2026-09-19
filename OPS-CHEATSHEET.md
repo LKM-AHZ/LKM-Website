@@ -1,5 +1,11 @@
 # LKM 网站运维速查
 
+本文档用于**已经完成部署**的环境。首次安装、变量说明和架构原理见
+[DEPLOYMENT.md](./DEPLOYMENT.md)；Kubernetes 环境使用 [deploy/k8s/README.md](./deploy/k8s/README.md)。
+
+> 执行重启、迁移、恢复或删除命令前，先运行 `docker compose ps` 和 `docker compose config --services`
+> 确认目标。本文不把 `down -v`、清空数据目录等破坏性命令列为日常操作。
+
 针对部署在公网 Ubuntu 服务器(`docker compose` 编排)的常用运维命令。
 如无特别说明,均在**服务器终端**(SSH 登录后)执行。
 
@@ -102,30 +108,17 @@ docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
 - **登录不再强制 2FA**:普通登录只验密码并签发 token;仅后台**危险操作**(板块/项目审核等)需 2FA。
 - **2FA 信任 1 小时**:验证后 1h 内危险操作不再重复要求;信任窗口由 admin cookie 的 `mfa`/`mfa_at` claim 承载。
 - **admin cookie 带 Secure**:纯 HTTP(80)下浏览器不发送 → **后台请走 `https://<IP>`** 访问(自签证书,首次手动信任)。普通前台走 JWT,HTTP 正常。
-- 手动建管理员(用后端 ORM + Argon2 哈希,勿手写 SQL 密码):
+- 管理员运维(建号/解锁/吊销会话/重置 2FA)统一走脚本,**在 auth 容器内执行**——
+  拆库后管理员真值在 `lkm_auth` 库,只有 auth 服务配了 `LKM_AUTH_DB_*`;backend 容器只有
+  biz 库,旧版 heredoc 建号命令已失效:
   ```sh
-  docker compose exec backend python - <<'PY'
-  import asyncio
-  from sqlalchemy import select
-  from app.db.session import new_session, get_async_engine
-  from app.db.models import User, Profile
-  from app.modules.auth.security import hashpwd
-  async def main():
-      get_async_engine(); db = await new_session()
-      try:
-          u = (await db.execute(select(User).where(User.username=='alma'))).scalars().first()
-          if u:
-              print('exists id', u.id); return
-          h = await hashpwd('你的密码')
-          user = User(username='alma', email='e@x.com', hashed_password=h, account_level='admin')
-          db.add(user); db.add(Profile(user=user, role='admin'))
-          await db.commit(); print('created user id', user.id)
-      finally:
-          await db.close()
-  asyncio.run(main())
-  PY
+  docker compose exec auth python scripts/admin_ops.py list
+  docker compose exec auth python scripts/admin_ops.py create <用户名> <邮箱> <手机> <密码>
+  docker compose exec auth python scripts/admin_ops.py unlock <用户名>
+  docker compose exec auth python scripts/admin_ops.py revoke <用户名>        # 吊销全部会话(前台+后台)
+  docker compose exec auth python scripts/admin_ops.py reset-2fa <用户名> --yes
   ```
-  > 密码必须用后端 `hashpwd`(Argon2id) 生成,勿手写明文;`account_level='admin'` 才可进后台。
+  > 密码由脚本内部 `hashpwd`(Argon2id) 生成,勿手写明文;`account_level='admin'` 才可进后台。
 
 ## 六、证书 / HTTPS
 
@@ -158,4 +151,21 @@ docker compose exec minio sh -c 'mc alias set m http://localhost:9000 "$MINIO_RO
 # 后端卷(博客 git 仓库 blog_repos 等)
 docker run --rm -v lkm_backend_data:/data -v "$PWD":/backup alpine \
   tar czf /backup/backend_files_$(date +%F).tar.gz -C /data .
+
+## 九、运维工具箱(tools/ 与 scripts/)
+
+把上文靠手敲的命令固化成可执行工具。宿主机侧只依赖标准库(有 python3 即可),
+容器侧复用 app 的配置与 ORM。
+
+| 工具 | 用途 | 运行位置 |
+|---|---|---|
+| `python3 tools/preflight.py` | 上线前体检:主密钥强度/互异、Host 白名单、`deploy/**` CRLF、容器状态、健康端点、MinIO 桶、两库 alembic 到 head、证书有效期;`--static-only` 跳过依赖容器的检查 | 宿主机 |
+| `python3 tools/diagnose.py` | Pulsar/worker 诊断:worker 卡 Created、broker 就绪、订阅 backlog、ledger 占用、近期错误 + 处置建议;`--quick` 跳过 backlog | 宿主机 |
+| `python3 tools/backup.py backup` | 一条命令备份 DB + MinIO + backend 卷并校验产物;`list` 列备份、`restore --from <目录> --yes` 恢复 | 宿主机 |
+| `python3 scripts/admin_ops.py <子命令>` | 管理员与会话运维(list/unlock/revoke/reset-2fa/create) | auth 容器 |
+| `python3 scripts/check_storage.py` | `library_files` ↔ MinIO 对账(缺失/孤儿对象);`--fix --yes` 清理孤儿 | backend 容器 |
+
+后台管理页面新增 **`/admin/dlq`**(死信队列):按状态查看死信、重投、丢弃,消息体
+JSON 可展开;对应 `/api/v1/admin/dlq` 端点。该端点本次补齐了统一的 `{code,msg,data}`
+包络(此前返回裸 JSON,前端 `readAdminResp` 无法解析)。
 ```
