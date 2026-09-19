@@ -177,9 +177,11 @@ jwt_sections() {
 }
 
 render_once() {
-    ssl_tmp=/tmp/ssls.yaml
-    jwt_c_tmp=/tmp/jwt_consumers.yaml
-    jwt_r_tmp=/tmp/jwt_route.yaml
+    # 临时片段名带 PID：并发跑本脚本（测试并行、多个 compose 项目共用宿主 /tmp）时，
+    # 固定名会让彼此覆盖中间产物，渲染结果偶发缺路由/串证书。
+    ssl_tmp="/tmp/lkm-apisix-ssls.$$"
+    jwt_c_tmp="/tmp/lkm-apisix-jwt-consumers.$$"
+    jwt_r_tmp="/tmp/lkm-apisix-jwt-route.$$"
     ssl_block "$ssl_tmp"
     jwt_sections "$jwt_c_tmp" "$jwt_r_tmp"
     # 顺序：先展开标量/列表占位（sed），再整段替换多行占位（awk 读入文件）：
