@@ -5,8 +5,7 @@
 #   __SSL_SECTION__        certbot 证书 → 内联 PEM 的 ssls 段（standalone 只收内联 PEM）
 #   __COMMUNITY_HOSTS__    社区域名 + www（各 API/认证路由的 hosts）
 #   __OFFICIAL_HOSTS__     官网域名 + www
-#   __BOT_HOSTS__          bot 面板域名（**不含 www**：bot 面板没有 www 变体）
-#   __ALL_HOSTS__          三者并集（ACME challenge / http→https 重定向）
+#   __ALL_HOSTS__          两者并集（ACME challenge / http→https 重定向）
 #   __COMMUNITY_ORIGINS__  CORS allow_origins（https:// + www）
 #   __MAX_BODY_SIZE__      请求体上限（与后端 max_upload_bytes 同源，见 README/路线图）
 #   __BOT_MAX_BODY_SIZE__  bot 面板请求体上限（**独立来源** LKM_BOT_MAX_UPLOAD_BYTES：
@@ -28,9 +27,6 @@ set -e
 # 社区域名（承载 /api、/graphql、前台与后台认证面）与官网域名（静态站）
 COMMUNITY="${APISIX_COMMUNITY_DOMAINS:-lkm-ahz.ltd}"
 OFFICIAL="${APISIX_OFFICIAL_DOMAINS:-lkm-ahz.icu}"
-# LKM Bot 面板域名（独立子域，见路线图 §8 登记）。与两个主域名并列 DOMAINS：
-# 证书/SNI/ACME 一并对齐——换域名只改这一个变量。
-BOT="${APISIX_BOT_DOMAINS:-bot.lkm-ahz.ltd}"
 SRC="${APISIX_SRC:-/src/apisix.yaml}"
 OUT="${APISIX_OUT:-/out/apisix.yaml}"
 SRC_CONFIG="${APISIX_SRC_CONFIG:-/src/config.yaml}"
@@ -61,7 +57,8 @@ RENDER_ONCE="${APISIX_RENDER_ONCE:-0}"
 
 # 证书按域名逐个签发目录，故 DOMAINS 为并集；hosts/origins 则分域展开
 # （不带引号：后续用于 for 循环词分割）
-DOMAINS="$COMMUNITY $OFFICIAL $BOT"
+# 注：bot 面板已并入社群域的子路径 /bot/（不再有独立子域），故证书/SNI/ACME 只覆盖这两个域。
+DOMAINS="$COMMUNITY $OFFICIAL"
 
 # 下列变量注入 YAML 数组/标量，只用逗号+空格分隔，不含 sed 分隔符 `|` 与换行
 hosts_of() {  # hosts_of "<空格分隔域名>" → "d1, www.d1, d2, www.d2"
@@ -73,10 +70,7 @@ hosts_of() {  # hosts_of "<空格分隔域名>" → "d1, www.d1, d2, www.d2"
 }
 COMMUNITY_HOSTS="$(hosts_of "$COMMUNITY")"
 OFFICIAL_HOSTS="$(hosts_of "$OFFICIAL")"
-# bot 面板**不用 hosts_of**：它会补 www.，而 bot 子域没有 www 变体（补出来只会多一个
-# 永远不解析、也不该进证书 SNI 的 www.bot.*）。多域名用逗号展开，写法与 hosts_of 一致。
-BOT_HOSTS="$(printf '%s' "$BOT" | sed 's/ /, /g')"
-ALL_HOSTS="$COMMUNITY_HOSTS, $OFFICIAL_HOSTS, $BOT_HOSTS"
+ALL_HOSTS="$COMMUNITY_HOSTS, $OFFICIAL_HOSTS"
 # MinIO 路由的 Host 改写目标：取社群主域名（裸域，不带 www）——须与后端
 # LKM_S3_PUBLIC_ENDPOINT_URL 的 host 一致，否则 S3 预签名校验失败
 COMMUNITY_DOMAIN="${COMMUNITY%% *}"
@@ -116,18 +110,11 @@ ssl_block() {
                 continue
             fi
             count=$((count + 1))
+            # SNI 列表必须与路由 hosts 一致（各域均带 www 变体；bot 面板已并入社群域子路径，
+            # 不再有独立 SNI 条目）
             echo "  - snis:"
-            # SNI 列表必须与路由 hosts 一致：主域名带 www，bot 子域不带（无 www 变体，
-            # 由 __BOT_HOSTS__ 的展开规则决定）
-            case " $BOT " in
-                *" $d "*)
-                    echo "    - $d"
-                    ;;
-                *)
-                    echo "    - $d"
-                    echo "    - www.$d"
-                    ;;
-            esac
+            echo "    - $d"
+            echo "    - www.$d"
             echo "    cert: |"
             sed 's/^/      /' "$cert"
             echo "    key: |"
@@ -190,7 +177,6 @@ render_once() {
         -e "s|__COMMUNITY_HOSTS__|$COMMUNITY_HOSTS|g" \
         -e "s|__COMMUNITY_DOMAIN__|$COMMUNITY_DOMAIN|g" \
         -e "s|__OFFICIAL_HOSTS__|$OFFICIAL_HOSTS|g" \
-        -e "s|__BOT_HOSTS__|$BOT_HOSTS|g" \
         -e "s|__ALL_HOSTS__|$ALL_HOSTS|g" \
         -e "s|__COMMUNITY_ORIGINS__|$COMMUNITY_ORIGINS|g" \
         -e "s|__MAX_BODY_SIZE__|$MAX_BODY_SIZE|g" \

@@ -1,8 +1,9 @@
 # 网关自身的配置（**不是**路由；路由在 deploy/apisix/apisix.yaml）。
 #
 # 这里只放「随运行时/环境变化」的项，它们经 apisix-render 展开后注入容器：
-#   APISIX_COMMUNITY_DOMAINS / APISIX_OFFICIAL_DOMAINS / APISIX_BOT_DOMAINS
-#                              —— 域名（hosts/CORS/SNI/ACME 全量跟随）
+#   APISIX_COMMUNITY_DOMAINS / APISIX_OFFICIAL_DOMAINS
+#                              —— 域名（hosts/CORS/SNI/ACME 全量跟随）；
+#                                 bot 面板并入了社群域子路径 /bot/，故无独立 bot 域名
 #   APISIX_DNS_RESOLVER        —— 上游 DNS：compose=127.0.0.11（Docker 内嵌），
 #                                 k8s=CoreDNS ClusterIP（kind 与多数集群为 10.96.0.10）
 #   APISIX_UPSTREAM_SUFFIX     —— upstream 服务名后缀：compose 留空，k8s 为
@@ -17,9 +18,6 @@ metadata:
 data:
   APISIX_COMMUNITY_DOMAINS: lkm-ahz.ltd
   APISIX_OFFICIAL_DOMAINS: lkm-ahz.icu
-  # bot 面板子域名（独立 host，无 www 变体）。与 compose 的 LKM_BOT_DOMAINS 同源，
-  # 换域名时与上面两行一起改。
-  APISIX_BOT_DOMAINS: bot.lkm-ahz.ltd
   # bot 面板请求体上限。**放在这里而不是 lkm-config**：它只有网关消费（bot 应用侧的 512MB
   # 是代码常量、不读环境变量），放进 lkm-config 会被 envFrom 无差别灌进 backend/auth/worker。
   # 与社群站的 LKM_MAX_UPLOAD_BYTES 刻意不同值：bot 单文件 512MB，社群站 100MB。

@@ -241,8 +241,11 @@ bot 面板同理（镜像需先构建并让集群可拉取，kind 用 `setup.sh`
 
 ```sh
 kubectl -n lkm scale deploy/lkmbot --replicas=1
-# 面板经网关 https://bot.lkm-ahz.ltd 访问；证书按 gen-tls.sh 的键名（bot.lkm-ahz.ltd_*）导入
+# 面板经网关的社群域子路径 https://<社群域>/bot/ 访问（社区后台「机器人」菜单内嵌同一地址），
+# 证书用社群域那一份即可（bot 已无独立子域）
 # 初始密码来自 Secret 的 LKM_BOT_DASHBOARD_PASSWORD（未配则看 Pod 日志里的随机密码）
+# SSO 免登需要 lkm-secrets 里有 LKM_JWT_PUBLIC_KEY（gen-secret.sh 已并入）；缺了则由
+# 面板自带登录页兜底（fail-safe），不影响其余功能
 ```
 
 回退：副本置 0 + 变量置 false。

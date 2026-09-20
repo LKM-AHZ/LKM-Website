@@ -364,16 +364,20 @@ routes:
       service_name: "static__UPSTREAM_SUFFIX__:80"
       pass_host: pass
 
-  # ── LKM Bot 面板（bot 子域名）──
-  # 独立 host 而非路径前缀：面板自带 API 与社群站同为绝对路径 /api/v1/*，同 host 下路径
-  # 前缀方案会与 backend 路由正面冲突（详见路线图 §8 登记）。
+  # ── LKM Bot 面板（社群域下的子路径 /bot/，profile=bot 可选组件）──
+  # 挂在同域子路径（而非独立子域）：面板自带 API 与社群站同为绝对路径 /api/v1/*，同 host 下
+  # 若按原样转发会与 backend 路由正面冲突。解法是**剥前缀**——浏览器请求 /bot/api/v1/... →
+  # 本处 proxy-rewrite 去掉 /bot → 面板进程仍以根路径服务其静态资源与 API，backend 的
+  # /api/v1/* 路由完全不受影响（/bot/* 与 /api/* 无重叠）。
+  # ⚠️ proxy-rewrite 写法非法会让**整条路由不加载**（APISIX schema 校验失败），改动后必须
+  #    查路由是否生效（见 DEPLOYMENT「LKM Bot」一节的验证步骤）。
   # 登录写面限流「网关那一半」，分工同社群站 auth-login：这里按 remote_addr 粗粒度削峰
   # （policy=local 各实例独立计数，把洪水挡在应用前）；面板另有应用内令牌桶
   # （astrbot/dashboard/server.py）。不挂 cors：同源面板用不到，且 cors 插件在
   # allow_credential=true 下禁 `*`，多挂一处就多一处「整条路由校验失败不加载」的面。
   - id: bot-auth-login
-    uri: /api/v1/auth/login*
-    hosts: [__BOT_HOSTS__]
+    uri: /bot/api/v1/auth/login*
+    hosts: [__COMMUNITY_HOSTS__]
     priority: 150
     plugins:
       limit-count:
@@ -382,6 +386,24 @@ routes:
         key: remote_addr
         policy: local
         rejected_code: 429
+      proxy-rewrite:
+        regex_uri: ["^/bot/(.*)", "/$1"]
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "lkmbot__UPSTREAM_SUFFIX__:6185"
+      pass_host: pass
+
+  # 面板根（精确 /bot，无尾斜杠）→ 面板的 "/"。
+  # 单独一条是因为 APISIX 的 `/bot/*` 不匹配无尾斜杠的 `/bot`；priority 略高于 bot-panel
+  # 以免被后者抢走（两者 uri 本不重叠，这里只是让「更精确者优先」在配置里显式可见）。
+  - id: bot-panel-root
+    uri: /bot
+    hosts: [__COMMUNITY_HOSTS__]
+    priority: 106
+    plugins:
+      proxy-rewrite:
+        uri: /
     upstream:
       type: roundrobin
       discovery_type: dns
@@ -389,19 +411,23 @@ routes:
       pass_host: pass
 
   # 面板其余流量（含面板 WebSocket）→ lkmbot:6185。
+  # priority 105 远高于 community-catchall(10)，且与 /api/*(110+)、/graphql(107+)、
+  # /_astro/*(100)、minio 等无 uri 重叠——否则面板请求会被 Astro 接走。
   # 必须 enable_websocket：面板实时通道（/api/v1/live-chat/ws、/unified-chat/ws、
   # /api/v1/chat/ws）都落在本 catchall，不开 upgrade 会被 APISIX 剥掉 Upgrade/Connection 头。
   # body 上限刻意用 **独立** 的 __BOT_MAX_BODY_SIZE__（compose 来源 .env 的
   # LKM_BOT_MAX_UPLOAD_BYTES，k8s 来源 lkm-gateway-config）：bot 允许单文件 512MB，远大于
   # 社群站的 100MB，复用 __MAX_BODY_SIZE__ 会把 bot 上传打死。
-  - id: bot-dashboard
-    uri: /*
-    hosts: [__BOT_HOSTS__]
-    priority: 10
+  - id: bot-panel
+    uri: /bot/*
+    hosts: [__COMMUNITY_HOSTS__]
+    priority: 105
     enable_websocket: true
     plugins:
       client-control:
         max_body_size: __BOT_MAX_BODY_SIZE__
+      proxy-rewrite:
+        regex_uri: ["^/bot/(.*)", "/$1"]
     upstream:
       type: roundrobin
       discovery_type: dns

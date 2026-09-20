@@ -21,9 +21,7 @@ services:
       # 网关配置的**单一来源**：路由 hosts 与 CORS 来源由域名变量展开，请求体上限与后端LKM_MAX_UPLOAD_BYTES 取同一个 env。
       APISIX_COMMUNITY_DOMAINS: ${LKM_COMMUNITY_DOMAINS:-lkm-ahz.ltd}
       APISIX_OFFICIAL_DOMAINS: ${LKM_OFFICIAL_DOMAINS:-lkm-ahz.icu}
-      # bot 面板子域名（profile=bot 才用得上，但占位展开与证书 SNI 与是否起 bot 无关，
-      # 故无条件下发，保持「域名单一来源」不被 profile 切碎）
-      APISIX_BOT_DOMAINS: ${LKM_BOT_DOMAINS:-bot.lkm-ahz.ltd}
+      # 注：bot 面板已并入社群域的子路径 /bot/（不再有独立子域），故无 APISIX_BOT_DOMAINS。
       APISIX_MAX_BODY_SIZE: ${LKM_MAX_UPLOAD_BYTES:-104857600}
       # bot 面板请求体上限：与上面那个**独立**（bot 单文件 512MB > 社群站 100MB）
       APISIX_BOT_MAX_BODY_SIZE: ${LKM_BOT_MAX_UPLOAD_BYTES:-550000000}
@@ -153,7 +151,8 @@ services:
 
   # ── LKM Bot 社区机器人面板（AstrBot fork，profile=bot 可选组件）──
   # 启用：docker compose --profile bot up -d --build
-  # 对外只经网关 bot.lkm-ahz.ltd（`deploy/apisix/apisix.yaml` 的 bot-* 路由），
+  # 对外只经网关的**社群域子路径** /bot/（`deploy/apisix/apisix.yaml` 的 bot-* 路由，
+  # 网关剥前缀后转发到这里），面板由社区后台以同源 iframe 内嵌，登录走社区后台 SSO 免登。
   # **刻意不发布 6185**：面板是管理员面，多一个宿主端口就多一个绕过网关限流的入口。
   # 6199（OneBot v11 / NapCat WebSocket）同样不发布，接法见 DEPLOYMENT.md「LKM Bot」一节。
   lkmbot:
@@ -161,6 +160,10 @@ services:
     build:
       context: ./LKM-bot
       dockerfile: Dockerfile
+      args:
+        # 面板前端构建期 base，必须与网关的 /bot 子路径一致（dist 由镜像内构建，
+        # 资源引用与 API 前缀都由此决定）。
+        VITE_BASE_PATH: /bot/
     image: lkm-bot:latest
     environment:
       TZ: Asia/Shanghai
@@ -170,6 +173,11 @@ services:
       # 且网关打容器 IP 会连不上
       DASHBOARD_HOST: 0.0.0.0
       DASHBOARD_PORT: '6185'
+      # 面板挂在 /bot 子路径：后端据此收窄 cookie Path 与 302 Location（默认空 = 根路径）。
+      ASTRBOT_DASHBOARD_BASE_PATH: /bot
+      # 社区后台 SSO 的验签公钥（与网关同一份 jwt-public.pem，只读挂载）。公钥在 → 支持
+      # 票据免登；缺失/读不到 → 面板自动回落自带登录页（fail-safe，不影响其余功能）。
+      LKM_BOT_SSO_PUBLIC_KEY_FILE: /etc/lkm/jwt/jwt-public.pem
       # 首启面板初始密码；留空则面板自生成随机密码并打到日志
       ASTRBOT_DASHBOARD_INITIAL_PASSWORD: ${LKM_BOT_DASHBOARD_PASSWORD:-}
     # 上游 compose 原有的加固项（根 compose 其余服务都没有，属有益偏离，已登记）
@@ -179,6 +187,9 @@ services:
     # （命名卷没有可用的宿主路径）
     volumes:
       - ./LKM-bot/data:/LKMBot/data
+      # RS256 公钥（只读）：与网关同源，bot 只持有公钥（无法伪造社区票据）。
+      # 目录不存在时 docker 会建空目录 → SSO 自动关闭，不硬失败。
+      - ./deploy/jwt/keys:/etc/lkm/jwt:ro
     healthcheck:
       # bot 没有公开的健康端点，/api/v1/* 又绕过面板鉴权中间件（探活语义不真），故用
       # 「端口在听」——与 acme-webroot 的就绪语义同理

@@ -70,9 +70,6 @@ spec:
             - name: APISIX_OFFICIAL_DOMAINS
               valueFrom:
                 configMapKeyRef: { name: lkm-gateway-config, key: APISIX_OFFICIAL_DOMAINS }
-            - name: APISIX_BOT_DOMAINS
-              valueFrom:
-                configMapKeyRef: { name: lkm-gateway-config, key: APISIX_BOT_DOMAINS }
             - name: APISIX_MAX_BODY_SIZE
               valueFrom:
                 configMapKeyRef: { name: lkm-config, key: LKM_MAX_UPLOAD_BYTES }
@@ -113,9 +110,6 @@ spec:
             - name: APISIX_OFFICIAL_DOMAINS
               valueFrom:
                 configMapKeyRef: { name: lkm-gateway-config, key: APISIX_OFFICIAL_DOMAINS }
-            - name: APISIX_BOT_DOMAINS
-              valueFrom:
-                configMapKeyRef: { name: lkm-gateway-config, key: APISIX_BOT_DOMAINS }
             - name: APISIX_MAX_BODY_SIZE
               valueFrom:
                 configMapKeyRef: { name: lkm-config, key: LKM_MAX_UPLOAD_BYTES }
@@ -212,12 +206,8 @@ spec:
                       path: lkm-ahz.icu/fullchain.pem
                     - key: lkm-ahz.icu_privkey.pem
                       path: lkm-ahz.icu/privkey.pem
-                    # bot 面板子域名证书：与其他两个域名同款扁平键名 → <域名>/<文件名> 还原。
-                    # 缺该证书时 render.sh 走自签占位（bot 冷启动不受影响），故 Secret 可省。
-                    - key: bot.lkm-ahz.ltd_fullchain.pem
-                      path: bot.lkm-ahz.ltd/fullchain.pem
-                    - key: bot.lkm-ahz.ltd_privkey.pem
-                      path: bot.lkm-ahz.ltd/privkey.pem
+                    # 注：bot 面板已并入社群域子路径 /bot/，不再有独立子域证书条目
+                    # （面板流量走社群域证书的 SNI）。
 ---
 # 微型 ACME http-01 responder（非网关角色）：仅服务 certbot webroot 的挑战文件。
 # 保留原因与 compose 一致——APISIX 不服务静态文件，http-01 需要一个静态 responder。

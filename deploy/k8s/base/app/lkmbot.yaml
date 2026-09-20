@@ -68,6 +68,14 @@ spec:
               value: 0.0.0.0
             - name: DASHBOARD_PORT
               value: "6185"
+            # 面板挂在社群域子路径 /bot/（网关剥前缀后转发到本 Pod）：后端据此收窄 cookie Path
+            # 与 302 Location。与前端构建期 base（镜像内 VITE_BASE_PATH=/bot/）必须一致。
+            - name: ASTRBOT_DASHBOARD_BASE_PATH
+              value: /bot
+            # 社区后台 SSO 的验签公钥（与网关同源，只挂载该文件）。读不到 → 面板回落自带
+            # 登录页（fail-safe），不影响其余功能。
+            - name: LKM_BOT_SSO_PUBLIC_KEY_FILE
+              value: /etc/lkm/jwt/LKM_JWT_PUBLIC_KEY
             # 面板初始密码：**只取这一个键**（不 envFrom 整张 lkm-secrets——那会把 JWT/DB/
             # 对象存储密钥一并灌进 bot 进程，见 app-config.yaml 的「谁真的用」原则）。
             # optional=true：未在 .env 配该项时 Secret 里没有这个键，Pod 仍应正常起
@@ -81,6 +89,9 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /LKMBot/data
+            - name: jwtpub
+              mountPath: /etc/lkm/jwt
+              readOnly: true
           startupProbe:
             tcpSocket: { port: http }
             periodSeconds: 5
@@ -98,6 +109,15 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: lkmbot-data
+        # SSO 验签公钥：只从 lkm-secrets 取这一个键（与网关读的是同一个）。Secret/键缺失
+        # 时 Pod 照常起，SSO 自动停用（面板回落自带登录页）。
+        - name: jwtpub
+          secret:
+            secretName: lkm-secrets
+            optional: true
+            items:
+              - key: LKM_JWT_PUBLIC_KEY
+                path: LKM_JWT_PUBLIC_KEY
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

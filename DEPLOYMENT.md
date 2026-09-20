@@ -43,7 +43,7 @@
 | `redis` | `redis:7-alpine` | 仅内网 `6379` | leader 租约、共享限流 / 缓存 |
 | `pulsar` | `apachepulsar/pulsar:3.3.0` | 仅内网 `6650`/`8080` | **消息总线**(standalone,自带 ZK+BookKeeper;6650 broker / 8080 Admin REST)。**无状态化**启动包装,见下 |
 | `minio` | `minio/minio:latest` | 仅容器内 `9000`/`9001` | S3 兼容对象存储:文件库文件与成员头像 |
-| `lkmbot` | `lkm-bot:latest` | 仅经网关 `bot.` 子域 | 社区机器人面板(AstrBot fork)。**可选组件**(`--profile bot`);面板 `6185` 不发布到宿主 |
+| `lkmbot` | `lkm-bot:latest` | 仅经网关 `/bot/` 子路径 | 社区机器人面板(AstrBot fork)。**可选组件**(`--profile bot`);面板 `6185` 不发布到宿主 |
 | `shipyard` | `soulter/shipyard-bay:latest` | 无 | bot 代码沙箱(旧版 Bay)。**可选组件**(`--profile bot`),挂 docker.sock |
 
 > `worker*` 与 `backend`/`auth` 共用 `lkm-service:latest` 镜像,仅启动入口不同;各自常驻消费
@@ -71,7 +71,7 @@
               ├─ /lkm/        ──> minio:9000     (对象存储预签名直传/下载, 保留全部 path+query)
               ├─ 其余         ──> astro:4321     (SSR)          ← 社区域名 lkm-ahz.ltd
               ├─ 全部         ──> static:80      (静态官网)      ← 官网域名 lkm-ahz.icu
-              └─ 全部         ──> lkmbot:6185    (机器人面板)    ← bot 子域 bot.lkm-ahz.ltd
+              └─ /bot/*       ──> lkmbot:6185    (机器人面板,剥 /bot 前缀) ← 社群域子路径
 ```
 
 后端 REST 前缀为 `/api/vN`,GraphQL 为 `/graphql`。APISIX 用 Docker 内嵌 DNS(`dns_resolver: ['127.0.0.11']` + `discovery_type: dns`)在运行时动态解析 `backend`/`astro`,不依赖启动期 DNS。
@@ -83,7 +83,7 @@
 - 一台有公网 IP 的 Linux 主机,防火墙/安全组放行 `80` 与 `443` 端口。
   > MinIO 不开放独立公网端口:对象存储经 APISIX `/lkm/` 路径转发到 `minio:9000`(仅内网),
   > 浏览器访问经 APISIX 统一入口即可,无需在安全组另开 9000。
-- **域名可选**:有域名走 `.env` 中 `LKM_COMMUNITY_DOMAINS` / `LKM_OFFICIAL_DOMAINS`(以及启用 bot 时的 `LKM_BOT_DOMAINS`)配置的地址 + Let's Encrypt 正式证书;**无域名可用公网 IP 直连**——
+- **域名可选**:有域名走 `.env` 中 `LKM_COMMUNITY_DOMAINS` / `LKM_OFFICIAL_DOMAINS` 配置的地址 + Let's Encrypt 正式证书;**无域名可用公网 IP 直连**——
   此时走 **HTTP(80)+自签证书(443)** 模式(见下文「无域名/IP 直连」一节),浏览器访问 IP 即可。
 - 已安装 Docker 与 Docker Compose 插件(`docker compose version` 可正常输出)。
 - 如果需要 k8s 则需要安装 kubeadm 或使用发行版。
@@ -143,7 +143,7 @@ POSTGRES_DB=lkm
 # 换域名只改这三个:render.sh 据此展开 APISIX 的 hosts / CORS 来源 / MinIO Host 改写 / 证书 SNI。
 # LKM_COMMUNITY_DOMAINS=lkm-ahz.ltd      # 社群站(/api、/graphql、认证面、MinIO 预签名 host)
 # LKM_OFFICIAL_DOMAINS=lkm-ahz.icu       # 官网静态站
-# LKM_BOT_DOMAINS=bot.lkm-ahz.ltd        # bot 面板子域(独立 host,无 www 变体;仅 --profile bot 用到)
+# (bot 面板并入社群域子路径 /bot/,无独立域名配置项)
 # 上传上限(字节):同一个值同时给后端校验与网关 client-control.max_body_size
 # LKM_MAX_UPLOAD_BYTES=104857600
 # bot 的上传上限**独立**(bot 单文件 512MB vs 社群站 100MB,共用会把 bot 上传打死)
@@ -212,9 +212,9 @@ docker compose up -d --build
 
 - `apisix-render` sidecar 读路由模板 + certbot 证书，渲染出内联 PEM 的 `ssls` 段写入共享卷（每 6h 或重启时重渲染），APISIX 监测文件变化自动 reload。
   它同时是**网关配置的单一模板展开点**：模板里只放占位，域名与请求体上限从环境变量展开——
-  `LKM_COMMUNITY_DOMAINS`/`LKM_OFFICIAL_DOMAINS`/`LKM_BOT_DOMAINS` → 各路由 `hosts`、CORS `allow_origins`、MinIO Host 改写、证书 SNI；
+  `LKM_COMMUNITY_DOMAINS`/`LKM_OFFICIAL_DOMAINS` → 各路由 `hosts`、CORS `allow_origins`、MinIO Host 改写、证书 SNI；
   `LKM_MAX_UPLOAD_BYTES` → 社群站各路由 `client-control.max_body_size`（与后端校验同源），
-  `LKM_BOT_MAX_UPLOAD_BYTES` → **仅** bot 路由的同名项（bot 单文件上限 512MB，与社群站不可共用）。
+  `LKM_BOT_MAX_UPLOAD_BYTES` → **仅** `/bot` 路由的同名项（bot 单文件上限 512MB，与社群站不可共用）。
   模板里若残留未展开占位，render 会**拒绝覆盖**上一版配置并在日志报错，不会把坏 YAML 喂给 APISIX。
 - `acme-webroot` 是极小的 http-01 challenge 静态 responder（不承担网关路由）。
 - **CORS 与登录限流的归属**：CORS 只在网关（应用层生产不挂，非生产才挂供本地跨域调试）；
@@ -227,9 +227,9 @@ docker compose up -d --build
 **运行时冒烟/验收**（网关 up 后，在仓库根执行）：
 
 ```sh
-sh deploy/apisix/smoke.sh 127.0.0.1          # 14 项：301(社群/官网/bot)/健康/GraphQL/限流/MinIO/缓存/WS/…
+sh deploy/apisix/smoke.sh 127.0.0.1          # 13 项：301(社群/官网)/健康/GraphQL/限流/MinIO/缓存/WS/…
 SMOKE_HEAVY=1 sh deploy/apisix/smoke.sh      # 追加 100m 上传边界（真发 ~101MB）
-SMOKE_BOT=1 sh deploy/apisix/smoke.sh        # 追加 bot 面板可达（需先 --profile bot 起 lkmbot）
+SMOKE_BOT=1 sh deploy/apisix/smoke.sh        # 追加 /bot 面板可达（需先 --profile bot 起 lkmbot）
 ```
 
 脚本用 `--resolve <域名>:<端口>:127.0.0.1` 保证 TLS SNI 正确（APISIX 按 SNI 选证书，直连 IP 无 SNI 会握手失败），并用 `--noproxy '*'` 绕过宿主机代理。
@@ -356,42 +356,57 @@ docker compose restart signoz-otel-collector   # 注册后立即重连，否则�
 ## 三·十一、LKM Bot 社区机器人(可选,`--profile bot`)
 
 `LKM-bot/` 是 AstrBot 的 fork，提供 IM 平台接入与机器人面板。**默认不随主栈启动**——面板是大镜像
-（含 nodejs/ffmpeg），且它与社区站共用一套 `/api/v1/*` 绝对路径，必须靠独立子域名隔离。
+（含 nodejs/ffmpeg）。面板挂在**社群域的子路径 `/bot/`**（不再是独立子域名），并由社区后台
+「机器人」菜单以同源 iframe 内嵌；它自带的 `/api/v1/*` 与社区站同前缀，靠网关 `proxy-rewrite`
+**剥掉 `/bot` 前缀**隔离（剥掉后面板进程仍以根路径服务，社区站 backend 路由不受影响）。
 
 ```sh
-# 1) DNS：为 bot 子域加一条 A 记录（默认 bot.lkm-ahz.ltd，须与 LKM_BOT_DOMAINS 一致）
-# 2) .env：配面板初始密码（留空则面板自生成随机密码并打到日志）
+# 1) .env：配面板初始密码（留空则面板自生成随机密码并打到日志）
 #    LKM_BOT_DASHBOARD_PASSWORD=<强随机>
-# 3) 首签证书（与主域名同一 webroot；render 每 6h 重渲染会自动拾取）
-docker compose run --rm --entrypoint certbot certbot certonly --webroot \
-  -w /var/www/certbot -d bot.lkm-ahz.ltd
-# 4) 起 bot（网关路由与证书 SNI 在主栈起时已一并生效，无需重启 apisix）
+# 2) SSO 免登（可选但推荐）：配好 RS256 密钥（含公钥），见「RS256 网关验签」一节
+#    sh deploy/jwt/gen-keys.sh         # 未配则面板回落自带登录页，其余功能不受影响
+# 3) 起 bot（网关 /bot 路由随主栈起时已生效，无需重启 apisix）
 docker compose --profile bot up -d --build
-# 5) 验收
+# 4) 验收
 SMOKE_BOT=1 sh deploy/apisix/smoke.sh 127.0.0.1
 ```
 
-访问 `https://bot.lkm-ahz.ltd` 即面板（账号/密码见首启日志或上面的 `.env`）。回退：
-`docker compose --profile bot down`（bot 数据在宿主机目录里，不受 `-v` 影响）。
+访问方式（二选一，同一个面板）：
+
+- **社区后台 →「机器人」菜单**（推荐）：管理员已登录后台即免登进入（SSO）。
+- 直接开 `https://lkm-ahz.ltd/bot/`：无后台会话时落到面板自带登录页（账号/密码见首启日志或
+  上面的 `.env`）。
+
+回退：`docker compose --profile bot down`（bot 数据在宿主机目录里，不受 `-v` 影响）。
+
+**首次构建**：面板前端 `dist` **由镜像内构建**（多阶段 Dockerfile），因此构建机需要能访问
+npm registry；`VITE_BASE_PATH`（compose build args，默认 `/bot/`）决定前端 base，必须与网关的
+`/bot` 子路径一致。构建用 `pnpm build:subpath`（跳过 `vue-tsc`，类型检查在开发侧做）。
 
 **端口面**——只经网关：
 
-- 面板 `6185` **不发布到宿主**，对外只经 APISIX 的 `bot-*` 路由（含面板 WebSocket）。
+- 面板 `6185` **不发布到宿主**，对外只经 APISIX 的 `/bot/*` 路由（含面板 WebSocket）。
 - OneBot v11 `6199` 同样不发布，按 NapCat 的位置二选一：
   - **同机容器**（推荐）：让 NapCat 加入 `lkm` 网络，连 `ws://lkmbot:6199/ws`，无需开端口。
   - **异机**：自行加端口映射（建议绑内网网卡，如 `127.0.0.1:6199:6199`）并在 bot 配置里设 token；
-    不要把 6199 挂到 `bot.lkm-ahz.ltd` 上（`/ws` 与面板同 host，鉴权与协议都不同）。
+    不要把 6199 挂到 `/bot` 路径上（`/ws` 与面板同 host，鉴权与协议都不同）。
 
 **请求体上限独立**：bot 允许单文件 512MB，而社区站是 100MB，故用 `LKM_BOT_MAX_UPLOAD_BYTES`
-（默认 550000000）单独展开到 bot 路由——两个值**不要**合并成同一个变量。
+（默认 550000000）单独展开到 `/bot` 路由——两个值**不要**合并成同一个变量。
 
 **数据目录**：`./LKM-bot/data`（宿主机 bind，非命名卷）。必须 bind 的原因见下条沙箱共享目录；
 副作用是该目录归 root 所有，非 root 运维删除需 sudo。
 
-**升级注意（受限网络）**：bot 域名已并入 `render.sh` 的证书域集合，故已在跑的旧部署下次重渲染时
-会为 `bot.lkm-ahz.ltd` 生成自签占位证书——该步依赖 `apisix-render` 容器内 `apk add openssl`。
-**容器出不了网时这一步会失败并让 render 容器退出**，与「删数据卷后网关需预置自签证书」是同一个坑。
-规避：本机 `openssl` 预生成写入 `certbot_conf` 卷（或先做一次 `docker compose run --rm apisix-render` 验证）。
+**⚠️ 不要在面板里用「WebUI 在线更新」**：该功能会下载上游 registry 的 dist（**根 base**）覆盖
+`data/dist`，而它的优先级高于镜像内置的 dist —— 一旦覆盖，`/bot/` 下的静态资源与 API 前缀全部
+失配（面板白屏）。升级面板请走**重建镜像**（`docker compose --profile bot build lkmbot`）。
+
+**⚠️ 面板里的平台回调地址要带 `/bot` 前缀**：`callback_api_base`（面板「配置」里）用于给外部
+IM 平台回调用，需填 `https://lkm-ahz.ltd/bot`，否则回调会打到社区站 backend（`/api/v1/webhooks/...`
+同前缀）。
+
+**升级注意**：`/bot` 路由不新增证书域，故不再需要单独首签子域证书——`render.sh` 的证书域集合
+只剩社群/官网两个（旧部署里残留的 `bot.lkm-ahz.ltd` 证书目录可删）。
 
 **代码沙箱（shipyard，同一 profile）**：
 
@@ -687,7 +702,7 @@ cd LKM-service
 - **后端反复重启(Exited 3)**:通常是密钥缺失或过短。确认 `.env` 中三个密钥已设置为强随机值,并 `docker compose up -d` 重读。
 - **上传大文件被拒**:APISIX 路由已设 `client-control.max_body_size: 104857600`(100m),与后端 `max_upload_bytes` 对齐;更大文件需同时改 `deploy/apisix/apisix.yaml` 与后端配置。
 - **数据库**:使用 PostgreSQL(`timescale/timescaledb:latest-pg16` 服务,卷持久化)。后端经 `LKM_DB_*` 环境变量以 `postgresql+asyncpg` 连接;首次启动时自动建表(默认走 `create_all` 通道)。**换库/改 schema 后需重建数据卷**(`docker compose down -v`,见「数据库」章节)。
-- **换域名**:网关侧只需在 `.env` 改 `LKM_COMMUNITY_DOMAINS` / `LKM_OFFICIAL_DOMAINS`(启用 bot 时还有 `LKM_BOT_DOMAINS`)(hosts、CORS 来源、MinIO Host、证书 SNI 全量跟随,见「单一来源」),再 `docker compose up -d apisix-render` 重渲染;bot 子域还需补 DNS 与证书;此外还要改后端**自身身份**类配置 `LKM_ALLOWED_HOSTS`/`LKM_ORIGIN`/`LKM_RP_ID`/`LKM_GITHUB_REDIRECT_URI`/`LKM_FRONTEND_CALLBACK`/`LKM_S3_PUBLIC_ENDPOINT_URL` 与前端 `PUBLIC_SITE_URL`/`PUBLIC_BASE_PATH`,并重新签发证书。
+- **换域名**:网关侧只需在 `.env` 改 `LKM_COMMUNITY_DOMAINS` / `LKM_OFFICIAL_DOMAINS`(hosts、CORS 来源、MinIO Host、证书 SNI 全量跟随,见「单一来源」),再 `docker compose up -d apisix-render` 重渲染(bot 面板随社群域走,无需额外 DNS/证书);此外还要改后端**自身身份**类配置 `LKM_ALLOWED_HOSTS`/`LKM_ORIGIN`/`LKM_RP_ID`/`LKM_GITHUB_REDIRECT_URI`/`LKM_FRONTEND_CALLBACK`/`LKM_S3_PUBLIC_ENDPOINT_URL` 与前端 `PUBLIC_SITE_URL`/`PUBLIC_BASE_PATH`,并重新签发证书。
 
 - **头像/文件上传 404**:MinIO 桶未创建(S3 不自动建桶)。先 `mc mb .../lkm` 建桶(见上文「MinIO 首次初始化」)。
 

@@ -11,7 +11,7 @@
 # 用法：
 #   sh deploy/k8s/gen-tls.sh                       # 为默认域生成自签证书并写入 Secret
 #   DOMAINS="a.com b.com" sh deploy/k8s/gen-tls.sh # 指定域名
-# 域名清单须与网关的 APISIX_{COMMUNITY,OFFICIAL,BOT}_DOMAINS 一致（含 bot 子域名）；
+# 域名清单须与网关的 APISIX_{COMMUNITY,OFFICIAL}_DOMAINS 一致；
 # 少一个域名的表现是该域名在 render.sh 里退回自签占位（不致命，但浏览器会报证书不受信）。
 #   sh deploy/k8s/gen-tls.sh | kubectl -n lkm apply -f -
 #
@@ -24,7 +24,7 @@ set -eu
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 NS="${NAMESPACE:-lkm}"
-DOMAINS="${DOMAINS:-lkm-ahz.ltd lkm-ahz.icu bot.lkm-ahz.ltd}"
+DOMAINS="${DOMAINS:-lkm-ahz.ltd lkm-ahz.icu}"
 DAYS="${DAYS:-30}"
 
 command -v openssl >/dev/null 2>&1 || { echo "需要本机 openssl" >&2; exit 1; }

@@ -129,9 +129,7 @@ docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
 ## 六、证书 / HTTPS
 
 - **有域名**:`docker compose run --rm --entrypoint certbot certbot certonly --webroot -w /var/www/certbot -d <域名>`;续期由 certbot 每 12h 自动 + `apisix-render` 每 6h 重渲染触发 APISIX reload。
-- **bot 子域**:面板域名(`LKM_BOT_DOMAINS`,默认 `bot.lkm-ahz.ltd`)需**单独首签**并先加 DNS:
-  `docker compose run --rm --entrypoint certbot certbot certonly --webroot -w /var/www/certbot -d bot.lkm-ahz.ltd`;
-  render 按 `<证书目录>/bot.lkm-ahz.ltd/` 取证书,缺证书时退回自签占位(面板仍可访问,浏览器告警)。
+- **bot 面板**:已并入社群域子路径 `/bot/`(无独立子域名),证书随社群域那一份,**无需**单独首签或额外 DNS。
 - **无域名(自签)**:`apisix-render` 缺证书时自动生成自签占位(CN=域名),443 可用但浏览器告警;http 由 APISIX 301 到 https。
 
 ## 七、常见故障速查(本次实战踩坑)
@@ -147,7 +145,10 @@ docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
 | worker `cron ValueError` | arq `weekday` 简写错 | `'thu'`→`'thurs'`(arq 的 WEEKDAYS 是三/四字母) |
 | 首页 502 SSR 崩,`Cannot find package 'tailwind-merge'` | `tailwind-merge` 在 devDeps 但被 SSR 运行时 import;runner 用 `--prod` | 挪到 dependencies 并更新 pnpm-lock.yaml 后重建 |
 | admin 登录后文件上传/危险操作被拒 | 见「管理员」节(需 2FA / 走 https) | 后台走 `https://<IP>`;危险操作需先验 2FA |
-| `https://bot.<域名>` 502/503 | lkmbot 未起(可选组件,主栈 up 不含它) | `docker compose --profile bot up -d lkmbot` |
+| `https://<社群域>/bot/` 502/503 | lkmbot 未起(可选组件,主栈 up 不含它) | `docker compose --profile bot up -d lkmbot` |
+| `https://<社群域>/bot/` 404(被前台接走) | `/bot` 路由未加载(proxy-rewrite 写法非法会让整条路由被 APISIX 丢弃) | `docker compose logs apisix \| grep -i schema`;`docker compose exec apisix-render grep -n bot /out/apisix.yaml` 确认三条路由在产物里,再 `docker compose restart apisix` |
+| 面板白屏/资源 404,Network 里 JS 打到 `/assets/...` | 面板 dist 是**根 base** 的:要么被「WebUI 在线更新」覆盖,要么**旧部署遗留的 `LKM-bot/data/dist`**(旧版会从上游下载)在优先级上盖过镜像内置 dist | 删掉遗留产物 `sudo rm -rf LKM-bot/data/dist` 后重启 `lkmbot`;不要再在面板里点在线更新。内置 dist 由镜像构建(带 `/bot` base),版本与 Core 一致时不会触发下载 |
+| 打开 `/admin/bot/*` 停在面板登录页 | SSO 未生效(未配 RS256 公钥 / auth 不可达 / 票据被重放) | 确认 `deploy/jwt/keys/jwt-public.pem` 存在且已挂进 lkmbot(compose 卷);看 `docker compose logs lkmbot \| grep -i sso`;不修也不影响使用——手动登录一次即可 |
 | bot 面板上传大文件被 413 | 网关 `LKM_BOT_MAX_UPLOAD_BYTES` 被改小(独立于社群站的 100MB) | 恢复默认 `550000000` 并 `docker compose up -d apisix-render apisix` |
 | shipyard 起不来沙箱,日志找不到 bind 源 | `LKM_BOT_SHIP_DATA_DIR` 不是宿主机**绝对**路径(或 compose 不在仓库根执行) | 在 `.env` 写绝对路径后 `docker compose --profile bot up -d shipyard` |
 | bot 沙箱功能不生效(无报错) | 默认 `booter=shipyard_neo` 与旧 Bay 不匹配,且 `computer_use_runtime=none` | 面板「配置 → 沙箱」把 booter 改 `shipyard`、endpoint 填 `http://shipyard:8156` |

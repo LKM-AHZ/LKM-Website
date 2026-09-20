@@ -1,7 +1,8 @@
 #!/bin/sh
 # APISIX 网关冒烟 + 运行时验收（M5 7.2.4）。在网关已启动的宿主机上跑：
-#   sh deploy/apisix/smoke.sh [BASE_HOST] [COMMUNITY_DOMAIN] [OFFICIAL_DOMAIN] [BOT_DOMAIN]
-# 默认 BASE_HOST=127.0.0.1（本机映射 80/443），域名 lkm-ahz.ltd / lkm-ahz.icu / bot.lkm-ahz.ltd。
+#   sh deploy/apisix/smoke.sh [BASE_HOST] [COMMUNITY_DOMAIN] [OFFICIAL_DOMAIN]
+# 默认 BASE_HOST=127.0.0.1（本机映射 80/443），域名 lkm-ahz.ltd / lkm-ahz.icu。
+# bot 面板已并入社群域子路径 /bot/（无独立子域名），其检查见 SMOKE_BOT。
 #
 # 连接方式（与旧脚本的关键差异，均为真机验收暴露的必要修正）：
 #   --resolve <domain>:<port>:<host>  让 TLS SNI = 域名。APISIX 按 SNI 选 ssls 证书，
@@ -11,13 +12,14 @@
 #
 # 环境变量：
 #   SMOKE_HEAVY=1        追加 100m 上传边界检查（真的发 ~101MB，耗时/占带宽）
-#   SMOKE_BOT=1          追加 bot 面板可达检查（需 `--profile bot` 已起 lkmbot，否则 503）
+#   SMOKE_BOT=1          追加 bot 面板可达检查（社群域 /bot/ 子路径，需 `--profile bot` 已起
+#                        lkmbot，否则 upstream 解析不到会 503）
 #   SMOKE_HTTP_PORT=N     网关 HTTP 端口（默认 80；k8s NodePort 场景指到映射后的宿主端口）
 #   SMOKE_HTTPS_PORT=N    网关 HTTPS 端口（默认 443；同上）
 #
 # 覆盖：http→https 301（不含内部端口）、后端健康、GraphQL、官网分流、登录限流 429、
 #       MinIO 路由（Host 改写后到达对象存储）、静态资源长缓存头、WS upgrade 转发、上传体上限、
-#       bot 子域名 301（+ SMOKE_BOT=1 时的面板可达）。
+#       SMOKE_BOT=1 时的 bot 面板子路径可达。
 # 仍需人工/独立手段：X-Real-IP 等转发头落上游的值（需 header echo 上游）、证书续期后 reload、
 #       DNS discovery 在后端容器重启换 IP 后的自愈；见 ../执行路线图.md §7.2.4。
 set -u
@@ -25,7 +27,6 @@ set -u
 HOST="${1:-127.0.0.1}"
 COMMUNITY="${2:-lkm-ahz.ltd}"
 OFFICIAL="${3:-lkm-ahz.icu}"
-BOT="${4:-bot.lkm-ahz.ltd}"
 # 网关端口。默认 80/443（compose 直接映射）；k8s 下网关是 NodePort，
 # 用 SMOKE_HTTP_PORT/SMOKE_HTTPS_PORT 指到映射后的宿主端口（如 8080/8443）。
 # ⚠️ 非默认端口时 URL 必须显式带端口——`--resolve` 只改解析目标，不会改默认端口。
@@ -158,23 +159,23 @@ case "$code" in
     *)           echo "FAIL  ws upgrade reaches backend (status=$code, expected 403/101)"; fail=$((fail + 1)) ;;
 esac
 
-# ── 10) bot 面板子域名（bot.lkm-ahz.ltd）──
-# 301 与 bot 容器在不在无关（APISIX 直接跳转），故**无条件**检查：它抓的是「bot 域名没进
-# 网关 hosts 并集」这类配置回归——漏了的表现恰是 http 下 404 而非跳转。
-loc=$(curl -s --noproxy '*' --resolve "$BOT:$HTTP_PORT:$HOST" -o /dev/null -w '%{redirect_url}' "http://$BOT$HP/")
-check "bot http->https 301" sh -c 'printf "%s" "$1" | grep -q "^https://" && ! printf "%s" "$1" | grep -q ":9443"' _ "$loc"
-
-# 面板可达需 lkmbot 已起（可选组件，默认不起）→ 用 SMOKE_BOT=1 显式开启，
-# 否则上游 service_name=lkmbot:6185 解析不到，APISIX 回 503 会把冒烟判红。
+# ── 10) bot 面板（社群域子路径 /bot/）──
+# bot 面板已并入社群域（无独立子域名，故不再有「bot 域 301」这一项）。面板可达需 lkmbot 已起
+# （可选组件，默认不起）→ 用 SMOKE_BOT=1 显式开启，否则上游 service_name=lkmbot:6185 解析不到，
+# APISIX 回 503 会把冒烟判红。
+# 两条都测：无尾斜杠的 /bot 由 bot-panel-root 精确路由兜住，/bot/ 走 bot-panel catchall——
+# 「proxy-rewrite 写法非法 → 整条路由不加载」这类回归会表现为 404（被 Astro 接走）而非 200。
 if [ "${SMOKE_BOT:-0}" = "1" ]; then
-    # 未登录访问面板根路径：登录页 200，或重定向到登录页 302/307
-    code=$(curl -sk --noproxy '*' --resolve "$BOT:$HTTPS_PORT:$HOST" -o /dev/null -w '%{http_code}' "https://$BOT$SP/")
-    case "$code" in
-        200|302|307) echo "PASS  bot dashboard reachable (status=$code)"; pass=$((pass + 1)) ;;
-        *)           echo "FAIL  bot dashboard reachable (status=$code, expected 200/302/307)"; fail=$((fail + 1)) ;;
-    esac
+    for bot_path in /bot /bot/; do
+        # 未登录访问面板：登录页 200，或重定向到登录页 302/307
+        code=$(curl -sk --noproxy '*' --resolve "$COMMUNITY:$HTTPS_PORT:$HOST" -o /dev/null -w '%{http_code}' "https://$COMMUNITY$SP$bot_path")
+        case "$code" in
+            200|302|307) echo "PASS  bot panel reachable at $bot_path (status=$code)"; pass=$((pass + 1)) ;;
+            *)           echo "FAIL  bot panel reachable at $bot_path (status=$code, expected 200/302/307)"; fail=$((fail + 1)) ;;
+        esac
+    done
 else
-    echo "SKIP  bot dashboard check (set SMOKE_BOT=1 and start --profile bot to enable)"
+    echo "SKIP  bot panel check (set SMOKE_BOT=1 and start --profile bot to enable)"
 fi
 
 echo "----"
