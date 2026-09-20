@@ -5,14 +5,11 @@ reference
 .obsidian
 __pycache__
 
-# 子项目各自是独立 git 仓库，根仓库不嵌套跟踪
-LKM-official-website/
-LKM-service/
-LKM-on-VSCode/
-LKM-official-static/
-LKM-bot/
+# 子项目以 git submodule 形式跟踪（见 .gitmodules）
 # RS256/JWKS 密钥（批 5）：部署期由 deploy/jwt/gen-keys.sh 生成，绝不入库
 deploy/jwt/keys/
 
 # 运维备份产物（数据库转储 + 对象副本），含生产数据，绝不入库
 backups/
+# Added by code-review-graph
+.code-review-graph/

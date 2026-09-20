@@ -1,0 +1,25 @@
+# ⚠️ 本部署**不使用**本单元：本站走 docker compose / k8s（见 DEPLOYMENT.md「LKM Bot」一节），
+#    面板由 compose 的 lkmbot 服务承载。此文件是 LKM-bot fork 的 standalone（系统包管理器/AUR，
+#    见 LKM-bot/docs/*/deploy/astrbot/sys-pm.md）安装路径的 systemd --user 单元，从
+#    LKM-bot/scripts/ 迁来此处归档，避免与根编排的运维资产混在一起（曾看起来像本项目的部署面）。
+#    使用前提是 /usr/bin/lkmbot 已由包管理器安装、数据目录为 ~/.local/share/lkmbot。
+# user service
+[Unit]
+Description=LKMBot Service
+Documentation=https://github.com/Alma1314/LKM-bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/lkmbot
+ExecStart=/usr/bin/sh -c '/usr/bin/lkmbot run || { /usr/bin/lkmbot init && /usr/bin/lkmbot run; }'
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lkmbot-%u
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

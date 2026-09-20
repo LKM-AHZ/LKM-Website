@@ -76,6 +76,10 @@ spec:
             - name: APISIX_BOT_MAX_BODY_SIZE
               valueFrom:
                 configMapKeyRef: { name: lkm-gateway-config, key: APISIX_BOT_MAX_BODY_SIZE }
+            # bot 子路径前缀：路由 uri/剥前缀正则的匹配串（与 lkmbot 面板读同一个键）
+            - name: APISIX_BOT_BASE_PATH
+              valueFrom:
+                configMapKeyRef: { name: lkm-gateway-config, key: LKM_BOT_BASE_PATH }
             - name: APISIX_DNS_RESOLVER
               valueFrom:
                 configMapKeyRef: { name: lkm-gateway-config, key: APISIX_DNS_RESOLVER }
@@ -116,6 +120,10 @@ spec:
             - name: APISIX_BOT_MAX_BODY_SIZE
               valueFrom:
                 configMapKeyRef: { name: lkm-gateway-config, key: APISIX_BOT_MAX_BODY_SIZE }
+            # bot 子路径前缀：路由 uri/剥前缀正则的匹配串（与 lkmbot 面板读同一个键）
+            - name: APISIX_BOT_BASE_PATH
+              valueFrom:
+                configMapKeyRef: { name: lkm-gateway-config, key: LKM_BOT_BASE_PATH }
             - name: APISIX_DNS_RESOLVER
               valueFrom:
                 configMapKeyRef: { name: lkm-gateway-config, key: APISIX_DNS_RESOLVER }

@@ -68,14 +68,24 @@ spec:
               value: 0.0.0.0
             - name: DASHBOARD_PORT
               value: "6185"
-            # 面板挂在社群域子路径 /bot/（网关剥前缀后转发到本 Pod）：后端据此收窄 cookie Path
-            # 与 302 Location。与前端构建期 base（镜像内 VITE_BASE_PATH=/bot/）必须一致。
+            # 面板挂在社群域子路径（默认 /bot，网关剥前缀后转发到本 Pod）：后端据此收窄 cookie
+            # Path 与 302 Location。**从 lkm-gateway-config 取与网关路由同一个键**（单一来源，
+            # 不再各自硬编码）；前端构建期 base 由 compose 构建镜像时传参，也必须同值。
             - name: ASTRBOT_DASHBOARD_BASE_PATH
-              value: /bot
+              valueFrom:
+                configMapKeyRef: { name: lkm-gateway-config, key: LKM_BOT_BASE_PATH }
             # 社区后台 SSO 的验签公钥（与网关同源，只挂载该文件）。读不到 → 面板回落自带
             # 登录页（fail-safe），不影响其余功能。
             - name: LKM_BOT_SSO_PUBLIC_KEY_FILE
               value: /etc/lkm/jwt/LKM_JWT_PUBLIC_KEY
+            # SSO 票据协议值：与签发侧 auth 读**同一张表**（lkm-config-botsso，单一来源）。
+            # 按 key 取用而非 envFrom——本 Pod 刻意只拿它真正消费的配置。
+            - name: LKM_BOT_SSO_AUDIENCE
+              valueFrom:
+                configMapKeyRef: { name: lkm-config-botsso, key: LKM_BOT_SSO_AUDIENCE }
+            - name: LKM_BOT_SSO_ISSUER
+              valueFrom:
+                configMapKeyRef: { name: lkm-config-botsso, key: LKM_BOT_SSO_ISSUER }
             # 面板初始密码：**只取这一个键**（不 envFrom 整张 lkm-secrets——那会把 JWT/DB/
             # 对象存储密钥一并灌进 bot 进程，见 app-config.yaml 的「谁真的用」原则）。
             # optional=true：未在 .env 配该项时 Secret 里没有这个键，Pod 仍应正常起

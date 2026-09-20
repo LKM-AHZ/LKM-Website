@@ -16,6 +16,8 @@
 #                        lkmbot，否则 upstream 解析不到会 503）
 #   SMOKE_HTTP_PORT=N     网关 HTTP 端口（默认 80；k8s NodePort 场景指到映射后的宿主端口）
 #   SMOKE_HTTPS_PORT=N    网关 HTTPS 端口（默认 443；同上）
+#   LKM_BOT_BASE_PATH=<p> bot 面板子路径前缀（默认 /bot）：非默认前缀的部署要给同一个值，
+#                        否则 SMOKE_BOT 检查会探错路径（前缀本身由 render.sh 展开进路由）
 #
 # 覆盖：http→https 301（不含内部端口）、后端健康、GraphQL、官网分流、登录限流 429、
 #       MinIO 路由（Host 改写后到达对象存储）、静态资源长缓存头、WS upgrade 转发、上传体上限、
@@ -32,6 +34,9 @@ OFFICIAL="${3:-lkm-ahz.icu}"
 # ⚠️ 非默认端口时 URL 必须显式带端口——`--resolve` 只改解析目标，不会改默认端口。
 HTTP_PORT="${SMOKE_HTTP_PORT:-80}"
 HTTPS_PORT="${SMOKE_HTTPS_PORT:-443}"
+# bot 面板子路径前缀（与 render.sh 的 APISIX_BOT_BASE_PATH 同源变量 LKM_BOT_BASE_PATH）。
+# 非默认前缀的部署必须给同一个值，否则本脚本会去探一个根本不存在的路径。
+BOT_BASE_PATH="${LKM_BOT_BASE_PATH:-/bot}"
 HP=""; [ "$HTTP_PORT" = "80" ] || HP=":$HTTP_PORT"
 SP=""; [ "$HTTPS_PORT" = "443" ] || SP=":$HTTPS_PORT"
 pass=0
@@ -163,10 +168,10 @@ esac
 # bot 面板已并入社群域（无独立子域名，故不再有「bot 域 301」这一项）。面板可达需 lkmbot 已起
 # （可选组件，默认不起）→ 用 SMOKE_BOT=1 显式开启，否则上游 service_name=lkmbot:6185 解析不到，
 # APISIX 回 503 会把冒烟判红。
-# 两条都测：无尾斜杠的 /bot 由 bot-panel-root 精确路由兜住，/bot/ 走 bot-panel catchall——
+# 两条都测：无尾斜杠的前缀由 bot-panel-root 精确路由兜住，带尾斜杠的走 bot-panel catchall——
 # 「proxy-rewrite 写法非法 → 整条路由不加载」这类回归会表现为 404（被 Astro 接走）而非 200。
 if [ "${SMOKE_BOT:-0}" = "1" ]; then
-    for bot_path in /bot /bot/; do
+    for bot_path in "$BOT_BASE_PATH" "$BOT_BASE_PATH/"; do
         # 未登录访问面板：登录页 200，或重定向到登录页 302/307
         code=$(curl -sk --noproxy '*' --resolve "$COMMUNITY:$HTTPS_PORT:$HOST" -o /dev/null -w '%{http_code}' "https://$COMMUNITY$SP$bot_path")
         case "$code" in

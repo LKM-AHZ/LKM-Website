@@ -50,6 +50,9 @@ spec:
           envFrom:
             - configMapRef: { name: lkm-config }
             - configMapRef: { name: lkm-config-authdb }
+            # bot 面板 SSO 票据协议值（audience/issuer）：auth 是签发侧，与消费侧 lkmbot
+            # 读的是同一张表（单一来源），两侧同值才能验签通过。
+            - configMapRef: { name: lkm-config-botsso }
             - secretRef: { name: lkm-secrets }
             # RS256/JWKS（批 5）：私钥只下发到签发方 auth。optional=true —— 未生成
             # 密钥时该 Secret 不存在，Pod 仍应正常起（沿用 HS256），不能硬依赖。

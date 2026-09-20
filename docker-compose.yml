@@ -7,6 +7,14 @@ x-otel-env: &otel-env
   LKM_OTEL_EXPORTER_OTLP_ENDPOINT: ${LKM_OTEL_EXPORTER_OTLP_ENDPOINT:-}
   LKM_OTEL_SAMPLE_RATIO: ${LKM_OTEL_SAMPLE_RATIO:-0.1}
 
+# bot 面板 SSO 票据的**协议值**：签发侧 auth 与消费侧 lkmbot 必须逐字同值（audience 不符
+# 票据被拒、issuer 不符同样被拒），而两者分属不同部署单元/仓库，无法共享 import —— 故单一
+# 来源落在这里：默认值只写一次，两个服务经 YAML 锚点注入**同名**变量。
+# 另有三个协议值刻意不做部署变量（type/ttl/account_level），理由见 .env.example 同名段落。
+x-bot-sso-env: &bot-sso-env
+  LKM_BOT_SSO_AUDIENCE: ${LKM_BOT_SSO_AUDIENCE:-lkm:bot}
+  LKM_BOT_SSO_ISSUER: ${LKM_BOT_SSO_ISSUER:-lkm-auth}
+
 services:
   # ── APISIX 网关 ──
   # standalone 模式（yaml config_provider，无 etcd）：路由模板 deploy/apisix/apisix.yaml 中的
@@ -25,6 +33,9 @@ services:
       APISIX_MAX_BODY_SIZE: ${LKM_MAX_UPLOAD_BYTES:-104857600}
       # bot 面板请求体上限：与上面那个**独立**（bot 单文件 512MB > 社群站 100MB）
       APISIX_BOT_MAX_BODY_SIZE: ${LKM_BOT_MAX_UPLOAD_BYTES:-550000000}
+      # bot 面板子路径前缀（默认 /bot）：路由 uri 与剥前缀正则都由它展开。与 lkmbot 服务的
+      # 构建期 VITE_BASE_PATH / 运行期 ASTRBOT_DASHBOARD_BASE_PATH 同源，改一处三面跟随。
+      APISIX_BOT_BASE_PATH: ${LKM_BOT_BASE_PATH:-/bot}
       # RS256 网关验签（批 5）：RSA 公钥 PEM 文件（容器内路径）。留空 → 网关不做 JWT
       # 校验（应用层照常验签），保持既有部署零改动可升级。生成：sh deploy/jwt/gen-keys.sh
       APISIX_JWT_PUBLIC_KEY_FILE: ${LKM_JWT_PUBLIC_KEY_FILE:-}
@@ -161,11 +172,15 @@ services:
       context: ./LKM-bot
       dockerfile: Dockerfile
       args:
-        # 面板前端构建期 base，必须与网关的 /bot 子路径一致（dist 由镜像内构建，
-        # 资源引用与 API 前缀都由此决定）。
-        VITE_BASE_PATH: /bot/
+        # 面板前端构建期 base（**必须带尾斜杠**，vite base 语义），与网关路由子路径同源：
+        # 改 LKM_BOT_BASE_PATH 时这里与下面的 ASTRBOT_DASHBOARD_BASE_PATH、网关模板一并跟随。
+        # dist 由镜像内构建，资源引用与 API 前缀都由此决定。
+        VITE_BASE_PATH: ${LKM_BOT_BASE_PATH:-/bot}/
     image: lkm-bot:latest
     environment:
+      # SSO 票据协议值（audience/issuer）：与签发侧 auth 同源（见文件头 x-bot-sso-env），
+      # 消费侧据此验签——issuer 校验即本次补齐的那道。
+      <<: *bot-sso-env
       TZ: Asia/Shanghai
       # 显式固定 data 路径（默认取 cwd，入口一改就漂移）
       ASTRBOT_ROOT: /LKMBot
@@ -173,8 +188,9 @@ services:
       # 且网关打容器 IP 会连不上
       DASHBOARD_HOST: 0.0.0.0
       DASHBOARD_PORT: '6185'
-      # 面板挂在 /bot 子路径：后端据此收窄 cookie Path 与 302 Location（默认空 = 根路径）。
-      ASTRBOT_DASHBOARD_BASE_PATH: /bot
+      # 面板挂在子路径（默认 /bot）：后端据此收窄 cookie Path 与 302 Location（默认空 = 根路径）。
+      # 来源与构建期 VITE_BASE_PATH 同一变量（**无尾斜杠**形态，后端要的是纯前缀）。
+      ASTRBOT_DASHBOARD_BASE_PATH: ${LKM_BOT_BASE_PATH:-/bot}
       # 社区后台 SSO 的验签公钥（与网关同一份 jwt-public.pem，只读挂载）。公钥在 → 支持
       # 票据免登；缺失/读不到 → 面板自动回落自带登录页（fail-safe，不影响其余功能）。
       LKM_BOT_SSO_PUBLIC_KEY_FILE: /etc/lkm/jwt/jwt-public.pem
@@ -609,6 +625,9 @@ services:
       LKM_JWT_PRIVATE_KEY_FILE: ${LKM_JWT_PRIVATE_KEY_FILE:-}
       LKM_JWT_PUBLIC_KEY_FILE: ${LKM_JWT_PUBLIC_KEY_FILE:-}
       LKM_JWT_HS_FALLBACK: ${LKM_JWT_HS_FALLBACK:-true}
+      # bot 面板 SSO 票据协议值（audience/issuer）：auth 是**签发侧**，与消费侧 lkmbot
+      # 同源（见文件头 x-bot-sso-env）——两侧同值才能验签通过。
+      <<: *bot-sso-env
       # 公网 Host 白名单：与 backend 同值；auth 亦承载对外认证面。
       # CORS 同 backend：生产唯一权威是 APISIX，不在此下发。
       LKM_ALLOWED_HOSTS: ${LKM_ALLOWED_HOSTS:-lkm-ahz.ltd,www.lkm-ahz.ltd,backend,auth,localhost,127.0.0.1}

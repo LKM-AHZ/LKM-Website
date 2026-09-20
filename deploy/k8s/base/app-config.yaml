@@ -84,3 +84,17 @@ data:
   LKM_PREFECT_WORK_POOL: lkm
   LKM_PREFECT_FLOW_DEPLOYMENT_NAME: reconcile
   PREFECT_API_URL: http://prefect-server:4200/api
+---
+# ④ bot 面板 SSO 票据协议值：**恰好两个消费方**——签发侧 auth（envFrom 本表）与消费侧
+#    lkmbot（configMapKeyRef 取同名键）。单列一张表而不塞进 lkm-config：后者被
+#    backend/全部 worker envFrom，塞进去就是「给不消费的进程灌变量」（见本文件顶部原则）。
+#    改默认值只改这里（compose 侧对应 x-bot-sso-env 锚点，两边同值）。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lkm-config-botsso
+data:
+  # 票据的隔离边界：与 lkm:admin 后台/前台会话互不收票
+  LKM_BOT_SSO_AUDIENCE: lkm:bot
+  # 签发方身份：消费侧验签时校验 iss（不符/缺失 → 回落面板登录页，fail-safe）
+  LKM_BOT_SSO_ISSUER: lkm-auth

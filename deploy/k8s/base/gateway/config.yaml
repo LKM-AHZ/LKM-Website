@@ -8,6 +8,8 @@
 #                                 k8s=CoreDNS ClusterIP（kind 与多数集群为 10.96.0.10）
 #   APISIX_UPSTREAM_SUFFIX     —— upstream 服务名后缀：compose 留空，k8s 为
 #                                 `.lkm.svc.cluster.local`（CoreDNS 不补 search domain）
+#   LKM_BOT_BASE_PATH          —— bot 面板子路径前缀：网关与 lkmbot 面板**共用同一个键**
+#                                 （compose 侧同名变量由 .env 下发）
 # 域名与上限两处与 lkm-config 共享同一来源，避免「网关改了后端没改」。
 apiVersion: v1
 kind: ConfigMap
@@ -22,5 +24,10 @@ data:
   # 是代码常量、不读环境变量），放进 lkm-config 会被 envFrom 无差别灌进 backend/auth/worker。
   # 与社群站的 LKM_MAX_UPLOAD_BYTES 刻意不同值：bot 单文件 512MB，社群站 100MB。
   APISIX_BOT_MAX_BODY_SIZE: "550000000"
+  # bot 面板子路径前缀（与 compose 的 LKM_BOT_BASE_PATH 同名同义）。**两个消费方读同一个键**：
+  # ① apisix-render → APISIX_BOT_BASE_PATH（路由 uri 与剥前缀正则的匹配串）；
+  # ② lkmbot 部署 → ASTRBOT_DASHBOARD_BASE_PATH（面板据此收窄 cookie Path 与 302 Location）。
+  # 前端构建期 base 不在此列：k8s 用的是 compose 构建的镜像，构建参数由 compose 那条链传入。
+  LKM_BOT_BASE_PATH: /bot
   APISIX_DNS_RESOLVER: 10.96.0.10
   APISIX_UPSTREAM_SUFFIX: .lkm.svc.cluster.local

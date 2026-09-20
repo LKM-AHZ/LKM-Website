@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "code-review-graph": {
+      "command": "/home/alma/.local/bin/code-review-graph",
+      "args": [
+        "serve"
+      ],
+      "cwd": "/home/alma/projects/LKM-Website",
+      "env": {
+        "CRG_RECURSE_SUBMODULES": "1"
+      },
+      "type": "stdio"
+    }
+  }
+}

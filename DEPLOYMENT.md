@@ -144,6 +144,9 @@ POSTGRES_DB=lkm
 # LKM_COMMUNITY_DOMAINS=lkm-ahz.ltd      # 社群站(/api、/graphql、认证面、MinIO 预签名 host)
 # LKM_OFFICIAL_DOMAINS=lkm-ahz.icu       # 官网静态站
 # (bot 面板并入社群域子路径 /bot/,无独立域名配置项)
+# bot 面板的子路径前缀(**单一来源**,默认 /bot):网关路由 uri/剥前缀正则、面板运行期 base
+#   与前端构建期 base 三面都由它派生(改了这一处即全量跟随,细节见「LKM Bot」一节)。
+# LKM_BOT_BASE_PATH=/bot
 # 上传上限(字节):同一个值同时给后端校验与网关 client-control.max_body_size
 # LKM_MAX_UPLOAD_BYTES=104857600
 # bot 的上传上限**独立**(bot 单文件 512MB vs 社群站 100MB,共用会把 bot 上传打死)
@@ -214,7 +217,9 @@ docker compose up -d --build
   它同时是**网关配置的单一模板展开点**：模板里只放占位，域名与请求体上限从环境变量展开——
   `LKM_COMMUNITY_DOMAINS`/`LKM_OFFICIAL_DOMAINS` → 各路由 `hosts`、CORS `allow_origins`、MinIO Host 改写、证书 SNI；
   `LKM_MAX_UPLOAD_BYTES` → 社群站各路由 `client-control.max_body_size`（与后端校验同源），
-  `LKM_BOT_MAX_UPLOAD_BYTES` → **仅** `/bot` 路由的同名项（bot 单文件上限 512MB，与社群站不可共用）。
+  `LKM_BOT_MAX_UPLOAD_BYTES` → **仅** bot 路由的同名项（bot 单文件上限 512MB，与社群站不可共用），
+  `LKM_BOT_BASE_PATH` → bot 三条路由的 `uri` 与剥前缀正则（`proxy-rewrite.regex_uri`）的匹配串，
+  与面板自身的 dashboard base / 前端构建期 base 同一来源（改一处三面跟随，见「LKM Bot」一节）。
   模板里若残留未展开占位，render 会**拒绝覆盖**上一版配置并在日志报错，不会把坏 YAML 喂给 APISIX。
 - `acme-webroot` 是极小的 http-01 challenge 静态 responder（不承担网关路由）。
 - **CORS 与登录限流的归属**：CORS 只在网关（应用层生产不挂，非生产才挂供本地跨域调试）；
@@ -379,9 +384,33 @@ SMOKE_BOT=1 sh deploy/apisix/smoke.sh 127.0.0.1
 
 回退：`docker compose --profile bot down`（bot 数据在宿主机目录里，不受 `-v` 影响）。
 
+**子路径前缀是单一来源**：面板涉及三处前缀，全部由 `.env` 的 `LKM_BOT_BASE_PATH`（默认 `/bot`）
+派生，改这一处即全量跟随，不要再分别改：
+
+| 消费点 | 形态 | 来源 |
+| --- | --- | --- |
+| 网关路由 `uri` 与剥前缀正则 | 无尾斜杠 | `render.sh` 展开 `__BOT_BASE_PATH__`（compose 传 `APISIX_BOT_BASE_PATH`；k8s 取 `lkm-gateway-config/LKM_BOT_BASE_PATH`）|
+| 面板运行期 `ASTRBOT_DASHBOARD_BASE_PATH` | 无尾斜杠 | compose 展开同一变量；k8s 的 lkmbot 部署读 `lkm-gateway-config/LKM_BOT_BASE_PATH` 同一个键 |
+| 前端构建期 `VITE_BASE_PATH` | **带尾斜杠** | compose `build.args` 展开同一变量 |
+
 **首次构建**：面板前端 `dist` **由镜像内构建**（多阶段 Dockerfile），因此构建机需要能访问
-npm registry；`VITE_BASE_PATH`（compose build args，默认 `/bot/`）决定前端 base，必须与网关的
-`/bot` 子路径一致。构建用 `pnpm build:subpath`（跳过 `vue-tsc`，类型检查在开发侧做）。
+npm registry。`LKM-bot/Dockerfile` 的 `ARG VITE_BASE_PATH` 默认值是 `/`（上游语义：镜像与部署
+位置无关），**挂子路径的部署必须显式传参** —— compose 已从 `LKM_BOT_BASE_PATH` 传入，故
+`docker compose --profile bot build lkmbot` 构建出的 dist 带正确 base；直接 `docker build`
+不带参数得到的是根 base 包，挂到子路径下静态资源会 404。构建用 `pnpm build:subpath`
+（跳过 `vue-tsc`，类型检查在开发侧做）。
+
+**systemd 单元不参与本部署**：`deploy/systemd/lkmbot.service` 是 LKM-bot standalone（系统包
+管理器 / AUR，见 `LKM-bot/docs/*/deploy/astrbot/sys-pm.md`）安装路径的 `systemd --user` 单元，
+本站用 compose / k8s，**不使用**它（从 `LKM-bot/scripts/` 迁到此处归档，以免看起来像本项目的
+部署面）。
+
+**SSO 票据的协议值是单一来源**：`LKM_BOT_SSO_AUDIENCE` / `LKM_BOT_SSO_ISSUER` 由 compose 的
+`x-bot-sso-env` 锚点**只写一次**默认值、同时注入 auth（签发侧）与 lkmbot（消费侧）；k8s 侧为
+`lkm-config-botsso` 一张表，两侧读同一个键（`lint-imports` 之外，另有静态测试锁两侧默认值一致）。
+消费侧**现在会校验 `iss`**——此前签发时写入 `iss` 却从不校验，等于放行任何持同一 audience 的
+签发方；不符或缺失一律 302 回面板登录页（fail-safe，不会变成 5xx）。另外三个协议值
+（`type`/`ttl`/`account_level`）刻意不做部署变量，理由见 `.env.example` 的「LKM Bot」段。
 
 **端口面**——只经网关：
 

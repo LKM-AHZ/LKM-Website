@@ -1,0 +1,15 @@
+[submodule "LKM-bot"]
+	path = LKM-bot
+	url = https://github.com/LKM-AHZ/LKM-bot.git
+[submodule "LKM-service"]
+	path = LKM-service
+	url = https://github.com/LKM-AHZ/LKM-service.git
+[submodule "LKM-official-website"]
+	path = LKM-official-website
+	url = https://github.com/LKM-AHZ/LKM-official-website.git
+[submodule "LKM-official-static"]
+	path = LKM-official-static
+	url = https://github.com/LKM-AHZ/LKM-official-static.git
+[submodule "LKM-on-VSCode"]
+	path = LKM-on-VSCode
+	url = https://github.com/LKM-AHZ/LKM-on-VSCode.git

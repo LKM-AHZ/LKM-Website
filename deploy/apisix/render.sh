@@ -10,6 +10,10 @@
 #   __MAX_BODY_SIZE__      请求体上限（与后端 max_upload_bytes 同源，见 README/路线图）
 #   __BOT_MAX_BODY_SIZE__  bot 面板请求体上限（**独立来源** LKM_BOT_MAX_UPLOAD_BYTES：
 #                          bot 允许单文件 512MB，远大于社群站的 100MB，不可复用上面那个）
+#   __BOT_BASE_PATH__      bot 面板子路径前缀（来源 LKM_BOT_BASE_PATH，默认 /bot）：
+#                          路由 uri 与剥前缀正则的匹配串，必须与面板自身的 dashboard base
+#                          及前端构建期 base 同值，否则路由空转（改了这里要同时改 compose
+#                          的 lkmbot 服务 / k8s 的 lkm-gateway-config）
 #   __UPSTREAM_SUFFIX__    upstream 服务名后缀（compose 空 / k8s `.lkm.svc.cluster.local`）
 #   __DNS_RESOLVER__       上游 DNS（compose 127.0.0.11 / k8s CoreDNS ClusterIP）
 #
@@ -45,6 +49,11 @@ MAX_BODY_SIZE="${APISIX_MAX_BODY_SIZE:-104857600}"
 # 默认 550000000 ≈ 550MB（bot 应用侧单文件上限 512MB + multipart 开销）。刻意不复用
 # MAX_BODY_SIZE：那个数被社群站后端与网关共用，改它会把社群站的上限一起抬高。
 BOT_MAX_BODY_SIZE="${APISIX_BOT_MAX_BODY_SIZE:-550000000}"
+# bot 面板子路径前缀：路由 uri 与 proxy-rewrite 剥前缀正则都由它展开（占位 __BOT_BASE_PATH__）。
+# compose 侧来源 .env 的 LKM_BOT_BASE_PATH（k8s 侧放 lkm-gateway-config），与面板自身的
+# ASTRBOT_DASHBOARD_BASE_PATH / 构建期 VITE_BASE_PATH 同一变量——三面必须同值，否则
+# 路由匹配不到面板。**不带尾斜杠**（正则里紧跟 `/(.*)`，带斜杠会多出一级）。
+BOT_BASE_PATH="${APISIX_BOT_BASE_PATH:-/bot}"
 # RS256 网关验签（批 5）：公钥 PEM 文件路径（未配置/文件不存在 → 网关不做 JWT 校验）。
 # 公钥非机密，但由部署期生成，故以文件挂载而非写进模板；consumer/claim/cookie 三项
 # 必须与 LKM-service 侧 jwt_keys.GATEWAY_KEY 及 admin 会话 cookie 名一致（有静态测试锁）。
@@ -181,6 +190,7 @@ render_once() {
         -e "s|__COMMUNITY_ORIGINS__|$COMMUNITY_ORIGINS|g" \
         -e "s|__MAX_BODY_SIZE__|$MAX_BODY_SIZE|g" \
         -e "s|__BOT_MAX_BODY_SIZE__|$BOT_MAX_BODY_SIZE|g" \
+        -e "s|__BOT_BASE_PATH__|$BOT_BASE_PATH|g" \
         -e "s|__UPSTREAM_SUFFIX__|$UPSTREAM_SUFFIX|g" \
         "$SRC" | awk -v ssl="$ssl_tmp" -v jwtc="$jwt_c_tmp" -v jwtr="$jwt_r_tmp" '
         /^# __SSL_SECTION__$/ {
