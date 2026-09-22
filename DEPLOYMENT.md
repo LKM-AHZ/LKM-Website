@@ -405,12 +405,15 @@ npm registry。`LKM-bot/Dockerfile` 的 `ARG VITE_BASE_PATH` 默认值是 `/`（
 本站用 compose / k8s，**不使用**它（从 `LKM-bot/scripts/` 迁到此处归档，以免看起来像本项目的
 部署面）。
 
-**SSO 票据的协议值是单一来源**：`LKM_BOT_SSO_AUDIENCE` / `LKM_BOT_SSO_ISSUER` 由 compose 的
-`x-bot-sso-env` 锚点**只写一次**默认值、同时注入 auth（签发侧）与 lkmbot（消费侧）；k8s 侧为
-`lkm-config-botsso` 一张表，两侧读同一个键（`lint-imports` 之外，另有静态测试锁两侧默认值一致）。
-消费侧**现在会校验 `iss`**——此前签发时写入 `iss` 却从不校验，等于放行任何持同一 audience 的
-签发方；不符或缺失一律 302 回面板登录页（fail-safe，不会变成 5xx）。另外三个协议值
-（`type`/`ttl`/`account_level`）刻意不做部署变量，理由见 `.env.example` 的「LKM Bot」段。
+**SSO 票据的协议值是单一来源**：`LKM_BOT_SSO_AUDIENCE` / `LKM_BOT_SSO_ISSUER` /
+`LKM_BOT_SSO_TYPE` / `LKM_BOT_SSO_ACCOUNT_LEVEL` 由 compose 的 `x-bot-sso-env` 锚点**只写一次**
+默认值、同时注入 auth（签发侧）与 lkmbot（消费侧）；k8s 侧为 `lkm-config-botsso` 一张表，两侧读
+同一个键（`lint-imports` 之外，另有静态测试锁两侧默认值一致）。`ttl` 是唯一的例外：只有签发侧
+消费，故挂在 auth 服务上、不进共享锚点（k8s 表里有它但 lkmbot 的 keyRef 不列），代码内另有
+300s 上界钳制。消费侧**现在会校验 `iss`**——此前签发时写入 `iss` 却从不校验，等于放行任何持同一
+audience 的签发方；不符或缺失一律 302 回面板登录页（fail-safe，不会变成 5xx）。注意
+`account_level` 同时是**铸票门禁**（`mint_ticket` 与 internal 端点都拿它做相等比较），调低等于
+放宽免登范围，详见 `.env.example` 的「LKM Bot」段。
 
 **端口面**——只经网关：
 

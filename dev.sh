@@ -22,9 +22,10 @@ FRONTEND_DIR="$ROOT_DIR/LKM-official-website"
 BACKEND_DIR="$ROOT_DIR/LKM-service"
 SITE_DIR="$ROOT_DIR/LKM-official-static"
 
-# 默认端口
+# 默认端口（都可覆盖：两站同时起、或与既有服务撞端口时按需换）
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 SITE_PORT="${SITE_PORT:-4322}"
+FRONT_PORT="${FRONT_PORT:-4321}"
 
 log() {
   echo -e "\033[1;36m[lkm]\033[0m $*"
@@ -44,42 +45,73 @@ require_cmd() {
 }
 
 install_deps() {
-  local want_backend="$1"
+  # $1: all | front | site | back —— 只装所选 MODE 需要的依赖
+  local targets="$1"
 
   # 前端依赖（pnpm）
-  if [ -f "$FRONTEND_DIR/package.json" ]; then
-    log "安装前端依赖 (pnpm install)..."
-    (cd "$FRONTEND_DIR" && pnpm install)
-  else
-    error "未找到 $FRONTEND_DIR/package.json，跳过前端依赖安装。"
-  fi
+  case "$targets" in
+    all|front)
+      if [ -f "$FRONTEND_DIR/package.json" ]; then
+        log "安装前端依赖 (pnpm install)..."
+        (cd "$FRONTEND_DIR" && pnpm install)
+      else
+        error "未找到 $FRONTEND_DIR/package.json（子模块未初始化？），无法安装依赖。"
+        return 1
+      fi
+      ;;
+  esac
 
   # 后端依赖（uv）
-  if [ "$want_backend" = "yes" ] && [ -f "$BACKEND_DIR/pyproject.toml" ]; then
-    log "安装后端依赖 (uv sync)..."
-    (cd "$BACKEND_DIR" && uv sync)
-  fi
+  case "$targets" in
+    all|back)
+      if [ -f "$BACKEND_DIR/pyproject.toml" ]; then
+        log "安装后端依赖 (uv sync)..."
+        (cd "$BACKEND_DIR" && uv sync)
+      else
+        error "未找到 $BACKEND_DIR/pyproject.toml（子模块未初始化？），无法安装依赖。"
+        return 1
+      fi
+      ;;
+  esac
 
   # 静态官网依赖（pnpm）
-  if [ -f "$SITE_DIR/package.json" ]; then
-    log "安装静态官网依赖 (pnpm install)..."
-    (cd "$SITE_DIR" && pnpm install)
-  else
-    error "未找到 $SITE_DIR/package.json，跳过静态官网依赖安装。"
-  fi
+  case "$targets" in
+    all|site)
+      if [ -f "$SITE_DIR/package.json" ]; then
+        log "安装静态官网依赖 (pnpm install)..."
+        (cd "$SITE_DIR" && pnpm install)
+      else
+        error "未找到 $SITE_DIR/package.json（子模块未初始化？），无法安装依赖。"
+        return 1
+      fi
+      ;;
+  esac
 }
 
 run_frontend() {
-  log "启动 SSR 前端: pnpm run dev"
-  (cd "$FRONTEND_DIR" && pnpm run dev)
+  # 先查目录：子模块没初始化时 `cd` 的报错发生在子 shell 里，位置靠后且信息少
+  if [ ! -d "$FRONTEND_DIR" ]; then
+    error "目录不存在: $FRONTEND_DIR（子模块未初始化？）"
+    return 1
+  fi
+  log "启动 SSR 前端: pnpm run dev --port $FRONT_PORT"
+  (cd "$FRONTEND_DIR" && pnpm run dev --port "$FRONT_PORT")
 }
 
 run_static_site() {
+  if [ ! -d "$SITE_DIR" ]; then
+    error "目录不存在: $SITE_DIR（子模块未初始化？）"
+    return 1
+  fi
   log "启动静态官网: pnpm run dev --port $SITE_PORT"
   (cd "$SITE_DIR" && pnpm run dev --port "$SITE_PORT")
 }
 
 run_backend() {
+  if [ ! -d "$BACKEND_DIR" ]; then
+    error "目录不存在: $BACKEND_DIR（子模块未初始化？）"
+    return 1
+  fi
   log "启动后端: uvicorn main:app --reload --port $BACKEND_PORT"
   (cd "$BACKEND_DIR" && uv run uvicorn main:app --reload --port "$BACKEND_PORT")
 }
@@ -88,19 +120,30 @@ run_backend() {
 case "${1:-}" in
   --no-run)
     require_cmd pnpm
-    install_deps yes
+    require_cmd uv
+    install_deps all
     log "依赖安装完成。"
     exit 0
     ;;
 esac
 
-require_cmd pnpm
-require_cmd uv
-
-# 确保依赖已就绪（未开启 uv 自动同步时才手动执行）
-# uv sync 已存在时跳过，避免每次慢
+# 只装所选 MODE 需要的依赖（`./dev.sh front` 不该顺带跑 uv sync 与静态官网的 pnpm install）。
+# uv sync / pnpm install 自身是增量的，已同步时几乎不耗时。
 MODE="${1:-all}"
-install_deps yes
+case "$MODE" in
+  front|前端)           INSTALL_TARGETS=front ;;
+  site|static|静态官网) INSTALL_TARGETS=site ;;
+  back|后端)            INSTALL_TARGETS=back ;;
+  *)                    INSTALL_TARGETS=all ;;
+esac
+
+require_cmd pnpm
+# uv 只在真要跑后端时才要求：front/site 模式不启后端，不该因本机没装 Python 工具链而中止
+case "$INSTALL_TARGETS" in
+  all|back) require_cmd uv ;;
+esac
+
+install_deps "$INSTALL_TARGETS"
 
 case "$MODE" in
   front|前端)
@@ -117,10 +160,39 @@ case "$MODE" in
     ;;
   all|*)
     log "同时启动 SSR 前端、静态官网与后端（Ctrl+C 可同时停止）"
-    trap 'echo; log "收到退出信号，正在停止..."; kill 0 2>/dev/null' INT TERM EXIT
+    # 开作业控制：每个后台服务独占一个进程组，收尾时按进程组 kill 才能连 pnpm/node、
+    # uv/python 这些孙进程一起带走。不用 `kill 0`——它连本脚本（乃至未开作业控制时的
+    # 父 shell）一起杀，且绑在 EXIT trap 上会在正常结束时自我触发、递归。
+    set -m
+    pids=""
+    cleanup() {
+      trap - INT TERM EXIT
+      echo
+      log "收到退出信号，正在停止..."
+      for p in $pids; do
+        kill -- "-$p" 2>/dev/null || kill "$p" 2>/dev/null || true
+      done
+    }
+    trap cleanup INT TERM EXIT
     run_frontend &
+    pids="$pids $!"
     run_static_site &
+    pids="$pids $!"
     run_backend &
-    wait
+    pids="$pids $!"
+    # 无参 wait 永远返回 0：任一服务启动失败都会被当成功吞掉。改成轮询等待首个退出者，
+    # 取它的退出码（不用 `wait -n`——bash 4.3+ 才有，macOS 自带 3.2 会报错）。
+    status=0
+    while :; do
+      for p in $pids; do
+        if ! kill -0 "$p" 2>/dev/null; then
+          wait "$p" || status=$?
+          break 2
+        fi
+      done
+      sleep 1
+    done
+    cleanup
+    exit "$status"
     ;;
 esac

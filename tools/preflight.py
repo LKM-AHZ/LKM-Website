@@ -27,6 +27,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -127,17 +128,28 @@ def running_services() -> set[str]:
 # ── 静态检查 ────────────────────────────────────────────────────────────────
 
 
-def check_env_file(rep: Report) -> dict[str, str]:
+def check_env_file(rep: Report) -> dict[str, str] | None:
+    """读取 .env：**读不到**返回 None，读到（哪怕解析出 0 条）返回 dict。
+
+    区分这两种情况是必要的：下面所有依赖 .env 的检查都由「返回值是否非空」门控，
+    若「存在但全被注释/全被引号破坏」也返回 {}，密钥强度、必填密码、ALLOWED_HOSTS
+    这些检查会**整段消失**（报告里一条不出，极易被当成通过）。
+    """
     env_path = REPO_ROOT / ".env"
     if not env_path.exists():
         rep.add(FAIL, ".env 存在", "根目录无 .env，请 cp .env.example .env")
-        return {}
+        return None
     rep.add(OK, ".env 存在", str(env_path))
     try:
-        return parse_env(env_path)
-    except OSError as exc:
+        parsed = parse_env(env_path)
+    except (OSError, UnicodeDecodeError) as exc:
+        # parse_env 以 UTF-8 严格模式读取：GBK 中文注释等非 UTF-8 字节会抛 UnicodeDecodeError
+        # （ValueError 子类），不接住的话整个体检脚本直接崩掉，而不是给出一条 FAIL
         rep.add(FAIL, ".env 可解析", str(exc))
-        return {}
+        return None
+    if not parsed:
+        rep.add(WARN, ".env 可解析", "未解析出任何 KEY=VALUE 行（全被注释或格式损坏？）")
+    return parsed
 
 
 def check_secrets(rep: Report, env: dict[str, str]) -> None:
@@ -236,7 +248,12 @@ def check_health(rep: Report, running: set[str]) -> None:
         rep.add(FAIL, "健康端点", f"{HEALTH_URL} 请求失败：{exc}")
         return
 
-    data = payload.get("data", {})
+    # 不能假定响应一定是「带 data 对象的 JSON 对象」：网关错误页/登录跳转可能回数组、字符串
+    # 或 null，直接 .get() 会抛 AttributeError 让整个体检脚本崩掉，而不是走 FAIL 分支
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+        rep.add(FAIL, "健康端点", f"{HEALTH_URL} 返回体结构异常：{type(payload).__name__}")
+        return
+    data = payload["data"]
     unhealthy = [
         name
         for name in ("db", "redis")
@@ -277,9 +294,13 @@ def check_minio_bucket(rep: Report, env: dict[str, str], running: set[str]) -> N
         rep.add(SKIP, "MinIO 桶", "minio 未在跑")
         return
     bucket = env.get("LKM_S3_BUCKET", "lkm")
+    # 不能写成 `A && B && C || echo MISSING`：`||` 绑定的是整条 && 链，mc alias 失败
+    # （凭据未注入/mc 缺失）也会落到 MISSING，被误报成「桶不存在（S3 不自动建桶）」硬 FAIL。
+    # 先把 alias 失败单独打哨兵 NOALIAS 标出，再由下面判成 SKIP。
     script = (
         'mc alias set m http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" '
-        f">/dev/null 2>&1 && mc ls m/{bucket} >/dev/null 2>&1 && echo FOUND || echo MISSING"
+        '>/dev/null 2>&1 || { echo NOALIAS; exit 0; }; '
+        f'mc ls "m/{bucket}" >/dev/null 2>&1 && echo FOUND || echo MISSING'
     )
     try:
         proc = compose("exec", "-T", "minio", "sh", "-c", script)
@@ -312,13 +333,23 @@ def check_migrations(rep: Report, running: set[str]) -> None:
         if heads.returncode != 0 or current.returncode != 0:
             rep.add(SKIP, f"alembic {label}", "命令失败（库未就绪？）")
             continue
+        # 判注释用 strip 后的行：原来 `not ln.startswith("#")` 作用在未 strip 的行上，
+        # 缩进的注释行不会被过滤，`#` 会被当成 revision 塞进集合
         head_revs = {
-            ln.split()[0] for ln in heads.stdout.splitlines() if ln.strip() and not ln.startswith("#")
+            ln.strip().split()[0]
+            for ln in heads.stdout.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
         }
         cur_revs = {
-            ln.split()[0] for ln in current.stdout.splitlines() if ln.strip() and not ln.startswith("#")
+            ln.strip().split()[0]
+            for ln in current.stdout.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
         }
-        if head_revs and head_revs <= cur_revs:
+        if not head_revs:
+            # 解析不到 head（输出格式变化/空输出，rc 仍为 0）时不能报「未到 head」——那是误报
+            rep.add(SKIP, f"alembic {label}", "无法从 `alembic heads` 解析出 revision")
+            continue
+        if head_revs <= cur_revs:
             rep.add(OK, f"alembic {label}", "已到 head")
         else:
             rep.add(
@@ -350,8 +381,23 @@ def check_certs(rep: Report, env: dict[str, str], running: set[str]) -> None:
         if proc.returncode != 0:
             rep.add(WARN, f"TLS {domain}", "无证书（将回退自签，浏览器告警）")
             continue
-        raw = proc.stdout.strip().split("=", 1)[-1]
-        rep.add(OK, f"TLS {domain}", f"到期 {raw}")
+        # openssl -enddate 输出 `notAfter=Sep 21 12:00:00 2026 GMT`
+        raw = (proc.stdout or "").strip().split("=", 1)[-1].strip()
+        try:
+            expires = datetime.strptime(raw, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
+        except ValueError:
+            rep.add(WARN, f"TLS {domain}", f"无法解析到期时间：{raw!r}")
+            continue
+        days = (expires - datetime.now(timezone.utc)).days
+        # docstring 承诺检查「剩余天数」，故必须有阈值：即将过期/已过期不能报 OK
+        if days < 0:
+            rep.add(FAIL, f"TLS {domain}", f"证书已过期（{expires.date()}）")
+        elif days < 7:
+            rep.add(FAIL, f"TLS {domain}", f"仅剩 {days} 天（{expires.date()}），续期大概率已失败")
+        elif days < 30:
+            rep.add(WARN, f"TLS {domain}", f"仅剩 {days} 天（{expires.date()}）")
+        else:
+            rep.add(OK, f"TLS {domain}", f"剩余 {days} 天（{expires.date()}）")
 
 
 def main() -> int:
@@ -361,11 +407,15 @@ def main() -> int:
     args = parser.parse_args()
 
     rep = Report()
-    env = check_env_file(rep)
-    if env:
-        check_secrets(rep, env)
-        check_allowed_hosts(rep, env)
-        check_restart_policy(rep, env)
+    file_env = check_env_file(rep)
+    # `is not None`：.env 存在但解析出 0 条时也要继续走检查（由 env.get(key, "") 报缺失），
+    # 否则这三项检查会静默消失
+    if file_env is not None:
+        check_secrets(rep, file_env)
+        check_allowed_hosts(rep, file_env)
+        check_restart_policy(rep, file_env)
+    # 运行时检查只用 env.get(...)，读不到 .env 时按空表继续（它们自身会打 SKIP/FAIL）
+    env = file_env or {}
     check_crlf(rep)
     check_compose_config(rep)
 

@@ -37,6 +37,16 @@ if err == null && is_object(parsed) {
   .exc_info = to_string(parsed.exc_info) ?? ""
   ts_raw = to_string(parsed.ts) ?? ""
   ts, ts_err = parse_timestamp(ts_raw, format: "%Y-%m-%dT%H:%M:%S%.f%:z")
+  if ts_err != null {
+    # 三方/上游 JSON 常用 RFC3339 尾缀 Z 的写法（`%:z` 匹配不到），再按通用 ISO 8601 试一次
+    ts, ts_err = to_timestamp(ts_raw)
+  }
+  if ts_err != null {
+    # payload 的 ts 彻底不可用：退到 docker 日志行自带的事件时间（容器写日志的时刻），
+    # 并在 extra_fields 留痕（可 SELECT count() WHERE extra_fields LIKE '[ts-fallback]%' 统计）
+    ts, ts_err = to_timestamp(to_string(.timestamp) ?? "")
+    .extra_fields = "[ts-fallback] " + .extra_fields
+  }
   .ts = if ts_err == null {
     format_timestamp!(ts, format: "%Y-%m-%d %H:%M:%S%.3f")
   } else {
@@ -50,7 +60,14 @@ if err == null && is_object(parsed) {
   .trace_id = ""
   .span_id = ""
   .exc_info = ""
-  .ts = format_timestamp!(now(), format: "%Y-%m-%d %H:%M:%S%.3f")
+  # 非 JSON 行同样优先用 docker 自带的事件时间，别一律盖成采集时间：
+  # 那会让事件时间/分区/TTL 全部按「入库时刻」算，回溯排查时排序失真
+  src_ts, src_err = to_timestamp(to_string(.timestamp) ?? "")
+  .ts = if src_err == null {
+    format_timestamp!(src_ts, format: "%Y-%m-%d %H:%M:%S%.3f")
+  } else {
+    format_timestamp!(now(), format: "%Y-%m-%d %H:%M:%S%.3f")
+  }
 }
 '''
 

@@ -13,11 +13,23 @@ set -euo pipefail
 
 _db="${POSTGRES_DB:-lkm}"
 
-if psql -U "${POSTGRES_USER}" -d "${_db}" -tAc \
-    "SELECT 1 FROM pg_available_extensions WHERE name = 'timescaledb'" | grep -q 1; then
-    psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER}" -d "${_db}" \
-        -c "CREATE EXTENSION IF NOT EXISTS timescaledb;"
-    echo "initdb: timescaledb extension ensured on '${_db}'"
+# 同 01-auth-db.sh：探测失败必须与「镜像里没有 timescaledb」区分开，
+# 否则连接/凭据问题会被静默报成「该镜像不支持（已降级）」
+if ! _avail="$(psql -U "${POSTGRES_USER}" -d "${_db}" -tAc \
+    "SELECT 1 FROM pg_available_extensions WHERE name = 'timescaledb'")"; then
+    echo "initdb: 探测 timescaledb 可用性失败（psql 非 0 退出），中止初始化" >&2
+    exit 1
+fi
+
+if [ "$_avail" = "1" ]; then
+    # 「扩展可用但未经 shared_preload_libraries 预加载」时 CREATE EXTENSION 会直接报错，
+    # 而本文件承诺「只告警不中断」——故失败只告警，应用侧 init_db 会降级为普通表
+    if psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER}" -d "${_db}" \
+        -c "CREATE EXTENSION IF NOT EXISTS timescaledb;"; then
+        echo "initdb: timescaledb extension ensured on '${_db}'"
+    else
+        echo "initdb: WARN create extension timescaledb 失败（shared_preload_libraries/权限？），应用侧将降级为普通表" >&2
+    fi
 else
     echo "initdb: timescaledb not available on this image, skip (应用侧将降级为普通表)"
 fi

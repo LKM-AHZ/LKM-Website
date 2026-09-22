@@ -47,7 +47,9 @@ spec:
               mountPath: /etc/vector/vector.toml
               subPath: vector.toml
               readOnly: true
-            # file source 的位置数据库（记录各文件读到的 offset），Pod 重建后可续读
+            # file source 的位置数据库（记录各文件读到的 offset）。卷是 emptyDir → Pod 重建即丢，
+            # **不会**真的「续读」；vector.toml 因此配 read_from="end"（重启只从文件尾开始，避免把
+            # ignore_older_secs 窗口内已投递过的日志整段重灌进 CH），代价是重启窗口内的日志会缺。
             - name: data
               mountPath: /var/lib/vector
           # 不设探针：vector 是「读日志 → 写 CH」的单向管道，没有可断言的对外语义

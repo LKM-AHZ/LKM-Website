@@ -8,12 +8,15 @@ x-otel-env: &otel-env
   LKM_OTEL_SAMPLE_RATIO: ${LKM_OTEL_SAMPLE_RATIO:-0.1}
 
 # bot 面板 SSO 票据的**协议值**：签发侧 auth 与消费侧 lkmbot 必须逐字同值（audience 不符
-# 票据被拒、issuer 不符同样被拒），而两者分属不同部署单元/仓库，无法共享 import —— 故单一
-# 来源落在这里：默认值只写一次，两个服务经 YAML 锚点注入**同名**变量。
-# 另有三个协议值刻意不做部署变量（type/ttl/account_level），理由见 .env.example 同名段落。
+# 票据被拒、issuer/type 不符同样被拒），而两者分属不同部署单元/仓库，无法共享 import —— 故
+# 单一来源落在这里：默认值只写一次，两个服务经 YAML 锚点注入**同名**变量。
+# 锚点内是**两侧都消费**的四个值；TTL 只签发侧消费，故不进锚点、单独挂在 auth 服务上。
+# account_level 同时是铸票门禁（改它=改谁能免登），type/account_level 两侧必须同值。
 x-bot-sso-env: &bot-sso-env
   LKM_BOT_SSO_AUDIENCE: ${LKM_BOT_SSO_AUDIENCE:-lkm:bot}
   LKM_BOT_SSO_ISSUER: ${LKM_BOT_SSO_ISSUER:-lkm-auth}
+  LKM_BOT_SSO_TYPE: ${LKM_BOT_SSO_TYPE:-bot_sso}
+  LKM_BOT_SSO_ACCOUNT_LEVEL: ${LKM_BOT_SSO_ACCOUNT_LEVEL:-admin}
 
 services:
   # ── APISIX 网关 ──
@@ -178,8 +181,8 @@ services:
         VITE_BASE_PATH: ${LKM_BOT_BASE_PATH:-/bot}/
     image: lkm-bot:latest
     environment:
-      # SSO 票据协议值（audience/issuer）：与签发侧 auth 同源（见文件头 x-bot-sso-env），
-      # 消费侧据此验签——issuer 校验即本次补齐的那道。
+      # SSO 票据协议值（audience/issuer/type/account_level）：与签发侧 auth 同源（见文件头
+      # x-bot-sso-env），消费侧据此验签并校验 account_level。TTL 不在此：本侧只按 exp 判定。
       <<: *bot-sso-env
       TZ: Asia/Shanghai
       # 显式固定 data 路径（默认取 cwd，入口一改就漂移）
@@ -625,9 +628,11 @@ services:
       LKM_JWT_PRIVATE_KEY_FILE: ${LKM_JWT_PRIVATE_KEY_FILE:-}
       LKM_JWT_PUBLIC_KEY_FILE: ${LKM_JWT_PUBLIC_KEY_FILE:-}
       LKM_JWT_HS_FALLBACK: ${LKM_JWT_HS_FALLBACK:-true}
-      # bot 面板 SSO 票据协议值（audience/issuer）：auth 是**签发侧**，与消费侧 lkmbot
-      # 同源（见文件头 x-bot-sso-env）——两侧同值才能验签通过。
+      # bot 面板 SSO 票据协议值：auth 是**签发侧**，与消费侧 lkmbot 同源（见文件头
+      # x-bot-sso-env）——两侧同值才能验签通过。
       <<: *bot-sso-env
+      # TTL 仅签发侧消费，故不进共享锚点（不消费它的 lkmbot 不该被灌这个变量）。
+      LKM_BOT_SSO_TTL_SECONDS: ${LKM_BOT_SSO_TTL_SECONDS:-60}
       # 公网 Host 白名单：与 backend 同值；auth 亦承载对外认证面。
       # CORS 同 backend：生产唯一权威是 APISIX，不在此下发。
       LKM_ALLOWED_HOSTS: ${LKM_ALLOWED_HOSTS:-lkm-ahz.ltd,www.lkm-ahz.ltd,backend,auth,localhost,127.0.0.1}

@@ -22,6 +22,7 @@ import argparse
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -70,7 +71,16 @@ def service_rows() -> list[tuple[str, str, str]]:
 
 
 def is_abnormal(state: str, status: str) -> bool:
-    return state in {"created", "restarting", "exited", "dead"} or "unhealthy" in status
+    if "unhealthy" in status:
+        return True
+    if state in {"created", "restarting", "dead"}:
+        return True
+    if state == "exited":
+        # 一次性 init/migration 容器成功退出是**预期**状态（compose 里 prefect-init /
+        # signoz-init-clickhouse 就靠 Exited(0) 让依赖方 service_completed_successfully 放行），
+        # 只有非 0 退出才算异常 —— 否则一启用对应 profile 就刷一片噪声告警
+        return "(0)" not in status
+    return False
 
 
 def extract_json(text: str) -> dict | None:
@@ -79,16 +89,13 @@ def extract_json(text: str) -> dict | None:
     if start < 0:
         return None
     try:
-        return json.loads(text[start:])
+        # raw_decode 允许尾部有多余内容，一次就能定位到第一个完整 JSON 对象。
+        # 原来「从尾部逐个 } 回退、每次重新解析整个前缀」在几十 KB 的 topics stats 输出上
+        # 是 O(n·m) 次全量解析；且回退点可能落在混入日志的某个花括号上，取出非 stats 主体的片段。
+        obj, _end = json.JSONDecoder().raw_decode(text[start:])
     except ValueError:
-        # 尾部有日志时，逐个右括号回退
-        for end in range(len(text), start, -1):
-            if text[end - 1] == "}":
-                try:
-                    return json.loads(text[start:end])
-                except ValueError:
-                    continue
-    return None
+        return None
+    return obj if isinstance(obj, dict) else None
 
 
 def pulsar_ready() -> tuple[bool, str]:
@@ -116,26 +123,37 @@ def pulsar_ready() -> tuple[bool, str]:
     return False, f"namespace 未就绪：{sorted(namespaces) or '空'}"
 
 
+def _fallback_subscriptions(reason: str) -> list[tuple[str, str]]:
+    """回退到内置订阅列表时必须留痕。
+
+    否则 backlog 一节会拿一份可能与后端实际订阅漂移的硬编码列表继续输出，看起来仍是权威结果。
+    """
+    print(f"  (订阅列表回退为内置兜底：{reason})", file=sys.stderr)
+    return DEFAULT_SUBSCRIPTIONS
+
+
 def load_subscriptions(rows: list[tuple[str, str, str]]) -> list[tuple[str, str]]:
     running = {s for s, state, _ in rows if state == "running"}
     if "backend" not in running:
-        return DEFAULT_SUBSCRIPTIONS
+        return _fallback_subscriptions("backend 未运行")
     code = (
         "from app.core import messaging as m;"
         "print('\\n'.join(f'{s.name}\\t{s.topic}' for s in m.SUBSCRIPTIONS.values()))"
     )
     try:
         proc = compose("exec", "-T", "backend", "python", "-c", code)
-    except (OSError, subprocess.TimeoutExpired):
-        return DEFAULT_SUBSCRIPTIONS
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return _fallback_subscriptions(f"无法执行：{exc}")
     if proc.returncode != 0:
-        return DEFAULT_SUBSCRIPTIONS
+        return _fallback_subscriptions(f"backend 内取订阅失败，rc={proc.returncode}")
     subs: list[tuple[str, str]] = []
     for line in proc.stdout.splitlines():
         if "\t" in line:
             name, _, topic = line.partition("\t")
             subs.append((name.strip(), topic.strip()))
-    return subs or DEFAULT_SUBSCRIPTIONS
+    if not subs:
+        return _fallback_subscriptions("后端未输出任何订阅（SUBSCRIPTIONS 改名或为空？）")
+    return subs
 
 
 def topic_backlogs(subs: list[tuple[str, str]]) -> list[tuple[str, str, int | None]]:
@@ -182,10 +200,17 @@ def ledger_usage() -> str:
 def recent_pulsar_errors() -> list[str]:
     try:
         proc = compose("logs", "--tail", "300", "pulsar")
-    except (OSError, subprocess.TimeoutExpired):
-        return []
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return [f"[docker compose logs pulsar 失败：{exc}]"]
+    if proc.returncode != 0:
+        # 不能与「日志里确实没有匹配」混为一谈：容器不存在/编排不可用时输出同样为空
+        return [f"[docker compose logs pulsar 失败，rc={proc.returncode}，日志不可读]"]
+    # 收窄强信号词：原模式把 ledger/bookie 也当命中，而它们在 Pulsar 常规 INFO 日志
+    # （ledger 创建/rollover、bookie 注册）里随处可见，会把本节刷满无害行、淹没真正的
+    # error/exception；noledger 更是被 ledger 覆盖成永远匹配不到的死分支。
     pattern = re.compile(
-        r"error|exception|noledger|ledger|bookie|corrupt|fenced", re.IGNORECASE
+        r"\b(error|exception|corrupt|fenced)\b|no ledger|ledger .*(corrupt|fail)",
+        re.IGNORECASE,
     )
     hits = [ln for ln in (proc.stdout + proc.stderr).splitlines() if pattern.search(ln)]
     return hits[-10:]

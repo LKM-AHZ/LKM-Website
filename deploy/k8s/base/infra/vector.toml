@@ -18,8 +18,15 @@ enabled = false
 [sources.pod_logs]
 type = "file"
 # 只采本命名空间的 Pod：/var/log/pods/<ns>_<pod>_<uid>/<container>/<n>.log
-include = ["/var/log/pods/lkm_*/*/*.log"]
-read_from = "beginning"
+# 第二条覆盖 kubelet 轮转后的文件（`<n>.log.<YYYYMMDD-HHMMSS>`，热闹容器一超 10MiB 就转一次，
+# 只写 *.log 会漏掉整段轮转日志）；用 `?` 精确匹配时间戳后缀，避免把 `.gz` 压缩件也收进来
+# ——file source 不解压，收了只会把二进制当文本写进 CH。
+include = ["/var/log/pods/lkm_*/*/*.log", "/var/log/pods/lkm_*/*/*.log.????????-??????"]
+# 从「文件末尾」起读：位置数据库在 /var/lib/vector，而该卷是 emptyDir（见 vector.yaml），
+# Pod 重建即丢 offset —— 配 beginning 会把 ignore_older_secs 窗口内已投递过的日志整段
+# 重灌进 lkm.app_logs（重复行污染聚合、撑大存储直到 TTL）。代价是重启窗口内的日志会缺，
+# 日志管道接受这个取舍；要两者兼得需把 data 卷换成 hostPath/PVC（本单元文件范围外）。
+read_from = "end"
 # 容器日志在节点上是持续追加的；忽略 1 天前的旧文件，避免首次部署时全量回灌
 ignore_older_secs = 86400
 
@@ -36,11 +43,14 @@ meta, merr = parse_regex(path, r'^/var/log/pods/lkm_(?P<pod>[^_]+)_[^/]+/(?P<con
 .service = if merr == null { to_string(meta.container) } else { "unknown" }
 
 line = to_string(.message) ?? ""
-.extra_fields = line
 
-# CRI 前缀：<ts> <stream> <F|P> <payload>；tag 可能是 F/P，也可能被省略
-cri, cerr = parse_regex(line, r'^(?P<ts>\S+) (?P<stream>\S+) (?P<tag>\S+) (?P<payload>.*)$')
+# CRI 前缀：<ts> <stream> <F|P> <payload>。tag 必须写成**可选且限定 F/P**：
+# 原来强制 `(?P<tag>\S+)` 会把三 token 行（tag 被省略）的 payload 首词当 tag 吃掉，
+# 正文静默损坏；而 `\S+` 也会把「payload 以空格开头」的行误当有 tag
+cri, cerr = parse_regex(line, r'^(?P<ts>\S+) (?P<stream>\S+)(?: (?P<tag>[FP]))? (?P<payload>.*)$')
 raw = if cerr == null { to_string(cri.payload) } else { line }
+# CRI 自带的事件时间（RFC3339Nano，带 Z）：非 JSON 行与 payload.ts 不可用时都拿它兜底
+cri_ts = if cerr == null { to_string(cri.ts) ?? "" } else { "" }
 .extra_fields = raw
 
 parsed, err = parse_json(raw)
@@ -54,6 +64,15 @@ if err == null && is_object(parsed) {
   .exc_info = to_string(parsed.exc_info) ?? ""
   ts_raw = to_string(parsed.ts) ?? ""
   ts, ts_err = parse_timestamp(ts_raw, format: "%Y-%m-%dT%H:%M:%S%.f%:z")
+  if ts_err != null {
+    # 三方/上游 JSON 常用 RFC3339 尾缀 Z 的写法（`%:z` 匹配不到），再按通用 ISO 8601 试一次
+    ts, ts_err = to_timestamp(ts_raw)
+  }
+  if ts_err != null {
+    # payload 的 ts 彻底不可用 → 用 CRI 前缀里的事件时间，并在 extra_fields 留痕便于统计
+    ts, ts_err = to_timestamp(cri_ts)
+    .extra_fields = "[ts-fallback] " + .extra_fields
+  }
   .ts = if ts_err == null {
     format_timestamp!(ts, format: "%Y-%m-%d %H:%M:%S%.3f")
   } else {
@@ -68,7 +87,14 @@ if err == null && is_object(parsed) {
   .trace_id = ""
   .span_id = ""
   .exc_info = ""
-  .ts = format_timestamp!(now(), format: "%Y-%m-%d %H:%M:%S%.3f")
+  # 事件时间取 CRI 前缀的时间戳，而不是采集时间：后者会让「几小时前写的日志」按入库时刻
+  # 分区/计 TTL，回溯排序失真；cri_ts 解析不了才退到 now()
+  nts, nts_err = to_timestamp(cri_ts)
+  .ts = if nts_err == null {
+    format_timestamp!(nts, format: "%Y-%m-%d %H:%M:%S%.3f")
+  } else {
+    format_timestamp!(now(), format: "%Y-%m-%d %H:%M:%S%.3f")
+  }
 }
 '''
 

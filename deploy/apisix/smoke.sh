@@ -58,20 +58,63 @@ cc()  { curl -sk --noproxy '*' --resolve "$COMMUNITY:$HTTPS_PORT:$HOST" "$@"; }
 cc80(){ curl -s  --noproxy '*' --resolve "$COMMUNITY:$HTTP_PORT:$HOST"  "$@"; }
 oc()  { curl -sk --noproxy '*' --resolve "$OFFICIAL:$HTTPS_PORT:$HOST"  "$@"; }
 
-# ── 1) http → https 301，且 Location 不得带内部监听端口 :9443 ──
+# 容器内 https 监听端口（deploy/apisix/config.yaml 的 apisix.ssl.listen）：泄漏到 Location
+# 会让浏览器直接打不通，故任何域的重定向都不得出现它
+INTERNAL_HTTPS_PORT=9443
+
+# http→https 重定向的统一判据（两个域共用，别再各写一套）：
+#   必须 https；不得出现内部端口；默认 443 场景下不得出现任何显式端口。
+# 非默认端口（kind NodePort）场景下 Location 由网关用不带端口的 Host 拼出，端口值不可断言
+# （可能无端口、也可能带请求用的 HTTP 端口），故意不做等值判断以免误报。
+check_redirect() {
+    name="$1"
+    loc="$2"
+    case "$loc" in
+        https://*) ;;
+        *) echo "FAIL  $name (Location 非 https: '$loc')"; fail=$((fail + 1)); return ;;
+    esac
+    hostport="${loc#https://}"
+    hostport="${hostport%%/*}"
+    port=""
+    case "$hostport" in
+        *:*) port="${hostport##*:}" ;;
+    esac
+    case "$port" in
+        "$INTERNAL_HTTPS_PORT")
+            echo "FAIL  $name (Location 泄漏容器内部端口 :$port: $loc)"
+            fail=$((fail + 1))
+            return
+            ;;
+        "")
+            echo "PASS  $name ($loc)"
+            pass=$((pass + 1))
+            return
+            ;;
+    esac
+    if [ "$port" = "$HTTPS_PORT" ]; then
+        echo "PASS  $name ($loc)"
+        pass=$((pass + 1))
+        return
+    fi
+    if [ "$HTTPS_PORT" = "443" ]; then
+        echo "FAIL  $name (默认 443 场景下 Location 不应带端口: $loc)"
+        fail=$((fail + 1))
+        return
+    fi
+    echo "PASS  $name ($loc, 非默认端口场景: 端口 $port 不计入断言)"
+    pass=$((pass + 1))
+}
+
+# ── 1) http → https 301，且 Location 不得带容器内部监听端口 ──
 loc=$(cc80 -o /dev/null -w '%{redirect_url}' "http://$COMMUNITY$HP/")
 code=$(cc80 -o /dev/null -w '%{http_code}' "http://$COMMUNITY$HP/")
 check "community http->https 301" test "$code" = "301"
-if printf '%s' "$loc" | grep -q '^https://' && ! printf '%s' "$loc" | grep -q ':9443'; then
-    echo "PASS  redirect location no internal port ($loc)"
-    pass=$((pass + 1))
-else
-    echo "FAIL  redirect location no internal port ($loc)"
-    fail=$((fail + 1))
-fi
+check_redirect "community redirect location" "$loc"
 
 loc=$(curl -s --noproxy '*' --resolve "$OFFICIAL:$HTTP_PORT:$HOST" -o /dev/null -w '%{redirect_url}' "http://$OFFICIAL$HP/")
-check "official http->https 301" sh -c 'printf "%s" "$1" | grep -q "^https://" && ! printf "%s" "$1" | grep -q ":9443"' _ "$loc"
+code=$(curl -s --noproxy '*' --resolve "$OFFICIAL:$HTTP_PORT:$HOST" -o /dev/null -w '%{http_code}' "http://$OFFICIAL$HP/")
+check "official http->https 301" test "$code" = "301"
+check_redirect "official redirect location" "$loc"
 
 # ── 2) 后端健康经网关 200 ──
 code=$(cc -o /dev/null -w '%{http_code}' "https://$COMMUNITY$SP/api/v1/health")
@@ -100,6 +143,14 @@ while [ "$i" -le 80 ]; do
         -d '{"username":"smoke","password":"x"}' "https://$COMMUNITY$SP/api/v1/auth/login/password")
     if [ "$code" = "429" ]; then
         got429=1
+        # 第 1 次就 429 → 60/60s 的额度在本窗口内已被消耗（上一轮冒烟或同源其它流量），
+        # 这次 PASS 只证明「有限流」，不证明「刚刚起效」，打印出来免得被当成新证据。
+        # 不据此判 FAIL：否则 60s 内重跑冒烟会假红。
+        if [ "$i" -eq 1 ]; then
+            echo "NOTE  第 1 次请求即 429：窗口内额度已被消耗，本次归因不可靠"
+        else
+            echo "NOTE  第 $i 次请求触发 429"
+        fi
         break
     fi
     i=$((i + 1))
@@ -140,7 +191,12 @@ if [ "${SMOKE_HEAVY:-0}" = "1" ]; then
     code=$(head -c 1048576 /dev/zero | cc -o /dev/null -w '%{http_code}' -X POST \
         --data-binary @- -H 'Content-Type: application/octet-stream' \
         "https://$COMMUNITY$SP/api/v1/files/upload-init")
-    if [ "$code" != "413" ]; then
+    if [ -z "$code" ] || [ "$code" = "000" ]; then
+        # 传输失败（连接/TLS/DNS 错误）时 curl 的 %{http_code} 是 000，不能被当成
+        # 「没被 413 拦住」而判 PASS——那是把坏掉的链路报成网关结果
+        echo "FAIL  upload <=100m passes gateway (未拿到 HTTP 响应，code='${code:-<空>}')"
+        fail=$((fail + 1))
+    elif [ "$code" != "413" ]; then
         echo "PASS  upload <=100m passes gateway (code=$code)"
         pass=$((pass + 1))
     else
@@ -155,13 +211,15 @@ fi
 # 用 HTTP/1.1（HTTP/2 禁止 Connection/Upgrade 连接级头，会假失败）。
 # 无效 token → 后端在 accept 前拒绝，表现为 403；若 APISIX 未转发 upgrade，后端按普通
 # GET 处理返回 404（即本检查要抓的回归）。有效 token 时为 101。
+# 401 同样算通过：`/api/*` 路由不带 jwt-auth（只有 client-control + cors，见 apisix.yaml:204），
+# 网关层产生不了 401，故 401 也是「请求已到后端鉴权阶段」的证据；404 才是未转发。
 code=$(curl -sk --http1.1 --noproxy '*' --resolve "$COMMUNITY:$HTTPS_PORT:$HOST" -o /dev/null -w '%{http_code}' \
     -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
     -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
     "https://$COMMUNITY$SP/api/v1/ws/events?token=invalid")
 case "$code" in
     101|401|403) echo "PASS  ws upgrade reaches backend (status=$code)"; pass=$((pass + 1)) ;;
-    *)           echo "FAIL  ws upgrade reaches backend (status=$code, expected 403/101)"; fail=$((fail + 1)) ;;
+    *)           echo "FAIL  ws upgrade reaches backend (status=$code, expected 101/401/403)"; fail=$((fail + 1)) ;;
 esac
 
 # ── 10) bot 面板（社群域子路径 /bot/）──

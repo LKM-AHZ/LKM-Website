@@ -79,13 +79,20 @@ spec:
             - name: LKM_BOT_SSO_PUBLIC_KEY_FILE
               value: /etc/lkm/jwt/LKM_JWT_PUBLIC_KEY
             # SSO 票据协议值：与签发侧 auth 读**同一张表**（lkm-config-botsso，单一来源）。
-            # 按 key 取用而非 envFrom——本 Pod 刻意只拿它真正消费的配置。
+            # 按 key 取用而非 envFrom——本 Pod 刻意只拿它真正消费的配置（表里的 TTL 是签发侧
+            # 独有的，故不在下面列出）。
             - name: LKM_BOT_SSO_AUDIENCE
               valueFrom:
                 configMapKeyRef: { name: lkm-config-botsso, key: LKM_BOT_SSO_AUDIENCE }
             - name: LKM_BOT_SSO_ISSUER
               valueFrom:
                 configMapKeyRef: { name: lkm-config-botsso, key: LKM_BOT_SSO_ISSUER }
+            - name: LKM_BOT_SSO_TYPE
+              valueFrom:
+                configMapKeyRef: { name: lkm-config-botsso, key: LKM_BOT_SSO_TYPE }
+            - name: LKM_BOT_SSO_ACCOUNT_LEVEL
+              valueFrom:
+                configMapKeyRef: { name: lkm-config-botsso, key: LKM_BOT_SSO_ACCOUNT_LEVEL }
             # 面板初始密码：**只取这一个键**（不 envFrom 整张 lkm-secrets——那会把 JWT/DB/
             # 对象存储密钥一并灌进 bot 进程，见 app-config.yaml 的「谁真的用」原则）。
             # optional=true：未在 .env 配该项时 Secret 里没有这个键，Pod 仍应正常起

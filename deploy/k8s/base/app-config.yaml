@@ -89,6 +89,7 @@ data:
 #    lkmbot（configMapKeyRef 取同名键）。单列一张表而不塞进 lkm-config：后者被
 #    backend/全部 worker envFrom，塞进去就是「给不消费的进程灌变量」（见本文件顶部原则）。
 #    改默认值只改这里（compose 侧对应 x-bot-sso-env 锚点，两边同值）。
+#    注：表内 TTL 只有签发侧消费，故 lkmbot 的 keyRef 不列它——同一原则，按需取用。
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -98,3 +99,11 @@ data:
   LKM_BOT_SSO_AUDIENCE: lkm:bot
   # 签发方身份：消费侧验签时校验 iss（不符/缺失 → 回落面板登录页，fail-safe）
   LKM_BOT_SSO_ISSUER: lkm-auth
+  # 票据类型：两侧唯一配对，消费侧显式校验
+  LKM_BOT_SSO_TYPE: bot_sso
+  # 铸票门禁：mint_ticket 与 /auth/internal/bot-ticket 都拿它做相等比较——调低（如 normal）
+  # 等于让普通用户也能拿到管理员面板票据。两侧同值，不要调低。
+  LKM_BOT_SSO_ACCOUNT_LEVEL: admin
+  # TTL：**仅签发侧消费**——auth 是 envFrom 本表故能拿到，lkmbot 按下方的 keyRef 只取它
+  # 消费的四个键、不取这个。代码内另有 300s 上界钳制（配大了会被钳住）。
+  LKM_BOT_SSO_TTL_SECONDS: "60"

@@ -43,14 +43,20 @@ def compose(*args: str, timeout: int = 900) -> subprocess.CompletedProcess[str]:
 
 
 def project_name() -> str:
-    """compose 项目名，用于拼命名卷 `${project}_backend_data`。"""
+    """compose 项目名，用于拼命名卷 `${project}_backend_data`。
+
+    取不到时回退目录名（大写/带点的目录、或 .env 里设了 COMPOSE_PROJECT_NAME 都会不一致），
+    所以回退必须留痕：否则备份/恢复会对着一个不存在的卷干活，恢复还会「成功」地写进空卷。
+    """
     try:
         proc = compose("config", "--format", "json", timeout=60)
         data = json.loads(proc.stdout)
         if data.get("name"):
             return str(data["name"])
-    except (OSError, subprocess.TimeoutExpired, ValueError):
-        pass
+    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+        print(f"警告：无法解析 compose 项目名（{exc}），回退为目录名", file=sys.stderr)
+        return REPO_ROOT.name.lower().replace(".", "")
+    print("警告：compose config 未返回 name，回退为目录名", file=sys.stderr)
     return REPO_ROOT.name.lower().replace(".", "")
 
 
@@ -60,7 +66,11 @@ def env_value(key: str, default: str) -> str:
         return default
     for raw in env_path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
-        if line.startswith(f"{key}=") and not line.startswith("#"):
+        # 兼容 `export KEY=value`（常见 .env 写法）
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        # 原先还带了 `not line.startswith("#")`：一旦以 `KEY=` 开头就不可能以 `#` 开头，是死条件
+        if line.startswith(f"{key}="):
             return line.partition("=")[2].strip().strip("'\"") or default
     return default
 
@@ -79,7 +89,10 @@ def container_id(service: str) -> str | None:
 
 def backup_db(target: Path, pg_user: str, pg_db: str) -> bool:
     print(f"  → pg_dump {pg_user}@{pg_db}")
-    with open(target, "w", encoding="utf-8") as fh:
+    # 先写 .part、校验通过后再改名：直接写 target 时一次中断/失败就会留下空的 db.sql，
+    # cmd_list 照旧报「文件存在」，restore 也会拿它去恢复
+    part = target.with_name(target.name + ".part")
+    with open(part, "w", encoding="utf-8") as fh:
         try:
             proc = subprocess.run(
                 ["docker", "compose", "exec", "-T", "postgres", "pg_dump", "-U", pg_user, pg_db],
@@ -91,14 +104,18 @@ def backup_db(target: Path, pg_user: str, pg_db: str) -> bool:
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             print(f"    ✗ 失败：{exc}")
+            part.unlink(missing_ok=True)
             return False
     if proc.returncode != 0:
         print(f"    ✗ pg_dump 退出码 {proc.returncode}：{(proc.stderr or '').strip()[-200:]}")
+        part.unlink(missing_ok=True)
         return False
-    text = target.read_text(encoding="utf-8", errors="ignore")
+    text = part.read_text(encoding="utf-8", errors="ignore")
     if "PostgreSQL database dump" not in text:
         print("    ✗ 产物不含 dump 头，疑似失败/空库")
+        part.unlink(missing_ok=True)
         return False
+    part.replace(target)
     print(f"    ✓ {target.name}（{target.stat().st_size // 1024} KB）")
     return True
 
@@ -123,16 +140,22 @@ def backup_minio(target: Path, bucket: str) -> bool:
         return False
     if target.exists():
         shutil.rmtree(target)
-    cp = subprocess.run(
-        ["docker", "cp", f"{cid}:/tmp/lkm_backup", str(target)],
-        capture_output=True,
-        text=True,
-        timeout=900,
-    )
-    compose("exec", "-T", "minio", "rm", "-rf", "/tmp/lkm_backup", timeout=120)
+    try:
+        cp = subprocess.run(
+            ["docker", "cp", f"{cid}:/tmp/lkm_backup", str(target)],
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        # 与其它 subprocess 调用保持一致：不把异常抛到 cmd_backup 之外（那会带崩后续步骤）
+        print(f"    ✗ docker cp 失败：{exc}")
+        return False
     if cp.returncode != 0:
         print(f"    ✗ docker cp 失败：{(cp.stderr or '').strip()[-200:]}")
+        # 拷贝失败时**不删**容器里的镜像产物：那是唯一一份，重 mirror 很贵，留着还能人工重试
         return False
+    compose("exec", "-T", "minio", "rm", "-rf", "/tmp/lkm_backup", timeout=120)
     count = sum(1 for _ in target.rglob("*") if _.is_file()) if target.exists() else 0
     print(f"    ✓ {target.name}（{count} 个对象）")
     return True
@@ -140,6 +163,9 @@ def backup_minio(target: Path, bucket: str) -> bool:
 
 def backup_volume(target: Path, volume: str) -> bool:
     print(f"  → tar 卷 {volume}")
+    # 同 backup_db：tar 半途失败会留下损坏的 tar.gz，而 list/restore 只看文件名
+    part_name = f"{target.name}.part"
+    part = target.with_name(part_name)
     try:
         proc = subprocess.run(
             [
@@ -147,7 +173,7 @@ def backup_volume(target: Path, volume: str) -> bool:
                 "-v", f"{volume}:/data:ro",
                 "-v", f"{target.parent}:/backup",
                 "alpine",
-                "tar", "czf", f"/backup/{target.name}", "-C", "/data", ".",
+                "tar", "czf", f"/backup/{part_name}", "-C", "/data", ".",
             ],
             capture_output=True,
             text=True,
@@ -155,10 +181,13 @@ def backup_volume(target: Path, volume: str) -> bool:
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"    ✗ 失败：{exc}")
+        part.unlink(missing_ok=True)
         return False
-    if proc.returncode != 0 or not target.exists():
+    if proc.returncode != 0 or not part.exists():
         print(f"    ✗ tar 失败：{(proc.stderr or '').strip()[-200:]}")
+        part.unlink(missing_ok=True)
         return False
+    part.replace(target)
     print(f"    ✓ {target.name}（{target.stat().st_size // 1024} KB）")
     return True
 
@@ -191,8 +220,14 @@ def restore_db(src: Path, pg_user: str, pg_db: str) -> bool:
         return False
     with open(src, encoding="utf-8") as fh:
         try:
+            # ON_ERROR_STOP=1：不加时 psql 逐条继续执行、语句失败也不改退出码，
+            # 恢复打在重复键/缺角色上照样退出 0 → 这里会误报「✓ 已恢复」，
+            # 而库里其实只恢复了一半
             proc = subprocess.run(
-                ["docker", "compose", "exec", "-T", "postgres", "psql", "-U", pg_user, "-d", pg_db],
+                [
+                    "docker", "compose", "exec", "-T", "postgres", "psql",
+                    "-v", "ON_ERROR_STOP=1", "-U", pg_user, "-d", pg_db,
+                ],
                 cwd=REPO_ROOT,
                 stdin=fh,
                 capture_output=True,
@@ -218,6 +253,9 @@ def restore_minio(src: Path, bucket: str) -> bool:
     if not cid:
         print("    ✗ minio 容器未运行")
         return False
+    # docker cp 到已存在的目录会把源目录嵌进去（/tmp/lkm_restore/<dirname>/…），
+    # 之后 mc mirror 会给每个对象多套一层错误前缀 —— 先清掉容器内的目标路径
+    compose("exec", "-T", "minio", "rm", "-rf", "/tmp/lkm_restore", timeout=120)
     cp = subprocess.run(
         ["docker", "cp", str(src), f"{cid}:/tmp/lkm_restore"],
         capture_output=True, text=True, timeout=900,
@@ -227,13 +265,16 @@ def restore_minio(src: Path, bucket: str) -> bool:
         return False
     script = (
         'mc alias set m http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1'
-        f" && mc mirror --preserve /tmp/lkm_restore m/{bucket} && rm -rf /tmp/lkm_restore"
+        f" && mc mirror --preserve /tmp/lkm_restore m/{bucket}"
     )
     try:
         proc = compose("exec", "-T", "minio", "sh", "-c", script)
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"    ✗ 失败：{exc}")
         return False
+    finally:
+        # 成败都清掉容器内中转目录：留着会让容器磁盘慢慢长起来
+        compose("exec", "-T", "minio", "rm", "-rf", "/tmp/lkm_restore", timeout=120)
     if proc.returncode != 0:
         print(f"    ✗ mc mirror 退出码 {proc.returncode}：{(proc.stderr or '').strip()[-200:]}")
         return False
