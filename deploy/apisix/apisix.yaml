@@ -231,6 +231,44 @@ routes:
       pass_host: pass
 
   # ── GraphQL → backend，支持 WebSocket upgrade（subscription）──
+  #
+  # 多端点版本化（蓝图 §2）：后端把每个版本挂成 `{graphql_path}/vN` 的**独立 schema 端点**
+  # （`/graphql/v1`、将来的 `/graphql/v2`…），无版本路径 `/graphql` 是「最新版」别名。
+  # 带版本号的路径由下面的 graphql-prefix 原样透传（`/graphql/*` 已覆盖，无需单独开路由）；
+  # **客户端按请求头声明版本**的那条走 graphql-version-header，重写到对应版本端点。
+  # 破坏性变更上线 = 后端 GRAPHQL_VERSIONS 加一条 + 这里加一条 header 路由，旧端点保留运行。
+  - id: graphql-version-header
+    uri: /graphql
+    # 仅在客户端**显式**声明版本时命中；未声明则落到 graphql-exact（默认 = 最新版别名）。
+    vars: [["http_x_api_version", "==", "v1"]]
+    hosts: [__COMMUNITY_HOSTS__]
+    priority: 109
+    enable_websocket: true
+    plugins:
+      client-control:
+        # 与后端 LKM_MAX_UPLOAD_BYTES 同源（render.sh 从同一 env 展开），禁两处手改
+        max_body_size: __MAX_BODY_SIZE__
+      proxy-rewrite:
+        # 把「带版本头访问别名路径」的流量改写到该版本的端点（网关是版本分流的唯一权威）
+        uri: /graphql/v1
+      # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
+      # 生产**只此一处**（应用层不再挂 CORS，见 core/middleware.py），来源由域名变量展开。
+      # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
+      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
+      # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
+      cors:
+        allow_origins: "__COMMUNITY_ORIGINS__"
+        allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
+        allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-API-Version,X-Requested-With,Cache-Control,Pragma"
+        expose_headers: "X-Request-ID,X-API-Version"
+        max_age: 3600
+        allow_credential: true
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "backend__UPSTREAM_SUFFIX__:8000"
+      pass_host: pass
+
   - id: graphql-exact
     uri: /graphql
     hosts: [__COMMUNITY_HOSTS__]
@@ -248,8 +286,8 @@ routes:
       cors:
         allow_origins: "__COMMUNITY_ORIGINS__"
         allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
-        allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
-        expose_headers: "X-Request-ID"
+        allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-API-Version,X-Requested-With,Cache-Control,Pragma"
+        expose_headers: "X-Request-ID,X-API-Version"
         max_age: 3600
         allow_credential: true
     upstream:
@@ -275,8 +313,8 @@ routes:
       cors:
         allow_origins: "__COMMUNITY_ORIGINS__"
         allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
-        allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
-        expose_headers: "X-Request-ID"
+        allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-API-Version,X-Requested-With,Cache-Control,Pragma"
+        expose_headers: "X-Request-ID,X-API-Version"
         max_age: 3600
         allow_credential: true
     upstream:

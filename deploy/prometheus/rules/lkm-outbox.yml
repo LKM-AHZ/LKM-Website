@@ -1,0 +1,53 @@
+# LKM 后端告警规则（对应蓝图 §5.1 第 7 条：「无 leader 或选主抖动即告警」）。
+#
+# 引入方式：deploy/prometheus/prometheus.yml 的 rule_files glob 本目录。
+# - compose：./deploy/prometheus/rules 挂到 /etc/prometheus/rules
+# - k8s：kustomization 的 prometheus-rules ConfigMap 挂到 /etc/prometheus/rules
+#
+# 取数点全部是 app/core/metrics.py 里已注册的指标；outbox_leader_total 由
+# app/core/outbox_relay.py 在抢主/续约/接管处打点。
+groups:
+  - name: lkm-outbox
+    rules:
+      - alert: OutboxBacklogHigh
+        expr: outbox_pending_count > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "outbox 积压持续偏高（当前 {{ $value }} 条）"
+          description: >-
+            outbox_events 中 status=pending 的积压超过 1000 条且持续 10 分钟。
+            先看 outbox_leader_total{event="acquired"} 是否还在增长（relay 是否活着），
+            再看 pulsar_subscription_backlog（下游消费是否整体滞后）。
+
+      - alert: OutboxLeaderRenewFailed
+        expr: increase(outbox_leader_total{event="renew_failed"}[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "outbox relay 租约续期失败"
+          description: >-
+            过去 10 分钟出现租约续期失败：relay 与 Redis 之间抖动，或租约已被其它副本接管。
+            持续出现即选主抖动，投递会反复中断。
+
+      - alert: OutboxLeaderFlapping
+        expr: increase(outbox_leader_total{event="acquired"}[15m]) > 4
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "outbox relay 选主抖动（15 分钟内当选 > 4 次）"
+          description: >-
+            领导权频繁易主。常见原因：outbox_leader_ttl_s 与单轮 relay_poll+archive 耗时
+            倒挂（轮内续约失败），或副本间网络/时钟异常。抖动期间投递反复中断。
+
+      - alert: OutboxStaleLockReclaimed
+        expr: increase(outbox_leader_total{event="stale_reclaimed"}[15m]) > 0
+        labels:
+          severity: info
+        annotations:
+          summary: "接管了 outbox 陈旧锁（投递者崩溃后遗留的认领标记）"
+          description: >-
+            有 relay 实例在持锁期间崩溃，其认领的行超期后被重新领取。偶发属自愈正常；
+            持续出现说明 relay 进程不稳定，需查它的退出原因。

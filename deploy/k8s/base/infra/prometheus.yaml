@@ -61,6 +61,10 @@ spec:
               mountPath: /etc/prometheus/prometheus.yml
               subPath: prometheus.yml
               readOnly: true
+            # 告警规则目录（prometheus.yml 的 rule_files 指向此处）
+            - name: rules
+              mountPath: /etc/prometheus/rules
+              readOnly: true
             - name: data
               mountPath: /prometheus
           readinessProbe:
@@ -74,5 +78,8 @@ spec:
         - name: config
           configMap:
             name: prometheus-config
+        - name: rules
+          configMap:
+            name: prometheus-rules
         - name: data
           emptyDir: {}

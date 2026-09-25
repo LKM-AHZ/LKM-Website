@@ -1,0 +1,51 @@
+# LKM 审计事件告警（蓝图 §5.2：`persistent://lkm/auth/audit.*` 家族 → 「审计 worker」）。
+#
+# 引入方式：deploy/prometheus/prometheus.yml 的 rule_files glob 本目录
+# （- /etc/prometheus/rules/*.yml），与 lkm-outbox.yml 同款；compose 与 k8s 的挂载
+# 都已指向该目录，新增规则文件无需改部署。
+#
+# 取数点：app/core/metrics.py 的 audit_events_total，由 auth/tasks.py 的
+# record_audit_event 在消费 audit.* 事件时递增。**这条链路的价值就在实时性**——
+# 审计此前只落 audit_logs 表、再由批任务灌 ClickHouse（事后可查），无法及时发现
+# 正在进行的暴力破解/越权探测。
+groups:
+  - name: lkm-audit
+    rules:
+      - alert: AuditLoginFailBurst
+        # 5 分钟均值 > 1/s（即 ~300 次失败登录）——真实用户的密码打错不会到这个量级，
+        # 到这个量级基本是撞库/喷洒。阈值保守：宁可晚一次告警，也不要天天狼来了。
+        expr: sum(rate(audit_events_total{action="audit.login_fail"}[5m])) > 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "登录失败速率异常（5 分钟均值越过 1/s）"
+          description: >-
+            正在发生大范围登录失败。先看 audit.login_fail 事件里的 ip= 字段是否集中于
+            少数来源（撞库），必要时在 APISIX 侧按来源限流/封禁；同时确认
+            audit_events_total 的消费是否正常（计数停滞说明 worker 未在消费）。
+
+      - alert: AuditPermissionChangeSpike
+        # 权限升迁是低频人工/考试触发事件，10 分钟超过 20 次值得看一眼（越权提权探测，
+        # 或踩到了异常的考试/项目批处理）。
+        expr: increase(audit_events_total{action="audit.permission_change"}[10m]) > 20
+        labels:
+          severity: warning
+        annotations:
+          summary: "权限变更告警（10 分钟内超过 20 次）"
+          description: >-
+            正常运营下升权是低频事件。突增先确认是否刚跑了考试解锁/项目纳新批处理；
+            若不是，按 audit_logs 里同一时间窗的 user_id 追查来源。
+
+      - alert: AuditSubscriptionBacklogHigh
+        # 有生产、没消费：审计订阅的 backlog 持续不降。单出一张牌是为了把「审计链路断了」
+        # 与「总线整体有问题」区分开（后者由 OutboxBacklogHigh 覆盖）。
+        expr: pulsar_subscription_backlog{subscription=~"audit(-permission)?"} > 100
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "审计订阅积压不降（subscription={{ $labels.subscription }}）"
+          description: >-
+            audit / audit-permission 订阅的 msgBacklog 超过 100 且持续 15 分钟：
+            确认对应的 auth worker 是否在跑、是否反复重启（看 audit_events_total 是否停滞）。

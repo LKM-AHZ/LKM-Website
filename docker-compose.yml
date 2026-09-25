@@ -335,6 +335,8 @@ services:
       - '--storage.tsdb.retention.time=15d'
     volumes:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # 告警规则（prometheus.yml 的 rule_files 指向此目录）
+      - ./deploy/prometheus/rules:/etc/prometheus/rules:ro
       - prometheus_data:/prometheus
     expose:
       - '9090'

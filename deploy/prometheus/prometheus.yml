@@ -7,6 +7,11 @@ global:
   scrape_interval: 15s
   evaluation_interval: 30s
 
+# 告警规则（M6 补）：蓝图 §5.1 第 7 条要求「无 leader 或选主抖动即告警」。
+# 规则内容见 ./rules/lkm-outbox.yml（同一份文件被 compose 与 k8s 共用）。
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
 scrape_configs:
   - job_name: prometheus
     static_configs:

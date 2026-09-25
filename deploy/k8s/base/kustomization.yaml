@@ -79,6 +79,14 @@ configMapGenerator:
   - name: prometheus-config
     files:
       - ../../prometheus/prometheus.yml
+  # 告警规则 —— 单独一个 ConfigMap：prometheus.yml 的 rule_files 会 glob 整个目录，
+  # 若与抓取配置同 ConfigMap 会被一并当成规则文件加载而报错。
+  # **新增规则文件必须在此逐条列出**：compose 挂的是整个目录（自动生效），k8s 这里是
+  # 显式文件清单——只加 .yml 不加这行，规则在 k8s 上静默不加载（2026-09-26 真机核查发现）。
+  - name: prometheus-rules
+    files:
+      - ../../prometheus/rules/lkm-outbox.yml
+      - ../../prometheus/rules/lkm-audit.yml
   # Grafana provisioning（数据源 / dashboard provider）与面板 JSON —— 同上，单一来源。
   # 拆三个 ConfigMap 是因为 generator 以文件 basename 作 key，同名的会互相覆盖。
   - name: grafana-provisioning-datasources
