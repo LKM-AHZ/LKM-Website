@@ -480,6 +480,44 @@ services:
     networks:
       - lkm
 
+  # 检索引擎 P2（可选：`--profile search`）。中文分词开箱（CJK 按字切分），
+  # 正好补 P1 的「2 字中文退化为顺序扫描」；主键固定 id 由应用侧建索引时声明。
+  meilisearch:
+    image: getmeili/meilisearch:v1.11
+    profiles: ['search']
+    environment:
+      MEILI_ENV: production
+      # 刻意用 `:-` 而非 `:?`：profile 服务里用必填插值会让**未启该 profile** 的
+      # `docker compose config` 直接报错（§8 #16 踩过）。启用 search profile 时必须设够
+      # 16 字节的 master key，否则容器自身启动失败（MEILI_ENV=production 的要求）。
+      MEILI_MASTER_KEY: ${LKM_SEARCH_MEILI_API_KEY:-}
+      MEILI_NO_ANALYTICS: 'true'
+    volumes:
+      - meili_data:/meili_data
+    restart: ${LKM_RESTART_POLICY:-no}
+    networks:
+      - lkm
+
+  # 检索引擎 P3（可选：`--profile search`）。单节点、关闭安全插件（内网部署）；
+  # 中文分词依赖集群侧插件（ik/smartcn），未装则用 standard 分析器，见 §8 登记。
+  opensearch:
+    image: opensearchproject/opensearch:2.17.1
+    profiles: ['search']
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: 'true'
+      DISABLE_INSTALL_DEMO_CONFIG: 'true'
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    restart: ${LKM_RESTART_POLICY:-no}
+    networks:
+      - lkm
+
   minio:
     image: minio/minio:latest
     command: ['server', '/data', '--console-address', ':9001']
@@ -547,6 +585,14 @@ services:
       LKM_S3_PUBLIC_ENDPOINT_URL: ${LKM_S3_PUBLIC_ENDPOINT_URL:-http://124.220.55.235}
       LKM_S3_BUCKET: ${LKM_S3_BUCKET:-lkm}
       LKM_S3_PREFIX: ${LKM_S3_PREFIX:-files}
+      # 检索：默认 pg（零外部依赖）；置 meilisearch/opensearch 并起 --profile search 后生效，
+      # 引擎不可用时读路径 fail-open 回落 PG。
+      LKM_SEARCH_ENGINE: ${LKM_SEARCH_ENGINE:-pg}
+      LKM_SEARCH_MEILI_URL: ${LKM_SEARCH_MEILI_URL:-}
+      LKM_SEARCH_MEILI_API_KEY: ${LKM_SEARCH_MEILI_API_KEY:-}
+      LKM_SEARCH_OPENSEARCH_URL: ${LKM_SEARCH_OPENSEARCH_URL:-}
+      LKM_SEARCH_OPENSEARCH_USER: ${LKM_SEARCH_OPENSEARCH_USER:-}
+      LKM_SEARCH_OPENSEARCH_PASSWORD: ${LKM_SEARCH_OPENSEARCH_PASSWORD:-}
       LKM_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-lkmadmin}
       LKM_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?生产需设置 MINIO_ROOT_PASSWORD}
       # LKM_FILES_STORE_DIR 仅作迁移脚本参考；运行时对象存于 MinIO（本地路径可保留供迁移读取）
@@ -577,6 +623,10 @@ services:
       LKM_INFISICAL_SECRET_PATH: ${LKM_INFISICAL_SECRET_PATH:-/}
       LKM_INFISICAL_CLIENT_ID: ${LKM_INFISICAL_CLIENT_ID:-}
       LKM_INFISICAL_CLIENT_SECRET: ${LKM_INFISICAL_CLIENT_SECRET:-}
+      # 零明文（B6b）：指向**容器内**的挂载文件路径（用 compose `secrets:` 或 bind mount），
+      # 优先级高于上面两个 env；留空则回落 env（默认行为不变）。
+      LKM_INFISICAL_CLIENT_ID_FILE: ${LKM_INFISICAL_CLIENT_ID_FILE:-}
+      LKM_INFISICAL_CLIENT_SECRET_FILE: ${LKM_INFISICAL_CLIENT_SECRET_FILE:-}
       # ClickHouse 分析库：backend 承载 admin 只读查询；默认关（查询端点 503）
       LKM_CLICKHOUSE_ENABLED: ${LKM_CLICKHOUSE_ENABLED:-false}
       LKM_CLICKHOUSE_URL: ${LKM_CLICKHOUSE_URL:-http://clickhouse:8123}
@@ -667,6 +717,10 @@ services:
       LKM_INFISICAL_SECRET_PATH: ${LKM_INFISICAL_SECRET_PATH:-/}
       LKM_INFISICAL_CLIENT_ID: ${LKM_INFISICAL_CLIENT_ID:-}
       LKM_INFISICAL_CLIENT_SECRET: ${LKM_INFISICAL_CLIENT_SECRET:-}
+      # 零明文（B6b）：指向**容器内**的挂载文件路径（用 compose `secrets:` 或 bind mount），
+      # 优先级高于上面两个 env；留空则回落 env（默认行为不变）。
+      LKM_INFISICAL_CLIENT_ID_FILE: ${LKM_INFISICAL_CLIENT_ID_FILE:-}
+      LKM_INFISICAL_CLIENT_SECRET_FILE: ${LKM_INFISICAL_CLIENT_SECRET_FILE:-}
     volumes:
       # 私钥 + 公钥（只读）：仅 auth 侧挂私钥，其余容器只挂同一目录里的公钥。
       - ./deploy/jwt/keys:/etc/lkm/jwt:ro
@@ -912,6 +966,47 @@ services:
       LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
       LKM_AUTH_HTTP_URL: ${LKM_AUTH_HTTP_URL:-http://auth:8001}
       LKM_AUTH_HTTP_TOKEN: ${LKM_AUTH_HTTP_TOKEN:?生产需设置 LKM_AUTH_HTTP_TOKEN}
+    restart: ${LKM_RESTART_POLICY:-no}
+    networks:
+      - lkm
+
+  # 消费 biz/content.events 增量同步外部检索索引（Meilisearch/OpenSearch，引擎由
+  # LKM_SEARCH_ENGINE 择一）。未启用外部引擎时为空转消费者（事件记账、无索引写入），
+  # 故本服务随默认栈常驻、不需要 profile。
+  worker-content-index:
+    image: lkm-service:latest
+    command: ['python', '-m', 'app.core.worker_content_index']
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      pulsar:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+    environment:
+      <<: *otel-env
+      LKM_ENV: production
+      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
+      LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
+      LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
+      LKM_REDIS_URL: redis://redis:6379/0
+      LKM_PULSAR_URL: pulsar://pulsar:6650
+      LKM_DB_HOST: postgres
+      LKM_DB_PORT: 5432
+      LKM_DB_NAME: ${POSTGRES_DB:-lkm}
+      LKM_DB_USER: ${POSTGRES_USER:-lkm}
+      LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
+      LKM_AUTH_HTTP_URL: ${LKM_AUTH_HTTP_URL:-http://auth:8001}
+      LKM_AUTH_HTTP_TOKEN: ${LKM_AUTH_HTTP_TOKEN:?生产需设置 LKM_AUTH_HTTP_TOKEN}
+      # 检索引擎（与 backend 同款取值；pg = 只记账不写索引）
+      LKM_SEARCH_ENGINE: ${LKM_SEARCH_ENGINE:-pg}
+      LKM_SEARCH_MEILI_URL: ${LKM_SEARCH_MEILI_URL:-}
+      LKM_SEARCH_MEILI_API_KEY: ${LKM_SEARCH_MEILI_API_KEY:-}
+      LKM_SEARCH_OPENSEARCH_URL: ${LKM_SEARCH_OPENSEARCH_URL:-}
+      LKM_SEARCH_OPENSEARCH_USER: ${LKM_SEARCH_OPENSEARCH_USER:-}
+      LKM_SEARCH_OPENSEARCH_PASSWORD: ${LKM_SEARCH_OPENSEARCH_PASSWORD:-}
     restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
@@ -1306,6 +1401,8 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
+  meili_data:
+  opensearch_data:
   pulsar_data:
   prometheus_data:
   grafana_data:

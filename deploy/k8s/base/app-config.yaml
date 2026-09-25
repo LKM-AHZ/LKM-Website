@@ -76,6 +76,11 @@ data:
   LKM_CLICKHOUSE_USER: lkm
   LKM_CLICKHOUSE_EXPORT_WINDOW: "1000"
   LKM_CLICKHOUSE_QUERY_LIMIT_MAX: "200"
+  # 站内检索（B2）：默认 pg（零外部依赖）。启用 infra/search.yaml 的引擎时改这里的
+  # LKM_SEARCH_ENGINE 并把对应 StatefulSet 副本数改 1（引擎不可用时读路径回落 PG）。
+  LKM_SEARCH_ENGINE: "pg"
+  LKM_SEARCH_MEILI_URL: http://meilisearch:7700
+  LKM_SEARCH_OPENSEARCH_URL: http://opensearch:9200
   LKM_PREFECT_ENABLED: "false"
   LKM_PREFECT_API_URL: ""
   LKM_PREFECT_DEPLOYMENT: ""

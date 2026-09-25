@@ -30,6 +30,8 @@ resources:
   - infra/vector.yaml
   - infra/otel-collector.yaml
   - infra/prefect.yaml
+  # 检索（B2）：可选组件，清单里 replicas: 0 默认不部署
+  - infra/search.yaml
   # 监控（M6.12）：可选组件，清单里 replicas: 0 默认不部署
   - infra/prometheus.yaml
   - infra/grafana.yaml

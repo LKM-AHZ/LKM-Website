@@ -128,6 +128,8 @@ stringData:
   MINIO_ROOT_PASSWORD: "$(get_dq MINIO_ROOT_PASSWORD)"
   LKM_S3_ACCESS_KEY: "$(yaml_dq "$MINIO_USER")"
   LKM_S3_SECRET_KEY: "$(get_dq MINIO_ROOT_PASSWORD)"
+  # 检索引擎：未配则不出值，search.yaml 的 secretKeyRef 是 optional=true
+  SEARCH_MEILI_API_KEY: "$(get_dq LKM_SEARCH_MEILI_API_KEY)"
   CLICKHOUSE_USER: "$(get_dq CLICKHOUSE_USER lkm)"
   CLICKHOUSE_PASSWORD: "$(get_dq_opt CLICKHOUSE_PASSWORD change-me-clickhouse)"
   PREFECT_DB_PASSWORD: "$(get_dq_opt PREFECT_DB_PASSWORD change-me-prefect-db)"
