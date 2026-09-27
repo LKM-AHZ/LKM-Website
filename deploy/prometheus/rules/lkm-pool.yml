@@ -1,0 +1,50 @@
+# LKM 数据库连接池告警（蓝图 §3.3 第 3 条，标"关键"：连接池空闲/占用/等待超时暴露指标，
+# 占用接近 80% 即告警；配合独立分池定位是哪个组件在打满）。
+#
+# 引入方式：deploy/prometheus/prometheus.yml 的 rule_files glob 本目录
+# （- /etc/prometheus/rules/*.yml），与 lkm-outbox.yml / lkm-audit.yml 同款。
+# ⚠️ k8s 侧**还要**在 deploy/k8s/base/kustomization.yaml 的 prometheus-rules ConfigMap
+# 显式列出本文件（那边是文件清单，只加 .yml 不会加载，静默失效）。
+#
+# 取数点：app/core/metrics.py 的 DBPoolCollector 在抓取时刻读 app/db/session.py 的
+# Web 主池 / worker 批处理池实时水位，导出 db_pool_connections{pool,state}。
+# pool 标签用于区分打满的是哪个池：pool="web" 影响在线请求，pool="worker" 拖慢
+# outbox relay / APScheduler / 批处理。
+groups:
+  - name: lkm-db-pool
+    rules:
+      - alert: DBPoolSaturationHigh
+        # 占用率 = 已借出 / 当前已开连接数。SQLAlchemy QueuePool 语义下 size() 是配置的
+        # pool_size（恒为上限，非当前数），overflow() 是当前溢出量，二者相加 = 当前实际
+        # 持有的连接数。>80% 且持续 5 分钟 = 池在被打满。
+        expr: >-
+          sum by (pool) (db_pool_connections{state="checked_out"})
+          / sum by (pool) (db_pool_connections{state=~"size|overflow"})
+          > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "数据库连接池占用率 > 80%（pool={{ $labels.pool }}）"
+          description: >-
+            {{ $labels.pool }} 池借出连接占比超过 80% 且持续 5 分钟。先按 pool 定位组件：
+            pool="web" 是在线请求把主池打满（长事务/慢查询/连接泄漏），
+            pool="worker" 是 outbox relay/调度/批处理占满独立池。
+            再看 app/db/session.py 的池参数（db_pool_size / db_worker_pool_size）与慢查询。
+
+      - alert: DBPoolExhausted
+        # 占用率逼近 100%（全部借出、溢出也到顶）——新请求会阻塞在池的 get 上直到超时。
+        # 与「缓慢逼近」的 80% 告警分开：这条要立即介入。
+        expr: >-
+          sum by (pool) (db_pool_connections{state="checked_out"})
+          / sum by (pool) (db_pool_connections{state=~"size|overflow"})
+          >= 0.99
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "数据库连接池已耗尽（pool={{ $labels.pool }}）"
+          description: >-
+            {{ $labels.pool }} 池全部连接借出，新请求会阻塞在连接获取上直至超时。
+            立即排查持有连接不释放的路径（未关闭的 session / 长事务 / 慢查询），
+            必要时临时上调该池的 pool_size 或 max_overflow 争取排查时间。
