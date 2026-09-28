@@ -632,6 +632,37 @@ docker compose exec -T postgres pg_dump -U lkm lkm > backup_db_$(date +%F).sql
 docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
 ```
 
+### schema 变更纪律(迁移链与大表)
+
+后端有**两条独立迁移链**,各自单头线性、命名语义化(`0001_...`/`0002_...`),与蓝图 §3.2 的
+「每个迁移一件事、可回滚」一致:
+
+| 链 | 目录 | 配置文件 | 覆盖 |
+|---|---|---|---|
+| 业务库 | `LKM-service/alembic/versions/` | `alembic.ini` | 业务域全部表(含 `user_dim` 宽表) |
+| auth 库 | `LKM-service/alembic_auth/versions/` | `alembic.auth.ini` | auth 自有 18 张表 |
+
+**默认通道仍是 `LKM_USE_ALEMBIC=false`(create_all)**,迁移链是生产后备;两者不混用。
+
+**改 schema 的规矩**:
+
+1. **加列/加索引**可走 create_all 通道的**加性同步**(`_sync_additive_schema`,只增不改,见《执行路线图》§8 #38)——但模型改了**也要补一条 alembic revision**,否则 Alembic 通道建出的库缺列。
+2. **破坏性变更**(改类型 / 删列 / 改约束 / 改主键)**只能走 alembic 并人工评审**:create_all 通道不会 ALTER,直接改模型会让既有库静默失配。
+3. **大表变更先出 SQL 再进库,不要直接 `upgrade`**:
+
+```sh
+# 只生成 SQL、不连库执行(逐 revision 双向:upgrade 与 downgrade 各一份)
+LKM_USE_ALEMBIC=true docker compose exec backend \
+  alembic upgrade <prev>:<rev> --sql > /tmp/mig.sql
+# 交 DBA 评审后再人工喂库(分批/低峰执行;必要时手工改成分批 DDL)
+docker compose exec -T postgres psql -U lkm -d lkm < /tmp/mig.sql
+```
+
+   `content_items`、`content_comments`、`outbox_events`、`interaction_view_logs` 属大表,对其
+   `ADD COLUMN ... NOT NULL DEFAULT` / 类型收紧 / 建索引务必用 `CREATE INDEX CONCURRENTLY`(手工改 SQL)
+   或分批回填,**避免全表重写与长锁**。CI 的 `migrations` job 已对每条 revision 做双向离线 SQL
+   体检(`LKM-service/scripts/check_migrations.py`),但它**不替代**上线前的人工评审。
+
 ### 可选方案：主机手动安装 PostgreSQL
 
 若需复用主机已有数据库实例,可在主机直接安装 PostgreSQL 并让后端连接外部库。
