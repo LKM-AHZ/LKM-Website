@@ -189,3 +189,11 @@ tar czf bot_data_$(date +%F).tar.gz -C LKM-bot/data . 2>/dev/null || true
 JSON 可展开;对应 `/api/v1/admin/dlq` 端点。该端点本次补齐了统一的 `{code,msg,data}`
 包络(此前返回裸 JSON,前端 `readAdminResp` 无法解析)。
 ```
+
+**relay 发布失败归档可重放**(`event_failures`):DLQ 管**消费侧**失败,本表管 **relay 发布侧**
+投不出的归档(超 `max_attempts` 重试耗竭,或未知 routing_key/payload 不可编码的确定性永久失败)。
+告警(prometheus `lkm-outbox.yml`)提示积压后,先用
+`GET /api/v1/admin/event-failures` 定位(按 `folded_at` 倒序,带 `event_id`/`routing_key`/`reason`),
+修好根因再 `POST /api/v1/admin/event-failures/{id}/replay` 重放:该动作**沿用原 `event_id`
+重新入队发件箱**(下游按幂等键去重),成功即摘除归档行;消息总线未启用时**不删归档行**并返回
+503(归档副本是排障唯一依据,绝不为"看起来成功"而丢)。
