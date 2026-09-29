@@ -431,14 +431,23 @@ services:
     networks:
       - lkm
 
+  # L2 缓存 / 跨进程锁 / 限流 / pub-sub 后端。默认 Redis 7；整套可换成 Dragonfly
+  # （RESP 兼容，应用零改动——唯一客户端是 LKM-service/app/core/redis.py 的 from_url）。
+  # 切换只动下面三个变量，Service 名与 redis://redis:6379/0 不变；见 .env.example
+  # 的 LKM_REDIS_* 与 DEPLOYMENT.md「八·一、切换 L2 后端」。
+  # **不持久化**（默认 `--save "" --appendonly no`）：原先靠 AOF 兜底的租约/限流状态已改为
+  # 不依赖持久化，重启即空属预期。
   redis:
-    image: redis:7-alpine
-    command: ['redis-server', '--appendonly', 'yes']
+    image: ${LKM_REDIS_IMAGE:-redis:7-alpine}
+    command: ${LKM_REDIS_COMMAND:-redis-server --save "" --appendonly no}
     volumes:
       - redis_data:/data
     restart: ${LKM_RESTART_POLICY:-no}
     healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
+      # 用 CMD-SHELL 而非 CMD 数组，是为了让探测命令本身也能随后端替换：Dragonfly
+      # 镜像未必自带 redis-cli，此时把 LKM_REDIS_PING 换成该镜像可用的等价探测
+      # （或恒真 `exit 0`）。默认值与原来的 `redis-cli ping` 逐字等价。
+      test: ['CMD-SHELL', "${LKM_REDIS_PING:-redis-cli ping}"]
       interval: 10s
       timeout: 5s
       retries: 5

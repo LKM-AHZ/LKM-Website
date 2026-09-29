@@ -589,6 +589,65 @@ kubectl kustomize deploy/k8s/overlays/kind --load-restrictor LoadRestrictionsNon
   需要沙箱时指向集群外的 Bay，见 `deploy/k8s/README.md`「已知限制」。
 - 本地无集群时可用 kind 验收：`sh deploy/k8s/overlays/kind/setup.sh`。
 
+## 八·一、切换 L2 后端（Redis ↔ Dragonfly）
+
+L2 缓存 / 跨进程锁 / 限流 / pub-sub 的后端默认是 **Redis 7**，可整套换成 **Dragonfly**
+（内存效率、单实例多核更好）。两者共用同一套 RESP 协议，后端的唯一客户端是
+`LKM-service/app/core/redis.py` 的 `Redis.from_url(settings.redis_url)`，故**切换不改任何
+应用代码**，只改部署侧的镜像与启动参数；Service 名（redis）与 URL（`redis://redis:6379/0`）
+都不变。
+
+切之前先读**取舍**：
+
+- **两边都无持久化**。默认 `--save '' --appendonly no`（Redis 侧原先开的 AOF 已关闭），
+  Dragonfly 也不再配 `--snapshot_cron` —— 重启即空，两个后端行为完全一致。原先靠 AOF 兜底的
+  状态已改为**不依赖持久化**：outbox 租约（短 TTL 自愈）、限流计数（fail-open）、admin 单设备
+  撤销（落 DB 表 `revoked_access_tokens`）、feed 大 V 集合（读时按 DB 现算）、直传会话
+  （落 DB 表 `upload_sessions`）。
+- **灰度（双后端并行）**：设 `LKM_REDIS_URL_SECONDARY` 指向第二后端、`LKM_REDIS_SECONDARY_PREFIXES`
+  列出要走它的 key 前缀（逗号分隔，如 `user:snap,feed`），即按业务域把流量逐步切过去；两者都
+  留空时行为与单后端**完全一致**。同一前缀恒定落同一后端，故缓存/锁/版本号/epoch 的一致性
+  天然成立；L1 失效广播会双发到两个后端。
+- **命令面已核对**：只用 RESP 核心命令（含 SETBIT/GETBIT 位图、WATCH/MULTI 事务、
+  EVALSHA + NOSCRIPT、SCAN、GETDEL、pub/sub），无 RedisBloom 等模块依赖。
+- 多 DB 无忧：Dragonfly `--dbnum` 默认 16，`SELECT 1` 可用。
+
+**compose**（根 `.env`，三行即切，见 `.env.example`「L2 缓存后端」块）：
+
+```sh
+LKM_REDIS_IMAGE=docker.dragonflydb.io/dragonflydb/dragonfly:v1.40.2
+LKM_REDIS_COMMAND=--dir=/data --dbnum=16   # 不配 snapshot，与 Redis 侧一样不持久化
+LKM_REDIS_PING=redis-cli ping
+docker compose up -d redis
+```
+
+**k8s**（Kustomize component，默认不启用；在目标 overlay 加一行即切）：
+
+```yaml
+# deploy/k8s/overlays/{prod,kind}/kustomization.yaml
+components:
+  - ../../components/redis-dragonfly
+```
+
+该 component 见 `deploy/k8s/components/redis-dragonfly/`，覆盖镜像 / 启动参数 / 探针
+（改 TCP，不依赖镜像内是否带 CLI）/ 资源。**版本 tag 三处须一致**：该 component、
+`.env.example`、`deploy/k8s/overlays/kind/setup.sh`。
+
+**验证**（两个后端跑同一套集成断言，见
+`LKM-service/tests/integration/test_redis_backend_compat.py`）：
+
+```sh
+cd LKM-service
+# Redis 7
+LKM_IT_USE_TESTCONTAINERS=1 .venv/bin/python -m pytest -m integration
+# Dragonfly
+LKM_IT_USE_TESTCONTAINERS=1 \
+    LKM_IT_REDIS_IMAGE=docker.dragonflydb.io/dragonflydb/dragonfly:v1.40.2 \
+    .venv/bin/python -m pytest -m integration
+```
+
+CI 的 integration job 已按这两个后端做 matrix，两边都绿才算兼容不回退。
+
 ## 数据库
 
 ### 默认方案：docker 内置 PostgreSQL(TimescaleDB)
@@ -721,7 +780,8 @@ docker compose up -d backend
 ## 数据持久化
 
 - 数据库在 `postgres_data` 卷(postgres 容器 `/var/lib/postgresql/data`)。
-- Redis 在 `redis_data` 卷(redis 容器 `/data`,已开启 AOF `appendonly yes`;内容多为可重建的限流/缓存数据,一般无需单独备份)。
+- Redis 在 `redis_data` 卷(redis 容器 `/data`;**不持久化**——`--save '' --appendonly no`,
+  内容全为可重建的缓存/限流/租约数据,无需备份)。
 - 文件库上传文件与成员头像存在 **MinIO** 对象存储(`minio_data` 卷);后端以 S3 兼容接口读写。
 - 博客 git 仓库(`blog_repos/`)在 `backend_data` 卷,挂载到后端容器 `/data`(`files_store` 为存量迁移源,运行时不写)。
 - 备份示例:

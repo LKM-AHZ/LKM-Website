@@ -1,0 +1,56 @@
+# 把 base/infra/redis.yaml 的 StatefulSet 从 Redis 7 改成 Dragonfly。
+#
+# 与 Redis 版的四个实质差异：
+#
+# 1) **持久化**：两边都**不持久化**（base 的 Redis 侧已改为 `--save '' --appendonly no`，
+#    Dragonfly 这里也不配 `--snapshot_cron`）——重启即空，两个后端行为完全对齐。原先靠 AOF
+#    兜底的租约 / 限流 / admin 撤销 / 直传会话 / 大 V 集合，已分别改为短 TTL 自愈、fail-open、
+#    落 DB 表或读时现算（见 DEPLOYMENT.md「八·一、切换 L2 后端」）。
+#
+# 2) **探针**：不依赖镜像内是否带 CLI，统一用 tcpSocket。Redis 版是 `redis-cli ping`
+#    （exec 依赖镜像内含 redis-cli）；Dragonfly 官方镜像是否含该工具未经确认，TCP 探测
+#    对"进程已监听端口"这一 readiness 语义足够，且不引入额外前提。
+#
+# 3) **多 DB**：`--dbnum=16`（即 Dragonfly 默认值）显式写出，保证 `SELECT 1` 可用
+#    （compose 侧 infisical 用 db1，业务用 db0）。
+#
+# 4) **启动参数**：Dragonfly 官方容器 run 惯例带 `--ulimit memlock=-1`（大页）；k8s 不便
+#    直接设 ulimit，故这里不写 `--force_epoll`。**若节点内核/权限使 io_uring 不可用导致
+#    启动报错，再加 `--force_epoll`**（以部分性能换兼容）——切换前请在目标集群实测一次
+#    启动日志再定。`--maxmemory` 同样按 base 的 Redis 版对等原则暂不设置。
+#
+# 版本钉在 1.x 线最新（v1.40.2）。2.0.0 是刚发布的 major，未纳入本次范围；升 2.x 需重跑
+# 兼容性回归（见 LKM-service/tests/integration/test_redis_backend_compat.py）。
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+spec:
+  template:
+    spec:
+      containers:
+        - name: redis
+          image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.40.2
+          args:
+            - --dir=/data
+            - --dbnum=16
+          # $patch: replace —— base 的探针是 exec(redis-cli ping)；exec 与 tcpSocket 是
+          # Probe 的互斥 handler，不整体替换会被 strategic-merge 合并成「两个 handler 同时存在」
+          # 而被 API Server 拒绝。
+          readinessProbe:
+            $patch: replace
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            $patch: replace
+            tcpSocket:
+              port: redis
+            periodSeconds: 20
+          # Dragonfly 是单进程多线程，冷启动（加载快照 + 建线程池）比 redis 慢，
+          # 故启动余量略放宽；内存 requests/limits 与 Redis 版对齐，实测后再按
+          # Dragonfly 的内存模型调。
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 512Mi }

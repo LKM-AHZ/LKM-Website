@@ -121,6 +121,8 @@ LKM_VERIFICATION_CODE_PEPPER=<与上面都不同>
 
 - 数据库:PostgreSQL;设 `LKM_DB_HOST/PORT/NAME/USER/PASSWORD`(见 `LKM-service/.env.example`)。
 - Redis:设 `LKM_REDIS_URL=redis://...` 启用共享限流与任务队列;留空回退单机(限流失效、任务队列不消费)。
+- L2 后端可换:默认 Redis 7,也可整套换成 Dragonfly(RESP 兼容,应用代码零改动)。compose 侧
+  切换与取舍见 `DEPLOYMENT.md`「八·一、切换 L2 后端」;集成测试对两种后端都能跑,见下「测试」段。
 
 ### 对象存储(文件库与头像)
 
@@ -157,9 +159,15 @@ uv run python -m app.core.worker_outbox    # outbox relay
 ```sh
 uv run pytest                 # 单元/接口测试,默认排除 integration 标记
 uv run pytest -m integration  # 显式运行需真实 Redis 的集成测试(否则 skipped)
+# 换 L2 后端跑同一套兼容性断言(Dragonfly;默认 redis:7-alpine)
+LKM_IT_USE_TESTCONTAINERS=1 \
+  LKM_IT_REDIS_IMAGE=docker.dragonflydb.io/dragonflydb/dragonfly:v1.40.2 \
+  uv run pytest -m integration
 ```
 
 `addopts` 默认 `-m "not integration"`,日常 `uv run pytest` 不会碰 Redis。
+`LKM_IT_REDIS_IMAGE` 指定 Testcontainers 起哪个后端(默认 `redis:7-alpine`);
+命令面兼容性回归在 `tests/integration/test_redis_backend_compat.py`。
 测试函数可用前缀 `test_*` 或 `should_*`,asyncio 自动模式(auto)开箱即用。
 
 ### 类型门禁与 lint

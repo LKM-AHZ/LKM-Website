@@ -1,0 +1,21 @@
+# kustomize Component：把 L2 后端从 Redis 7 换成 Dragonfly（RESP 兼容）。
+#
+# **默认不启用**。切换方式是在目标 overlay 的 kustomization.yaml 里加一行：
+#
+#   components:
+#     - ../../components/redis-dragonfly
+#
+# 不加则 base 的 infra/redis.yaml（redis:7-alpine）原样生效——两个 overlay
+# （prod / kind）各自决定用哪个后端，base 不预设。
+#
+# 为什么应用代码不用动：LKM-service 的 Redis 接入只有一处
+# `app/core/redis.py` 的 `Redis.from_url(settings.redis_url)`，Dragonfly 走同一 RESP
+# 协议，Service 名（redis）与 URL（redis://redis:6379/0）都不变，故切换到本 component
+# 只是换了一个"说 Redis 协议的服务进程"。命令面核查见 deploy 文档的切换小节。
+#
+# 与 base 的差异集中在 patch-redis.yaml（镜像 / 启动参数 / 探针 / 资源）。
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+patches:
+  - path: patch-redis.yaml

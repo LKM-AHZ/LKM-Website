@@ -21,7 +21,11 @@ LOADRESTRICTOR="--load-restrictor LoadRestrictionsNone"
 # lkm-bot 属可选组件（base 里 replicas: 0）：镜像不存在时只提示，主栈验收不受影响；
 # 要验收 bot 先 `docker compose --profile bot build lkmbot`。
 LOCAL_IMAGES="lkm-service:latest lkm-official-website:latest lkm-official-static:latest"
-OPTIONAL_IMAGES="lkm-bot:latest"
+# 可选组件镜像：宿主机没有只提示、不阻断主栈（base 里默认不部署它们）。
+# - lkm-bot：base 中 replicas: 0，要验收先 `docker compose --profile bot build lkmbot`。
+# - Dragonfly：L2 后端的可选替换（见 components/redis-dragonfly）。**默认不启用**，
+#   只在给 overlay 加了该 component 时才需要；tag 须与 patch-redis.yaml 保持一致。
+OPTIONAL_IMAGES="lkm-bot:latest docker.dragonflydb.io/dragonflydb/dragonfly:v1.40.2"
 # 中间件镜像：宿主机 docker 已有 compose 拉过的那份，注入即免出网
 # 主库用 TimescaleDB 版（hypertable）；prefect 自带的 prefect-postgres 仍是 postgres:16-alpine，
 # 故两者都要注入。

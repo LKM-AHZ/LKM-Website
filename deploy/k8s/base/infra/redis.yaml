@@ -1,7 +1,9 @@
 # Redis：leader 租约（M1.2）、共享限流、L2 缓存。**硬依赖**——
 # /readiness 在 Redis 不可达时返 503（M6.2 口径：L2 缺失即无一致性锚点）。
-# AOF 已开（compose 同款 appendonly yes）：内容是「可重建但重建有代价」的租约与限流状态，
-# 丢卷会让 outbox 租约瞬时失效、限流计数清零，故仍持久化。
+# **不持久化**（`--save '' --appendonly no`，与 compose、Dragonfly 后端完全对齐）：
+# 原先靠 AOF 兜底的租约 / 限流计数已改为不依赖持久化——租约短 TTL 自愈、限流 fail-open、
+# admin 单设备撤销落 DB 表（`revoked_access_tokens`）。重启即空属预期，见 DEPLOYMENT.md
+# 「八·一、切换 L2 后端」。
 apiVersion: v1
 kind: Service
 metadata:
@@ -47,7 +49,7 @@ spec:
         - name: redis
           image: redis:7-alpine
           imagePullPolicy: IfNotPresent
-          args: ['redis-server', '--appendonly', 'yes', '--dir', '/data']
+          args: ['redis-server', '--save', '', '--appendonly', 'no', '--dir', '/data']
           ports:
             - name: redis
               containerPort: 6379

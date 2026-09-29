@@ -1,0 +1,42 @@
+# LKM 跨进程指标中继的告警（取数链路本身的自检）。
+#
+# 背景：Prometheus 只抓 backend:8000，而 outbox relay / 各 worker / scheduler / auth 都
+# 不暴露 /metrics。它们的业务指标（outbox_pending_count、outbox_leader_total、
+# content_index_events_total、counts_reconcile_repeated_total、audit_events_total、
+# notify_failed_total、user_snap_* 等）改为：生产进程把本进程快照写进 Redis，
+# **由 API 进程聚合后落到同名指标上**（选项③，见 LKM-service/app/core/metrics_relay.py）。
+#
+# 这条规则守的就是那条中继链路本身：**链路断了要能报警**。否则指标会静默冻结在旧值，
+# 把「假保护」从一层挪到另一层——正是本机制要根治的病。
+#
+# 引入方式：deploy/prometheus/prometheus.yml 的 rule_files glob 本目录
+# （- /etc/prometheus/rules/*.yml），与 lkm-outbox.yml / lkm-audit.yml / lkm-pool.yml 同款。
+# ⚠️ k8s 侧**还要**在 deploy/k8s/base/kustomization.yaml 的 prometheus-rules ConfigMap
+# 显式列出本文件（那边是文件清单，只加 .yml 不会加载，静默失效）。
+#
+# 取数点：app/core/metrics.py 的 metrics_relay_up / metrics_relay_instances，由
+# app/core/metrics_relay.py 的 API 侧 reporter 周期 set（默认 15s）。
+groups:
+  - name: lkm-metrics-relay
+    rules:
+      - alert: MetricsRelayNoProducers
+        # up=0 表示本轮一份有效快照都没读到：所有生产者都停了、Redis 断了、或前缀/env 配错。
+        # ⚠️ 前提是**部署了** worker/auth 进程。纯 backend 的开发栈天然为 0（没有生产者），
+        # 那种部署下请把本规则移除或加 `and on() kube_deployment_status_replicas_available`
+        # 之类的前置条件——本仓 compose/k8s 清单都带 worker，故默认保留。
+        expr: metrics_relay_up == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "跨进程指标中继无来源（worker/auth 指标已不可信）"
+          description: >-
+            过去 10 分钟 API 进程一份指标快照都没读到，说明 outbox relay / worker / scheduler
+            / auth 的指标**没有在被上报**——期间这些指标会冻结在最后一次读到的值上，
+            基于它们的告警（如 lkm-outbox.yml）可能既不触发也不恢复。
+            排查顺序：①这些进程是否在跑（`docker ps` / kubectl get pod）；
+            ②`redis-cli keys 'lkm:<env>:metrics:relay|*'` 是否有键（没有=生产者没写，
+            有而 up=0=读取侧 Redis/前缀问题）；③两侧的 LKM_ENV 是否一致
+            （快照键带 env 命名空间，不一致会互相看不见）。
+            `metrics_relay_instances` 是"部分生产者掉了"的观察点（本仓部署应有多个来源），
+            但它单条不构成告警——数量阈值随部署形态而变，故只作看板/排查用，不设固定阈值规则。
