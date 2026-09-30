@@ -1,0 +1,33 @@
+# LKM 事件契约告警（《后端规划》§九「事件契约校验」）。
+#
+# 背景（务必读，否则会误读这条告警的边界）：Pulsar 的 `schemaValidationEnforced=true` **不校验
+# payload**——2026-09-30 在真 broker 上实测：违约 payload（fn 为整数 / args 为字符串 / 整条不成形）
+# 与未声明的 fn 一律照发成功，该开关只做到「topic 已有 schema 时，未声明 schema 的 producer 接不
+# 进来」。真正的「事件契约」（fn → 实参形状 + 允许承载它的 routing_key）在应用层
+# （LKM-service/app/core/event_contract.py），在**发布期**（messaging.publish / outbox relay 折叠）
+# 与**消费期**（worker 丢弃）两处拦截。本规则守的就是这两处的计数。
+#
+# 取数点：app/core/metrics.py 的 event_contract_violations_total{fn,side}。写出点分布在
+# API / auth / scheduler / 各 worker 进程，非 API 进程的计数经 metrics_relay 中继（见
+# app/core/metrics_relay.py:RELAYED），故这里在 backend 的 /metrics 上能看全。
+#
+# 为什么任何一条都值得告警：契约违约**不是**环境噪音，是代码缺陷或投产事故——
+#   * side=produce：某个发布点写了未登记的 fn / 实参形状不符 → 事件已被拒发（直接发布口）
+#     或折叠进 event_failures（relay，可在 /admin/event-failures 看到并人工重放）；
+#   * side=consume：总线上出现了违反契约的消息并被 worker 丢弃（含改名/降级期的新旧版本交错）。
+# 两边都属于「有事件正在丢失」，故阈值取 0（不设 for，先吵起来再定位）。
+groups:
+  - name: lkm-event-contract
+    rules:
+      - alert: EventContractViolation
+        expr: increase(event_contract_violations_total[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "事件契约违约（fn={{ $labels.fn }} side={{ $labels.side }}）"
+          description: >-
+            15 分钟内有事件因不符合契约而被拒发或丢弃。先按 side 分流：
+            side=produce 查发布点（日志 `事件契约违约 side=produce`，fn 已标明是哪个事件），
+            确认是代码写错还是契约登记表漏登记；side=consume 说明**总线上已有坏消息**，
+            查是否为灰度期新旧版本交错，必要时用 /admin/event-failures 人工重放。
+            fn="<unknown>" 表示连 fn 都不是登记过的名字（拼写错误或脏 payload）。

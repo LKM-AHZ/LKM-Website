@@ -132,6 +132,19 @@ spec:
               for ns in biz auth system; do
                 bin/pulsar-admin --admin-url http://localhost:8080 namespaces create "lkm/$ns" || true
               done
+              # Schema 校验强制（与 compose 的 deploy/pulsar/entrypoint.sh 逐字同口径）：
+              # 只保证「topic 已有 schema 时未声明 schema 的 producer 接不进来」，**不校验
+              # payload**（2026-09-30 实测）；应用层事件契约见 LKM-service/app/core/event_contract.py。
+              for ns in biz auth system; do
+                bin/pulsar-admin --admin-url http://localhost:8080 namespaces set-schema-validation-enforce -e "lkm/$ns" || true
+              done
+              for ns in biz auth system; do
+                enforced="$(bin/pulsar-admin --admin-url http://localhost:8080 namespaces get-schema-validation-enforce "lkm/$ns" 2>/dev/null || true)"
+                if [ "$enforced" != "true" ]; then
+                  echo "pulsar-init: lkm/$ns 的 schema 校验未生效（读到 '$enforced'）" >&2
+                  exit 1
+                fi
+              done
               bin/pulsar-admin --admin-url http://localhost:8080 tenants list
               echo "pulsar tenants/namespaces ready; idling"
               # 长睡而非退出：退出会被 restartPolicy 反复拉起、空转刷日志

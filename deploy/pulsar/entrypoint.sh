@@ -92,6 +92,28 @@ for ns in biz auth system; do
         exit 1
     }
 done
-echo "pulsar-entrypoint: 干净启动完成，lkm 租户与 biz/auth/system namespace 已就绪"
+
+# Schema 校验强制（《后端规划》§9「事件契约校验 Schema Registry schemaValidationEnforced=true」）
+# ---------------------------------------------------------------------------------------------
+# **它保证什么、不保证什么（2026-09-30 真 broker 实测，别误读）**：
+#   保证：topic 已有 schema 时，**未声明 schema 的 producer 接不进来**（IncompatibleSchema）；
+#   不保证：payload 与 schema 是否匹配——违约 payload（fn 为整数 / args 为字符串 / 整条不成形）
+#     与未声明的 fn 一律**照发成功**，消费者不带 schema 也不受影响。
+# 即它管的是「谁在发」，管不了「发的是什么」。真正的「事件契约」在应用层
+# （`LKM-service/app/core/event_contract.py`：fn→实参形状，发布/消费双侧校验 + 装配期校验），
+# 这里开的是同一条链路上 broker 能提供的那一层。详见 DEPLOYMENT.md。
+# 幂等：清空数据后命名空间策略随之丢失，故每次启动都重跑（与上面的租户/namespace 同）。
+for ns in biz auth system; do
+    bin/pulsar-admin --admin-url http://127.0.0.1:8080 namespaces set-schema-validation-enforce -e "lkm/${ns}" || true
+done
+# 回读确认（同 create 的处理：只看命令退出码会吞掉真实错误，必须回读策略确实为 true）
+for ns in biz auth system; do
+    _enforced="$(bin/pulsar-admin --admin-url http://127.0.0.1:8080 namespaces get-schema-validation-enforce "lkm/${ns}" 2>/dev/null || true)"
+    [ "$_enforced" = "true" ] || {
+        echo "pulsar-entrypoint: lkm/${ns} 的 schema 校验未生效（读到 '${_enforced}'）" >&2
+        exit 1
+    }
+done
+echo "pulsar-entrypoint: 干净启动完成，lkm 租户与 biz/auth/system namespace 已就绪（schema 校验已强制）"
 
 wait "$pulsar_pid"

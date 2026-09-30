@@ -61,6 +61,21 @@
 > chart(多 bookie、显式端口)或托管服务——单机 compose 里的 standalone 无法既自托管又持久
 > (根因:embedded bookie 每次进程启动随机取端口,ledger 里记的 `IP:端口` 必然失效)。
 
+> **Schema 校验强制(命名空间策略)**:同一段初始化里还对 `biz/auth/system` 执行
+> `namespaces set-schema-validation-enforce -e`,并**回读**确认策略为 `true`(只信命令退出码会
+> 吞掉真实错误;k8s 侧 `infra/pulsar.yaml` 的 init sidecar 逐字同口径)。
+> **它保证什么、不保证什么——2026-09-30 在真 broker(standalone 3.3.0)上实测界定,别误读**:
+> - **保证**:topic 已有 schema 时,**未声明 schema 的 producer 接不进来**(`IncompatibleSchema`)。
+> - **不保证**:payload 与 schema 是否匹配。违约 payload(`fn` 为整数 / `args` 为字符串 / 整条
+>   不成形)与未声明的 `fn` 一律**照发成功**;把 `fn` 收紧成 Avro `enum` 亦然;消费者不带 schema
+>   也放行;topic 尚无 schema 时,无 schema 的 producer 反而能抢先建出无 schema 的 topic。
+>
+> 即它管「**谁在发**」,管不了「**发的是什么**」。真正的**事件契约**(`fn` → 实参形状 + 允许承载它
+> 的 routing_key)在应用层 `LKM-service/app/core/event_contract.py`,由发布期(`messaging.publish`
+> 与 outbox relay 折叠)、消费期(`worker`)两侧强制,违约计入
+> `event_contract_violations_total{fn,side}`(告警规则 `deploy/prometheus/rules/lkm-event-contract.yml`)。
+> 相关测试:`LKM-service/tests/test_event_contract.py`、`tests/deploy/test_pulsar_config.py`。
+
 请求分流(有域名走 443 / 无域名走 80):
 
 ```
@@ -654,12 +669,12 @@ CI 的 integration job 已按这两个后端做 matrix，两边都绿才算兼�
 
 `docker compose up` 会自动拉取 `timescale/timescaledb:latest-pg16` 镜像并启动;后端首次启动时自动建表(默认通道 `LKM_USE_ALEMBIC=false` 走 `create_all`,见后端 README),无需手动初始化。
 
-**为什么是 TimescaleDB 版**:`outbox_events`/`outbox_archived` 被装配为 **hypertable**(按 `created_at` 自动时间分区 + 冷历史列式压缩 + 保留策略兜底),详见《执行路线图》§8 #40。该引擎是 PG16 的超集,其余功能与 `postgres:16-alpine` 无差别;`prefect-postgres`、`infisical-db` 仍是原镜像。
+**为什么是 TimescaleDB 版**:`outbox_events`/`outbox_archived`/`points_ledger` 被装配为 **hypertable**(按 `created_at` 自动时间分区;outbox 冷表另加列式压缩 + 保留策略兜底),并在 `points_ledger` 上建**连续聚合视图** `points_daily`(积分度量/行为报表,读口 `/admin/points-report`),详见《执行路线图》§3.1 与 §8 #40。该引擎是 PG16 的超集,其余功能与 `postgres:16-alpine` 无差别;`prefect-postgres`、`infisical-db` 仍是原镜像。
 
 两点部署注意:
 
-- **hypertable 的每个唯一索引必须含分区列** → 这两张表的主键是 `(created_at, id)`。因此**从旧数据卷升级不能就地生效**:`create_all` 通道只增不改(PK 是破坏性变更),需重建数据卷 `docker compose down -v`(注意会清空 `lkm`/`lkm_auth` 全部数据)后重起。开发期无生产数据,按蓝图「不做存量迁移」口径直接重建。
-- 引擎不可用时(如误用普通 PG 镜像或手工安装的主机 PG)**不会导致启动失败**:`init_db` 会告警并降级为**普通表**——主键多一列 `created_at` 无副作用,outbox 投递语义完全不变,只是失去分区裁剪/压缩。
+- **hypertable 的每个唯一索引必须含分区列** → 这三张表的主键是 `(created_at, id)`(`points_ledger` 的幂等键唯一约束也并入了 `created_at`,约束名不变)。因此**从旧数据卷升级不能就地生效**:`create_all` 通道只增不改(PK/约束是破坏性变更),需重建数据卷 `docker compose down -v`(注意会清空 `lkm`/`lkm_auth` 全部数据)后重起。开发期无生产数据,按蓝图「不做存量迁移」口径直接重建。**已有生产库**若走 Alembic 通道,由 `0004_points_ledger_cagg` 把 `points_ledger` 转成 hypertable（连续聚合 `points_daily` 由**应用启动时**装配——它在事务块内建不了，连 DO 块的隐式事务都不行，故刻意不放进迁移）。注意 TimescaleDB **没有**「hypertable → 普通表」的反向转换,该迁移的 `downgrade` 只拆连续聚合、不回退约束(会告警),完整回退须重建该表。
+- 引擎不可用时(如误用普通 PG 镜像或手工安装的主机 PG)**不会导致启动失败**:`init_db` 会告警并降级为**普通表**——主键多一列 `created_at` 无副作用,outbox 投递语义与积分幂等(由 `reward` 的按用户行锁 + 预检承担,唯一约束只是兜底)均不变,只是失去分区裁剪/压缩,且**连续聚合视图不会被创建**(`/admin/points-report` 据此返 503,而非返回空列表冒充「无数据」)。
 
 连接数据库:
 
