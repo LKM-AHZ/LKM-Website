@@ -34,9 +34,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 OK, WARN, FAIL, SKIP = "OK", "WARN", "FAIL", "SKIP"
 
-# 三个主密钥（.env.example §三个必填密钥）：>64 位随机串且互不相同
+# 两个主密钥（.env.example §两个必填对称密钥）：>64 位随机串且互不相同。
+# （JWT 已收口 RS256-only，不再有 LKM_JWT_SECRET 对称密钥，改由 check_jwt_keys 校验密钥对。）
 MAIN_SECRETS = [
-    "LKM_JWT_SECRET",
     "LKM_TOTP_ENCRYPTION_KEY",
     "LKM_VERIFICATION_CODE_PEPPER",
 ]
@@ -174,6 +174,36 @@ def check_secrets(rep: Report, env: dict[str, str]) -> None:
             rep.add(FAIL, f"密码 {key}", "缺失或仍是占位值")
         else:
             rep.add(OK, f"密码 {key}", "已设置")
+
+
+def check_jwt_keys(rep: Report, env: dict[str, str]) -> None:
+    """RS256-only：签发/验签密钥对为硬前置，两处都必须有 PEM 文件。
+
+    .env 里给的是**容器内**路径（compose 把 ./deploy/jwt/keys 挂到 /etc/lkm/jwt），
+    故把 /etc/lkm/jwt/<name> 映射回宿主 deploy/jwt/keys/<name> 做存在性判断。
+    """
+    missing: list[str] = []
+    for key in ("LKM_JWT_PRIVATE_KEY_FILE", "LKM_JWT_PUBLIC_KEY_FILE"):
+        raw = env.get(key, "").strip()
+        if not raw:
+            missing.append(f"{key} 未设置")
+            continue
+        if raw.startswith("/etc/lkm/jwt/"):
+            path = REPO_ROOT / "deploy/jwt/keys" / Path(raw).name
+        else:
+            path = Path(raw)
+            if not path.is_absolute():
+                path = REPO_ROOT / path
+        if not path.is_file():
+            missing.append(f"{key} 指向的文件不存在（{raw}）")
+    if missing:
+        rep.add(
+            FAIL,
+            "RS256 密钥",
+            "；".join(missing) + " —— 先跑 sh deploy/jwt/gen-keys.sh",
+        )
+    else:
+        rep.add(OK, "RS256 密钥", "私钥/公钥文件齐备")
 
 
 def check_allowed_hosts(rep: Report, env: dict[str, str]) -> None:
@@ -412,6 +442,7 @@ def main() -> int:
     # 否则这三项检查会静默消失
     if file_env is not None:
         check_secrets(rep, file_env)
+        check_jwt_keys(rep, file_env)
         check_allowed_hosts(rep, file_env)
         check_restart_policy(rep, file_env)
     # 运行时检查只用 env.get(...)，读不到 .env 时按空表继续（它们自身会打 SKIP/FAIL）

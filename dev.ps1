@@ -82,8 +82,8 @@ if ($Mode -eq "all" -or $Mode -eq "back") {
 Write-Log "依赖就绪。"
 
 # ---------- 后端开发密钥 ----------
-# 后端在非测试环境会强制校验 JWT/TOTP 密钥强且非默认, 否则拒绝启动。
-# 若未通过环境变量(或 .env)提供, 这里自动生成开发用随机值并注入,
+# 后端为 RS256-only(无 HS256 对称降级): 签发/验签需 RSA 密钥对, 另需 TOTP/pepper 两个对称密钥;
+# 非测试环境还会强制校验密钥强且非默认。若未通过环境变量(或 .env)提供, 这里自动生成开发用值并注入,
 # 让一键启动即可跑通; 已有配置时则不改动。
 function New-RandomSecret {
     param([int]$Length = 64)
@@ -116,13 +116,32 @@ function Test-EnvFileHasKey {
 
 # 仅需后端时(back 或 all)才生成后端密钥; site/front 不起后端, 不生成。
 if ($Mode -ne "front" -and $Mode -ne "site") {
-    if ([string]::IsNullOrWhiteSpace($env:LKM_JWT_SECRET) -and -not (Test-EnvFileHasKey "LKM_JWT_SECRET")) {
-        $env:LKM_JWT_SECRET = New-RandomSecret 64
-        Write-Log "已为开发环境生成 LKM_JWT_SECRET(未检测到配置)。"
+    # RS256 密钥对(必填前置): 未在 env/.env 指定文件路径时, 用 openssl 生成到 deploy/jwt/keys。
+    if ([string]::IsNullOrWhiteSpace($env:LKM_JWT_PRIVATE_KEY_FILE) -and
+        [string]::IsNullOrWhiteSpace($env:LKM_JWT_PUBLIC_KEY_FILE) -and
+        -not (Test-EnvFileHasKey "LKM_JWT_PRIVATE_KEY_FILE") -and
+        -not (Test-EnvFileHasKey "LKM_JWT_PUBLIC_KEY_FILE")) {
+        $KeyDir = Join-Path $RootDir "deploy\jwt\keys"
+        $PrivFile = Join-Path $KeyDir "jwt-private.pem"
+        $PubFile  = Join-Path $KeyDir "jwt-public.pem"
+        if (-not (Test-Path -LiteralPath $PrivFile) -or -not (Test-Path -LiteralPath $PubFile)) {
+            if (Get-Command openssl -ErrorAction SilentlyContinue) {
+                New-Item -ItemType Directory -Force -Path $KeyDir | Out-Null
+                & openssl genrsa -out $PrivFile 2048 2>$null
+                & openssl rsa -in $PrivFile -pubout -out $PubFile 2>$null
+                Write-Log "已为开发环境生成 RS256 密钥对(deploy\jwt\keys)。"
+            } else {
+                [Console]::WriteLine("[lkm:error] 后端为 RS256-only, 需要 RSA 密钥对但未找到 openssl。")
+                [Console]::WriteLine("           请在 Git Bash 里执行: sh deploy/jwt/gen-keys.sh, 或安装 openssl 后重试。")
+                exit 1
+            }
+        }
+        # 绝对路径, 免 uvicorn 以 LKM-service 为 CWD 时相对路径解析到错处
+        $env:LKM_JWT_PRIVATE_KEY_FILE = $PrivFile
+        $env:LKM_JWT_PUBLIC_KEY_FILE  = $PubFile
     }
-    if (-not (Test-EnvFileHasKey "LKM_TOTP_ENCRYPTION_KEY") -and
-        ([string]::IsNullOrWhiteSpace($env:LKM_TOTP_ENCRYPTION_KEY) -or
-         $env:LKM_TOTP_ENCRYPTION_KEY -eq $env:LKM_JWT_SECRET)) {
+    if ([string]::IsNullOrWhiteSpace($env:LKM_TOTP_ENCRYPTION_KEY) -and
+        -not (Test-EnvFileHasKey "LKM_TOTP_ENCRYPTION_KEY")) {
         $env:LKM_TOTP_ENCRYPTION_KEY = New-RandomSecret 64
         Write-Log "已为开发环境生成 LKM_TOTP_ENCRYPTION_KEY。"
     }

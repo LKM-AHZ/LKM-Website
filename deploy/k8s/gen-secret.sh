@@ -15,8 +15,9 @@
 # 输出含明文密钥：要落盘请自己收紧权限（重定向文件是**父 shell** 建的，脚本内 umask 管不到）：
 #   umask 077 && sh deploy/k8s/gen-secret.sh > k8s-secret.yaml
 #
-# 前置：根目录 .env 需已按 .env.example 配齐（三个主密钥、POSTGRES_PASSWORD、
+# 前置：根目录 .env 需已按 .env.example 配齐（两个主密钥、POSTGRES_PASSWORD、
 # MINIO_ROOT_PASSWORD、LKM_AUTH_HTTP_TOKEN 必填；下面 require() 会逐个断言）。
+# 另需先生成 RS256 密钥对（deploy/jwt/gen-keys.sh）：服务只签发/接受 RS256，缺密钥即退出。
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -78,7 +79,7 @@ require() {
     fi
 }
 
-for k in LKM_JWT_SECRET LKM_TOTP_ENCRYPTION_KEY LKM_VERIFICATION_CODE_PEPPER \
+for k in LKM_TOTP_ENCRYPTION_KEY LKM_VERIFICATION_CODE_PEPPER \
          LKM_AUTH_HTTP_TOKEN POSTGRES_PASSWORD MINIO_ROOT_PASSWORD; do
     require "$k"
 done
@@ -89,6 +90,14 @@ MINIO_USER="$(get MINIO_ROOT_USER lkmadmin)"
 # RS256 密钥 PEM（由 deploy/jwt/gen-keys.sh 生成；可用 *_PATH 覆盖）。
 JWT_PUB_FILE="${JWT_PUBLIC_KEY_PATH:-$ROOT/deploy/jwt/keys/jwt-public.pem}"
 JWT_PRIV_FILE="${JWT_PRIVATE_KEY_PATH:-$ROOT/deploy/jwt/keys/jwt-private.pem}"
+
+# RS256-only：密钥对为硬前置（服务不再有 HS256 对称降级）。在**输出任何 YAML 之前**就校验，
+# 避免把半份 Secret 灌进 kubectl（管道逐文档 apply，缺公钥的那份会先被应用）。
+if [ ! -f "$JWT_PUB_FILE" ] || [ ! -f "$JWT_PRIV_FILE" ]; then
+    echo "[gen-secret] 缺少 RS256 密钥：需 $JWT_PRIV_FILE 与 $JWT_PUB_FILE" >&2
+    echo "[gen-secret] 服务只签发/接受 RS256，请先跑 sh deploy/jwt/gen-keys.sh" >&2
+    exit 1
+fi
 
 jwt_public_block() {
     [ -f "$JWT_PUB_FILE" ] || return 0
@@ -115,7 +124,6 @@ metadata:
     app.kubernetes.io/part-of: lkm
 type: Opaque
 stringData:
-  LKM_JWT_SECRET: "$(get_dq LKM_JWT_SECRET)"
   LKM_TOTP_ENCRYPTION_KEY: "$(get_dq LKM_TOTP_ENCRYPTION_KEY)"
   LKM_VERIFICATION_CODE_PEPPER: "$(get_dq LKM_VERIFICATION_CODE_PEPPER)"
   LKM_AUTH_HTTP_TOKEN: "$(get_dq LKM_AUTH_HTTP_TOKEN)"
@@ -139,17 +147,16 @@ stringData:
   # bot 面板初始密码（可选组件）。**不 require**：未配就不出这个键，bot 的
   # secretKeyRef 是 optional=true → Pod 照常起，面板自生成随机密码打到日志。
   LKM_BOT_DASHBOARD_PASSWORD: "$(get_dq LKM_BOT_DASHBOARD_PASSWORD)"
+  # SigNoz UI 自身会话签名密钥（非应用 JWT）。独立键，勿再借用应用密钥。
+  LKM_SIGNOZ_JWT_SECRET: "$(get_dq_opt LKM_SIGNOZ_JWT_SECRET change-me-signoz-ui)"
 $(jwt_public_block)
 YAML
 
-# ── RS256/JWKS（批 5）：公钥并入 lkm-secrets（非机密，各 Pod 都要能验签）；私钥单独成
-#    Secret `lkm-jwt-signing`，**只**给 auth（签发方）。未生成密钥时两者都不出现：
-#    应用沿用 HS256、网关不做 JWT 校验——与 compose 的「留空即降级」同一口径。
-if [ -f "$JWT_PRIV_FILE" ] && [ -f "$JWT_PUB_FILE" ]; then
-    # 两个都必须在：只有私钥时签发/验签会错配（auth 会以 RS256 签发，而 lkm-secrets 里没有
-    # LKM_JWT_PUBLIC_KEY，网关与 backend 无从验签），故此时宁可什么都不发，见下方警告
-    # 多文档须显式 `---` 分隔，否则它会被并进上一个文档（键重复 → kubectl 报错）
-    cat <<YAML
+# ── RS256/JWKS：公钥并入 lkm-secrets（非机密，各 Pod 都要能验签）；私钥单独成
+#    Secret `lkm-jwt-signing`，**只**给 auth（签发方）。RS256-only 下密钥对为硬前置，
+#    其存在性已在文件开头校验（缺则 exit 1），故这里无条件产出。
+#    多文档须显式 `---` 分隔，否则它会被并进上一个文档（键重复 → kubectl 报错）
+cat <<YAML
 
 ---
 apiVersion: v1
@@ -164,15 +171,3 @@ stringData:
   LKM_JWT_PRIVATE_KEY: |
 $(sed 's/^/    /' "$JWT_PRIV_FILE")
 YAML
-fi
-
-if [ ! -f "$JWT_PUB_FILE" ]; then
-    if [ -f "$JWT_PRIV_FILE" ]; then
-        # 只有私钥：绝不发 lkm-jwt-signing（否则 auth 会以 RS256 签发，而 lkm-secrets 里没有
-        # 公钥 → 网关/backend 无从验签），并明确说清原因，别让上面的提示自相矛盾
-        echo "[gen-secret] 警告：只有私钥没有公钥（缺 $JWT_PUB_FILE）——不生成 lkm-jwt-signing，" >&2
-        echo "[gen-secret]        否则 auth 用 RS256 签发而验签方拿不到公钥。请重跑 deploy/jwt/gen-keys.sh" >&2
-    else
-        echo "[gen-secret] 未找到 $JWT_PUB_FILE：未启用 RS256（网关不做 JWT 验签）" >&2
-    fi
-fi

@@ -608,13 +608,11 @@ services:
       LKM_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?生产需设置 MINIO_ROOT_PASSWORD}
       # LKM_FILES_STORE_DIR 仅作迁移脚本参考；运行时对象存于 MinIO（本地路径可保留供迁移读取）
       LKM_FILES_STORE_DIR: /data/files_store
-      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
-      # RS256/JWKS（批 5）：单体是**验签方**，只挂公钥（绝不下发私钥，否则可自造 token）。
-      # 留空 → 沿用 HS256（`jwt_hs_fallback` 亦须为 true，否则 token 一律拒）。
-      LKM_JWT_PUBLIC_KEY_FILE: ${LKM_JWT_PUBLIC_KEY_FILE:-}
-      LKM_JWT_HS_FALLBACK: ${LKM_JWT_HS_FALLBACK:-true}
+      # RS256/JWKS：单体是**验签方**，只挂公钥（绝不下发私钥，否则可自造 token）。
+      # 必填 —— 未先生成密钥（deploy/jwt/gen-keys.sh）即拒绝启动，无 HS 降级路径。
+      LKM_JWT_PUBLIC_KEY_FILE: ${LKM_JWT_PUBLIC_KEY_FILE:?须先跑 deploy/jwt/gen-keys.sh 生成密钥}
       LKM_GITHUB_CLIENT_ID: ${LKM_GITHUB_CLIENT_ID:-}
       LKM_GITHUB_CLIENT_SECRET: ${LKM_GITHUB_CLIENT_SECRET:-}
       LKM_RP_ID: 124.220.55.235
@@ -680,15 +678,12 @@ services:
         condition: service_healthy
     environment:
       LKM_ENV: production
-      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
-      # RS256/JWKS（批 5）：AUTH 是**签发方**，持私钥；公钥同时下发供 JWKS 端点发布。
-      # 两处留空 → 沿用 HS256。`LKM_JWT_HS_FALLBACK=false` 即「关 HS」的最终切换开关
-      # （批 1 已重建库、无存量 token，可直接关）。
-      LKM_JWT_PRIVATE_KEY_FILE: ${LKM_JWT_PRIVATE_KEY_FILE:-}
-      LKM_JWT_PUBLIC_KEY_FILE: ${LKM_JWT_PUBLIC_KEY_FILE:-}
-      LKM_JWT_HS_FALLBACK: ${LKM_JWT_HS_FALLBACK:-true}
+      # RS256/JWKS：AUTH 是**签发方**，持私钥；公钥同时下发供 JWKS 端点发布。
+      # 两处必填 —— 未先生成密钥（deploy/jwt/gen-keys.sh）即拒绝启动，无 HS 降级路径。
+      LKM_JWT_PRIVATE_KEY_FILE: ${LKM_JWT_PRIVATE_KEY_FILE:?须先跑 deploy/jwt/gen-keys.sh 生成密钥}
+      LKM_JWT_PUBLIC_KEY_FILE: ${LKM_JWT_PUBLIC_KEY_FILE:?须先跑 deploy/jwt/gen-keys.sh 生成密钥}
       # bot 面板 SSO 票据协议值：auth 是**签发侧**，与消费侧 lkmbot 同源（见文件头
       # x-bot-sso-env）——两侧同值才能验签通过。
       <<: *bot-sso-env
@@ -764,7 +759,6 @@ services:
     environment:
       <<: *otel-env
       LKM_ENV: production
-      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
@@ -791,7 +785,6 @@ services:
     environment:
       <<: *otel-env
       LKM_ENV: production
-      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
@@ -844,7 +837,6 @@ services:
     environment:
       <<: *otel-env
       LKM_ENV: production
-      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
@@ -874,7 +866,6 @@ services:
     environment:
       <<: *otel-env
       LKM_ENV: production
-      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
@@ -904,7 +895,6 @@ services:
     environment:
       <<: *otel-env
       LKM_ENV: production
-      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
@@ -934,7 +924,6 @@ services:
     environment:
       <<: *otel-env
       LKM_ENV: production
-      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
@@ -965,7 +954,6 @@ services:
     environment:
       <<: *otel-env
       LKM_ENV: production
-      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
@@ -999,7 +987,6 @@ services:
     environment:
       <<: *otel-env
       LKM_ENV: production
-      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
@@ -1031,7 +1018,6 @@ services:
     environment:
       <<: *otel-env
       LKM_ENV: production
-      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_PULSAR_URL: pulsar://pulsar:6650
@@ -1050,7 +1036,6 @@ services:
     environment:
       <<: *otel-env
       LKM_ENV: production
-      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_PULSAR_URL: pulsar://pulsar:6650
@@ -1078,7 +1063,6 @@ services:
     environment:
       <<: *otel-env
       LKM_ENV: production
-      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
@@ -1181,7 +1165,6 @@ services:
         condition: service_healthy
     environment:
       LKM_ENV: production
-      LKM_JWT_SECRET: ${LKM_JWT_SECRET:?生产需设置 LKM_JWT_SECRET}
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0

@@ -114,9 +114,7 @@ docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
 - **登录不再强制 2FA**:普通登录只验密码并签发 token;仅后台**危险操作**(板块/项目审核等)需 2FA。
 - **2FA 信任 1 小时**:验证后 1h 内危险操作不再重复要求;信任窗口由 admin cookie 的 `mfa`/`mfa_at` claim 承载。
 - **admin cookie 带 Secure**:纯 HTTP(80)下浏览器不发送 → **后台请走 `https://<IP>`** 访问(自签证书,首次手动信任)。普通前台走 JWT,HTTP 正常。
-- 管理员运维(建号/解锁/吊销会话/重置 2FA)统一走脚本,**在 auth 容器内执行**——
-  拆库后管理员真值在 `lkm_auth` 库,只有 auth 服务配了 `LKM_AUTH_DB_*`;backend 容器只有
-  biz 库,旧版 heredoc 建号命令已失效:
+- 管理员运维(建号/解锁/吊销会话/重置 2FA)统一走脚本,**在 auth 容器内执行**
   ```sh
   docker compose exec auth python scripts/admin_ops.py list
   docker compose exec auth python scripts/admin_ops.py create <用户名> <邮箱> <手机> <密码>
@@ -125,6 +123,10 @@ docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
   docker compose exec auth python scripts/admin_ops.py reset-2fa <用户名> --yes
   ```
   > 密码由脚本内部 `hashpwd`(Argon2id) 生成,勿手写明文;`account_level='admin'` 才可进后台。
+  > 也可省略密码改为交互输入（getpass）：
+    '''sh
+    docker compose exec -it auth python scripts/admin_ops.py create <用户名> <邮箱> <手机> <密码>
+    ''''
 
 ## 六、证书 / HTTPS
 
@@ -140,7 +142,8 @@ docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
 | 上传 `403 SignatureDoesNotMatch` | boto3 对 MinIO 默认 SigV2 | s3.py 预签名 client 需 `signature_version="s3v4"`+path 寻址+region;公网 host 与 `LKM_S3_PUBLIC_ENDPOINT_URL` 一致 |
 | 上传经 APISIX `400 Bad Request`(直连正常) | MinIO 路由 Host 未改写为公网站点(SigV4 预签名按公网 host 签) | `deploy/apisix/apisix.yaml` 的 `minio` 路由用 `pass_host: rewrite` + `upstream_host`,勿用 `proxy-rewrite.host`(会被 pass_host 以 nil 覆盖) |
 | 容器反复 `Restarting` | 挂载进去的 `.sh` 是 CRLF 行尾 | `sed -i 's/\r$//' <脚本>` 转 LF 后重建;仓根 `deploy/**` 已由 `.gitattributes` 强制 LF |
-| worker 反复重启,日志 `Insecure secrets...` | worker 服务缺三个密钥 env | compose 给 worker/worker-send 注入 `LKM_JWT_SECRET` 等 |
+| worker 反复重启,日志 `Insecure secrets...` | worker 服务缺密钥 env | compose 给 worker/worker-send 注入 `LKM_TOTP_ENCRYPTION_KEY`、`LKM_VERIFICATION_CODE_PEPPER` 等 |
+| auth/backend 启动失败,日志要求 RS256 密钥 | 未生成 RSA 密钥对或未填 `LKM_JWT_*_KEY_FILE` | `sh deploy/jwt/gen-keys.sh` 后按 `DEPLOYMENT.md` 填两个文件路径(变量为必填) |
 | worker 连 `localhost:6379` | `Worker()` 没传 `redis_settings` | `app/core/worker.py` 各 `Worker(...)` 加 `redis_settings=_redis_settings()` |
 | worker `cron ValueError` | arq `weekday` 简写错 | `'thu'`→`'thurs'`(arq 的 WEEKDAYS 是三/四字母) |
 | 首页 502 SSR 崩,`Cannot find package 'tailwind-merge'` | `tailwind-merge` 在 devDeps 但被 SSR 运行时 import;runner 用 `--prod` | 挪到 dependencies 并更新 pnpm-lock.yaml 后重建 |

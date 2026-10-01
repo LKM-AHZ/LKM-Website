@@ -375,12 +375,13 @@ spec:
               value: tcp://clickhouse:9000
             - name: SIGNOZ_SQLSTORE_SQLITE_PATH
               value: /var/lib/signoz/signoz.db
-            # UI 自身会话签名密钥（非应用 JWT）。生产请改用 Secret 注入。
+            # UI 自身会话签名密钥（非应用 JWT）。独立键，勿借用应用密钥。
+            # 生产请改用 Secret 注入。
             - name: SIGNOZ_TOKENIZER_JWT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: lkm-secrets
-                  key: LKM_JWT_SECRET
+                  key: LKM_SIGNOZ_JWT_SECRET
                   optional: true
           ports:
             - name: http

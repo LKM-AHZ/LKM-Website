@@ -113,10 +113,13 @@ pnpm dev -- --port 4322
 本地若需显式配置,可在 `LKM-service/` 建 `.env`:
 
 ```sh
-LKM_JWT_SECRET=<开发用随机串>
-LKM_TOTP_ENCRYPTION_KEY=<与 JWT 不同>
-LKM_VERIFICATION_CODE_PEPPER=<与上面都不同>
-# PowerShell dev 脚本可临时生成；Bash 或手动启动时必须自行提供
+LKM_TOTP_ENCRYPTION_KEY=<开发用随机串>
+LKM_VERIFICATION_CODE_PEPPER=<与上面不同>
+# JWT 为 RS256-only(无 HS256 对称密钥):先生成 RSA 密钥对,让进程读到文件路径
+#   sh deploy/jwt/gen-keys.sh
+# LKM_JWT_PRIVATE_KEY_FILE=<私钥 PEM 路径>   # 仅签发方(auth)需要
+# LKM_JWT_PUBLIC_KEY_FILE=<公钥 PEM 路径>    # 验签方需要
+# PowerShell dev 脚本在缺失时会自动补齐上述密钥; Bash 或手动启动时必须自行提供
 ```
 
 - 数据库:PostgreSQL;设 `LKM_DB_HOST/PORT/NAME/USER/PASSWORD`(见 `LKM-service/.env.example`)。

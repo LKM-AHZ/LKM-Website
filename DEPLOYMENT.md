@@ -39,7 +39,7 @@
 | `worker-scheduler` | `lkm-service:latest` | 无 | cron 触发发布(`boot.workers.scheduler`) |
 | `worker-dlq` | `lkm-service:latest` | 无 | 死信落库(`boot.workers.dlq`) |
 | `worker-outbox` | `lkm-service:latest` | 无 | outbox relay(`boot.workers.outbox`) |
-| `postgres` | `timescale/timescaledb:latest-pg16` | 仅内网 `5432` | 后端数据库(biz `lkm` + auth `lkm_auth`);outbox 两表为 hypertable |
+| `postgres` | `timescale/timescaledb:latest-pg16` | 仅内网 `5432` | 后端数据库(biz `lkm` + auth `lkm_auth`);outbox 两表与 `points_ledger` 为 hypertable |
 | `redis` | `redis:7-alpine` | 仅内网 `6379` | leader 租约、共享限流 / 缓存 |
 | `pulsar` | `apachepulsar/pulsar:3.3.0` | 仅内网 `6650`/`8080` | **消息总线**(standalone,自带 ZK+BookKeeper;6650 broker / 8080 Admin REST)。**无状态化**启动包装,见下 |
 | `minio` | `minio/minio:latest` | 仅容器内 `9000`/`9001` | S3 兼容对象存储:文件库文件与成员头像 |
@@ -138,8 +138,7 @@ git clone https://github.com/Alma1314/LKM-bot.git   # 仅启用机器人时需�
 在根目录创建 `.env` 文件(compose 会自动读取,**此文件已被 .gitignore 忽略,不要提交**):
 
 ```sh
-# 三个密钥必须为强随机值、互不相同(生产环境 LKM_ENV=production 会强制校验)
-LKM_JWT_SECRET=<64 位以上随机串>
+# 两个对称密钥必须为强随机值、互不相同(生产环境 LKM_ENV=production 会强制校验)
 LKM_TOTP_ENCRYPTION_KEY=<64 位以上随机串>
 LKM_VERIFICATION_CODE_PEPPER=<64 位以上随机串>
 
@@ -193,15 +192,14 @@ MINIO_ROOT_PASSWORD=<强随机密码>
 LKM_GITHUB_CLIENT_ID=
 LKM_GITHUB_CLIENT_SECRET=
 
-# 可选:RS256/JWKS 非对称签发(批 5)。不配则沿用上面的 HS256 对称密钥,行为不变。
-# 启用后 auth 持私钥签发,backend 与 APISIX 网关只用公钥验签(验签方拿不到签发能力)。
+# RS256/JWKS 非对称签发(必填,已无 HS256 对称降级)。auth 持私钥签发,backend 与
+# APISIX 网关只用公钥验签(验签方拿不到签发能力)。
 #   1) sh deploy/jwt/gen-keys.sh        # 生成 deploy/jwt/keys/{jwt-private,jwt-public}.pem
-#   2) 打开下面两行(值是**容器内**路径;compose 已把该目录只读挂到 /etc/lkm/jwt)
-# LKM_JWT_PRIVATE_KEY_FILE=/etc/lkm/jwt/jwt-private.pem
-# LKM_JWT_PUBLIC_KEY_FILE=/etc/lkm/jwt/jwt-public.pem
+#   2) 填下面两行(值是**容器内**路径;compose 已把该目录只读挂到 /etc/lkm/jwt)。
+#      两变量为**必填**:未先生成密钥即 compose 拒绝启动。
+LKM_JWT_PRIVATE_KEY_FILE=/etc/lkm/jwt/jwt-private.pem
+LKM_JWT_PUBLIC_KEY_FILE=/etc/lkm/jwt/jwt-public.pem
 #   3) docker compose up -d --no-deps auth backend apisix-render apisix
-#   4) 确认无回归后关掉 HS 回退完成切换(批 1 已重建库、无存量 token,可直接关)
-# LKM_JWT_HS_FALLBACK=false
 # 注:网关验签目前挂在后台会话端点 /api/v1/admin/auth/me(公开只读接口必须保持匿名);
 #    公钥可经 https://<社群域名>/.well-known/jwks.json 获取。
 ```
@@ -383,7 +381,7 @@ docker compose restart signoz-otel-collector   # 注册后立即重连，否则�
 ```sh
 # 1) .env：配面板初始密码（留空则面板自生成随机密码并打到日志）
 #    LKM_BOT_DASHBOARD_PASSWORD=<强随机>
-# 2) SSO 免登（可选但推荐）：配好 RS256 密钥（含公钥），见「RS256 网关验签」一节
+# 2) SSO 免登（可选但推荐）：配好 RS256 密钥（含公钥），见「二、配置环境变量」的 RS256 段
 #    sh deploy/jwt/gen-keys.sh         # 未配则面板回落自带登录页，其余功能不受影响
 # 3) 起 bot（网关 /bot 路由随主栈起时已生效，无需重启 apisix）
 docker compose --profile bot up -d --build
@@ -673,7 +671,7 @@ CI 的 integration job 已按这两个后端做 matrix，两边都绿才算兼�
 
 两点部署注意:
 
-- **hypertable 的每个唯一索引必须含分区列** → 这三张表的主键是 `(created_at, id)`(`points_ledger` 的幂等键唯一约束也并入了 `created_at`,约束名不变)。因此**从旧数据卷升级不能就地生效**:`create_all` 通道只增不改(PK/约束是破坏性变更),需重建数据卷 `docker compose down -v`(注意会清空 `lkm`/`lkm_auth` 全部数据)后重起。开发期无生产数据,按蓝图「不做存量迁移」口径直接重建。**已有生产库**若走 Alembic 通道,由 `0004_points_ledger_cagg` 把 `points_ledger` 转成 hypertable（连续聚合 `points_daily` 由**应用启动时**装配——它在事务块内建不了，连 DO 块的隐式事务都不行，故刻意不放进迁移）。注意 TimescaleDB **没有**「hypertable → 普通表」的反向转换,该迁移的 `downgrade` 只拆连续聚合、不回退约束(会告警),完整回退须重建该表。
+- **hypertable 的每个唯一索引必须含分区列** → 这三张表的主键是 `(created_at, id)`(`points_ledger` 的幂等键唯一约束也并入了 `created_at`,约束名不变)。因此**从旧数据卷升级不能就地生效**:`create_all` 通道只增不改(PK/约束是破坏性变更),需重建数据卷 `docker compose down -v`(注意会清空 `lkm`/`lkm_auth` 全部数据)后重起。开发期无生产数据,按蓝图「不做存量迁移」口径直接重建。**走 Alembic 通道**的库由业务库基线 `0001_uuid_baseline` 直接把 `points_ledger` 建成 hypertable 形态（主键/幂等约束已含分区列；连续聚合 `points_daily` 由**应用启动时**装配——它在事务块内建不了，连 DO 块的隐式事务都不行，故刻意不放进迁移）。注意 TimescaleDB **没有**「hypertable → 普通表」的反向转换,基线的 `downgrade` 只拆连续聚合、不回退约束(会告警),完整回退须重建该表。
 - 引擎不可用时(如误用普通 PG 镜像或手工安装的主机 PG)**不会导致启动失败**:`init_db` 会告警并降级为**普通表**——主键多一列 `created_at` 无副作用,outbox 投递语义与积分幂等(由 `reward` 的按用户行锁 + 预检承担,唯一约束只是兜底)均不变,只是失去分区裁剪/压缩,且**连续聚合视图不会被创建**(`/admin/points-report` 据此返 503,而非返回空列表冒充「无数据」)。
 
 连接数据库:
@@ -708,13 +706,14 @@ docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
 
 ### schema 变更纪律(迁移链与大表)
 
-后端有**两条独立迁移链**,各自单头线性、命名语义化(`0001_...`/`0002_...`),与蓝图 §3.2 的
-「每个迁移一件事、可回滚」一致:
+后端有**两条独立迁移链**,各自单头线性。**未上线,历史增量链已压平**:业务库与 auth 库各只有
+**一条基线** revision(`0001_uuid_baseline` / `0001_auth_baseline`),后续变更再按 `NNNN_语义名`
+追加单头增量,与蓝图 §3.2 的「每个迁移一件事、可回滚」一致:
 
 | 链 | 目录 | 配置文件 | 覆盖 |
 |---|---|---|---|
 | 业务库 | `LKM-service/alembic/versions/` | `alembic.ini` | 业务域全部表(含 `user_dim` 宽表) |
-| auth 库 | `LKM-service/alembic_auth/versions/` | `alembic.auth.ini` | auth 自有 18 张表 |
+| auth 库 | `LKM-service/alembic_auth/versions/` | `alembic.auth.ini` | auth 自有 19 张表 |
 
 **默认通道仍是 `LKM_USE_ALEMBIC=false`(create_all)**,迁移链是生产后备;两者不混用。
 
@@ -741,7 +740,7 @@ docker compose exec -T postgres psql -U lkm -d lkm < /tmp/mig.sql
 
 若需复用主机已有数据库实例,可在主机直接安装 PostgreSQL 并让后端连接外部库。
 
-> **注意**:此路径下**没有 TimescaleDB**,outbox 两表会降级为普通表(启动时告警、不影响功能,但没有分区裁剪与压缩)。要用 hypertable 请装 `timescaledb` 版并预加载 `shared_preload_libraries`,或直接用上面的 docker 方案。
+> **注意**:此路径下**没有 TimescaleDB**,outbox 两表与 `points_ledger` 会降级为普通表(启动时告警、不影响功能,但没有分区裁剪与压缩)。要用 hypertable 请装 `timescaledb` 版并预加载 `shared_preload_libraries`,或直接用上面的 docker 方案。
 
 1. 安装并启动:
 
