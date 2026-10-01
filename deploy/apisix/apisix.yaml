@@ -26,10 +26,10 @@ global_rules:
 # __JWT_CONSUMERS_SECTION__
 
 routes:
-  # ── ACME http-01：两域名的 challenge 走微型静态 responder（非网关角色）──
+  # ── ACME http-01：社群域名的 challenge 走微型静态 responder（非网关角色）──
   - id: acme-challenge
     uri: /.well-known/acme-challenge/*
-    hosts: [__ALL_HOSTS__]
+    hosts: [__COMMUNITY_HOSTS__]
     priority: 300
     vars: [["scheme", "==", "http"]]
     upstream:
@@ -38,10 +38,10 @@ routes:
       service_name: "acme-webroot__UPSTREAM_SUFFIX__:80"
       pass_host: pass
 
-  # ── http → https 301（两域名共用；优先级低于 ACME，challenge 不受影响）──
+  # ── http → https 301（社群域名；优先级低于 ACME，challenge 不受影响）──
   - id: http-redirect
     uri: /*
-    hosts: [__ALL_HOSTS__]
+    hosts: [__COMMUNITY_HOSTS__]
     priority: 200
     vars: [["scheme", "==", "http"]]
     plugins:
@@ -389,17 +389,6 @@ routes:
       type: roundrobin
       discovery_type: dns
       service_name: "astro__UPSTREAM_SUFFIX__:4321"
-      pass_host: pass
-
-  # ── 官网（.icu）全部 → static 静态容器 ──
-  - id: official-site
-    uri: /*
-    hosts: [__OFFICIAL_HOSTS__]
-    priority: 50
-    upstream:
-      type: roundrobin
-      discovery_type: dns
-      service_name: "static__UPSTREAM_SUFFIX__:80"
       pass_host: pass
 
   # ── LKM Bot 面板（社群域下的子路径，profile=bot 可选组件）──

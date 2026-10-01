@@ -3,9 +3,7 @@
 # 本脚本是网关配置的**唯一模板展开点**，把 deploy/apisix/apisix.yaml 里的占位替换成实值后
 # 写入共享卷，供 APISIX 的 yaml config_provider 自动加载。占位共五类：
 #   __SSL_SECTION__        certbot 证书 → 内联 PEM 的 ssls 段（standalone 只收内联 PEM）
-#   __COMMUNITY_HOSTS__    社区域名 + www（各 API/认证路由的 hosts）
-#   __OFFICIAL_HOSTS__     官网域名 + www
-#   __ALL_HOSTS__          两者并集（ACME challenge / http→https 重定向）
+#   __COMMUNITY_HOSTS__    社区域名 + www（各 API/认证路由 / ACME / http→https 的 hosts）
 #   __COMMUNITY_ORIGINS__  CORS allow_origins（https:// + www）
 #   __MAX_BODY_SIZE__      请求体上限（与后端 max_upload_bytes 同源，见 README/路线图）
 #   __BOT_MAX_BODY_SIZE__  bot 面板请求体上限（**独立来源** LKM_BOT_MAX_UPLOAD_BYTES：
@@ -20,17 +18,16 @@
 # 本脚本同时渲染**两个**产物：apisix.yaml（路由）与 config.yaml（APISIX 自身配置）。
 # config.yaml 里只有 DNS 解析这一处随运行时变化，故也纳入同一模板展开点，
 # 避免 k8s 侧另存一份 config.yaml 副本（第二真相源）。
-# 域名只需在 APISIX_COMMUNITY_DOMAINS / APISIX_OFFICIAL_DOMAINS 两处改，hosts 与 CORS 来源
-# 一并跟随——此前这两者在模板里各硬编码 12+8 处，改域名必漏。
+# 域名只需在 APISIX_COMMUNITY_DOMAINS 一处改，hosts 与 CORS 来源一并跟随——此前这两者在
+# 模板里各硬编码 12+8 处，改域名必漏。（官网域已迁出为独立部署，不再由本网关承载。）
 # - 缺证书时生成自签占位（CN=域名，1 天有效），保证 APISIX 冷启动即有证书可起。
 # - 每 6h 重渲染一次：既拾取 certbot 续期后的新证书，也顺带触发 APISIX reload 重新解析
 #   upstream DNS（standalone 静态解析，重启后容器 IP 变化靠此刷新）。
 # - 渲染失败（awk/sed 异常）不覆盖上一版 good config（tmp + mv 原子替换）。
 set -e
 
-# 社区域名（承载 /api、/graphql、前台与后台认证面）与官网域名（静态站）
+# 社区域名（承载 /api、/graphql、前台与后台认证面；官网域已迁至独立服务器，不在此处）
 COMMUNITY="${APISIX_COMMUNITY_DOMAINS:-lkm-ahz.ltd}"
-OFFICIAL="${APISIX_OFFICIAL_DOMAINS:-lkm-ahz.icu}"
 SRC="${APISIX_SRC:-/src/apisix.yaml}"
 OUT="${APISIX_OUT:-/out/apisix.yaml}"
 SRC_CONFIG="${APISIX_SRC_CONFIG:-/src/config.yaml}"
@@ -94,10 +91,10 @@ esc() { printf '%s' "$1" | sed 's/[&|\\]/\\&/g'; }
 # 下一行（如 `    key: |`、`  - snis:`）会拼到 `-----END ...-----` 之后，整份 YAML 解析失败
 indent_pem() { printf '%s\n' "$(cat "$1")" | sed "s/^/$2/"; }
 
-# 证书按域名逐个签发目录，故 DOMAINS 为并集；hosts/origins 则分域展开
-# （不带引号：后续用于 for 循环词分割）
-# 注：bot 面板已并入社群域的子路径 /bot/（不再有独立子域），故证书/SNI/ACME 只覆盖这两个域。
-DOMAINS="$COMMUNITY $OFFICIAL"
+# 证书按域名逐个签发目录（不带引号：后续用于 for 循环词分割）
+# 注：bot 面板已并入社群域的子路径 /bot/（不再有独立子域）；官网域已迁至独立服务器，
+# 故证书/SNI/ACME 只覆盖社群这一个域。
+DOMAINS="$COMMUNITY"
 
 # 下列变量注入 YAML 数组/标量，只用逗号+空格分隔，不含 sed 分隔符 `|` 与换行
 hosts_of() {  # hosts_of "<空格分隔域名>" → "d1, www.d1, d2, www.d2"
@@ -108,8 +105,6 @@ hosts_of() {  # hosts_of "<空格分隔域名>" → "d1, www.d1, d2, www.d2"
     printf '%s' "$out" | sed 's/, $//'
 }
 COMMUNITY_HOSTS="$(hosts_of "$COMMUNITY")"
-OFFICIAL_HOSTS="$(hosts_of "$OFFICIAL")"
-ALL_HOSTS="$COMMUNITY_HOSTS, $OFFICIAL_HOSTS"
 # MinIO 路由的 Host 改写目标：取社群主域名（裸域，不带 www）——须与后端
 # LKM_S3_PUBLIC_ENDPOINT_URL 的 host 一致，否则 S3 预签名校验失败
 COMMUNITY_DOMAIN="${COMMUNITY%% *}"
@@ -220,8 +215,6 @@ render_once() {
     sed \
         -e "s|__COMMUNITY_HOSTS__|$(esc "$COMMUNITY_HOSTS")|g" \
         -e "s|__COMMUNITY_DOMAIN__|$(esc "$COMMUNITY_DOMAIN")|g" \
-        -e "s|__OFFICIAL_HOSTS__|$(esc "$OFFICIAL_HOSTS")|g" \
-        -e "s|__ALL_HOSTS__|$(esc "$ALL_HOSTS")|g" \
         -e "s|__COMMUNITY_ORIGINS__|$(esc "$COMMUNITY_ORIGINS")|g" \
         -e "s|__MAX_BODY_SIZE__|$(esc "$MAX_BODY_SIZE")|g" \
         -e "s|__BOT_MAX_BODY_SIZE__|$(esc "$BOT_MAX_BODY_SIZE")|g" \

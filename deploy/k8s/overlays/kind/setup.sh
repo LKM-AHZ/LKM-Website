@@ -20,7 +20,7 @@ LOADRESTRICTOR="--load-restrictor LoadRestrictionsNone"
 # 本地构建的镜像（不存在任何 registry，必须注入）。
 # lkm-bot 属可选组件（base 里 replicas: 0）：镜像不存在时只提示，主栈验收不受影响；
 # 要验收 bot 先 `docker compose --profile bot build lkmbot`。
-LOCAL_IMAGES="lkm-service:latest lkm-official-website:latest lkm-official-static:latest"
+LOCAL_IMAGES="lkm-service:latest lkm-official-website:latest"
 # 可选组件镜像：宿主机没有只提示、不阻断主栈（base 里默认不部署它们）。
 # - lkm-bot：base 中 replicas: 0，要验收先 `docker compose --profile bot build lkmbot`。
 # - Dragonfly：L2 后端的可选替换（见 components/redis-dragonfly）。**默认不启用**，

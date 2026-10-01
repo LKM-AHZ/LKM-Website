@@ -26,7 +26,6 @@
 | `acme-webroot` | `nginx:1.27-alpine` | 无 | 微型静态 responder:仅服务 ACME `/.well-known/acme-challenge/`(非网关角色) |
 | `certbot` | `certbot/certbot` | 无 | 申请与自动续期 Let's Encrypt 证书(webroot) |
 | `astro` | `lkm-official-website:latest` | 仅内网 `4321` | 前端 SSR |
-| `static` | `lkm-official-static:latest` | `8082` | 纯静态官网(独立静态文件服务器) |
 | `backend` | `lkm-service:latest` | 仅内网 `8000` | FastAPI(REST `/api/v1`)+ 论坛域 GraphQL + lag 上报 |
 | `auth` | `lkm-service:latest` | 仅内网 `8001` | AUTH 独立进程(`auth.main`) |
 | `worker` | `lkm-service:latest` | 无 | jobs + user-invalidate 订阅。`python -m boot.workers.default` |
@@ -85,20 +84,20 @@
               ├─ /_astro/*    ──> astro:4321     (指纹静态资源, immutable 长缓存)
               ├─ /lkm/        ──> minio:9000     (对象存储预签名直传/下载, 保留全部 path+query)
               ├─ 其余         ──> astro:4321     (SSR)          ← 社区域名 lkm-ahz.ltd
-              ├─ 全部         ──> static:80      (静态官网)      ← 官网域名 lkm-ahz.icu
               └─ /bot/*       ──> lkmbot:6185    (机器人面板,剥 /bot 前缀) ← 社群域子路径
 ```
 
 后端 REST 前缀为 `/api/vN`,GraphQL 为 `/graphql`。APISIX 用 Docker 内嵌 DNS(`dns_resolver: ['127.0.0.11']` + `discovery_type: dns`)在运行时动态解析 `backend`/`astro`,不依赖启动期 DNS。
 
-> `static` 服务(**纯静态官网**)不挂在 APISIX 的主域名路由下,由独立容器输出并映射到主机 `${LKM_STATIC_PORT:-8082}` 端口,可直接从 `http://<主机IP>:8082` 访问(经 APISIX 的域名路由亦可)。
+> 纯静态官网(`lkm-ahz.icu`)已迁出本编排:它是独立仓库、部署在独立服务器上(自备 nginx + certbot),
+> 不再经本栈的 APISIX 分流。部署方式见 [LKM-official-static/DEPLOYMENT.md](./LKM-official-static/DEPLOYMENT.md)。
 
 ## 前置条件
 
 - 一台有公网 IP 的 Linux 主机,防火墙/安全组放行 `80` 与 `443` 端口。
   > MinIO 不开放独立公网端口:对象存储经 APISIX `/lkm/` 路径转发到 `minio:9000`(仅内网),
   > 浏览器访问经 APISIX 统一入口即可,无需在安全组另开 9000。
-- **域名可选**:有域名走 `.env` 中 `LKM_COMMUNITY_DOMAINS` / `LKM_OFFICIAL_DOMAINS` 配置的地址 + Let's Encrypt 正式证书;**无域名可用公网 IP 直连**——
+- **域名可选**:有域名走 `.env` 中 `LKM_COMMUNITY_DOMAINS` 配置的地址 + Let's Encrypt 正式证书;**无域名可用公网 IP 直连**——
   此时走 **HTTP(80)+自签证书(443)** 模式(见下文「无域名/IP 直连」一节),浏览器访问 IP 即可。
 - 已安装 Docker 与 Docker Compose 插件(`docker compose version` 可正常输出)。
 - 如果需要 k8s 则需要安装 kubeadm 或使用发行版。
@@ -106,7 +105,7 @@
 
 ## 一、获取代码
 
-生产 Compose 使用五个仓库：根仓库作为编排入口，动态前端、静态官网、后端与社区机器人四个子项目各自独立：
+生产 Compose 使用四个仓库：根仓库作为编排入口，动态前端、后端与社区机器人三个子项目各自独立：
 
 ```
 LKM-Website/                  # 根仓库(含 docker-compose.yml 与本教程)
@@ -117,7 +116,6 @@ LKM-Website/                  # 根仓库(含 docker-compose.yml 与本教程)
 │   ├── apisix/               # 全站公网入口 APISIX 声明式路由/SSL 渲染/冒烟脚本
 │   └── certbot/              # certbot 常驻入口脚本(webroot 申请与续期)
 ├── LKM-official-website/     # 前端仓库(含前端 Dockerfile)
-├── LKM-official-static/      # 静态官网仓库(含 static.Dockerfile)
 ├── LKM-service/              # 后端仓库(含后端 Dockerfile)
 └── LKM-bot/                  # 机器人仓库(AstrBot fork,含 Dockerfile;仅 --profile bot 用到)
 ```
@@ -128,7 +126,6 @@ LKM-Website/                  # 根仓库(含 docker-compose.yml 与本教程)
 git clone https://github.com/LKM-AHZ/LKM-Website.git
 cd LKM-Website
 git clone https://github.com/LKM-AHZ/LKM-official-website.git
-git clone https://github.com/LKM-AHZ/LKM-official-static.git
 git clone https://github.com/LKM-AHZ/LKM-service.git
 git clone https://github.com/Alma1314/LKM-bot.git   # 仅启用机器人时需要
 ```
@@ -154,10 +151,9 @@ POSTGRES_DB=lkm
 # LKM_REDIS_URL=redis://redis:6379/0
 
 # 域名与上传上限(**单一来源**:网关与后端都从这里派生)。
-# 换域名只改这三个:render.sh 据此展开 APISIX 的 hosts / CORS 来源 / MinIO Host 改写 / 证书 SNI。
+# 换域名只改这一行:render.sh 据此展开 APISIX 的 hosts / CORS 来源 / MinIO Host 改写 / 证书 SNI。
 # LKM_COMMUNITY_DOMAINS=lkm-ahz.ltd      # 社群站(/api、/graphql、认证面、MinIO 预签名 host)
-# LKM_OFFICIAL_DOMAINS=lkm-ahz.icu       # 官网静态站
-# (bot 面板并入社群域子路径 /bot/,无独立域名配置项)
+# (bot 面板并入社群域子路径 /bot/,无独立域名配置项;官网 lkm-ahz.icu 已迁至独立服务器,不在此列)
 # bot 面板的子路径前缀(**单一来源**,默认 /bot):网关路由 uri/剥前缀正则、面板运行期 base
 #   与前端构建期 base 三面都由它派生(改了这一处即全量跟随,细节见「LKM Bot」一节)。
 # LKM_BOT_BASE_PATH=/bot
@@ -220,7 +216,7 @@ cd LKM-Website
 docker compose up -d --build
 ```
 
-首次构建需拉取基础镜像与依赖,可能耗时数分钟。启动顺序由 `depends_on` 健康检查保证:先 `postgres`、`redis`、`minio`、`pulsar` 就绪,再启动 `backend`/`auth` 与各 `worker`,前端 `astro`/`static` 就绪后网关 `apisix` 再启动。其中 `pulsar` 的 `healthy` **已蕴含**租户与 namespace 初始化完成(见上「Pulsar 无状态化」),故不存在等待一次性 init 容器的步骤。
+首次构建需拉取基础镜像与依赖,可能耗时数分钟。启动顺序由 `depends_on` 健康检查保证:先 `postgres`、`redis`、`minio`、`pulsar` 就绪,再启动 `backend`/`auth` 与各 `worker`,前端 `astro` 就绪后网关 `apisix` 再启动。其中 `pulsar` 的 `healthy` **已蕴含**租户与 namespace 初始化完成(见上「Pulsar 无状态化」),故不存在等待一次性 init 容器的步骤。
 
 ## 三·六、网关：APISIX
 
@@ -228,7 +224,7 @@ docker compose up -d --build
 
 - `apisix-render` sidecar 读路由模板 + certbot 证书，渲染出内联 PEM 的 `ssls` 段写入共享卷（每 6h 或重启时重渲染），APISIX 监测文件变化自动 reload。
   它同时是**网关配置的单一模板展开点**：模板里只放占位，域名与请求体上限从环境变量展开——
-  `LKM_COMMUNITY_DOMAINS`/`LKM_OFFICIAL_DOMAINS` → 各路由 `hosts`、CORS `allow_origins`、MinIO Host 改写、证书 SNI；
+  `LKM_COMMUNITY_DOMAINS` → 各路由 `hosts`、CORS `allow_origins`、MinIO Host 改写、证书 SNI；
   `LKM_MAX_UPLOAD_BYTES` → 社群站各路由 `client-control.max_body_size`（与后端校验同源），
   `LKM_BOT_MAX_UPLOAD_BYTES` → **仅** bot 路由的同名项（bot 单文件上限 512MB，与社群站不可共用），
   `LKM_BOT_BASE_PATH` → bot 三条路由的 `uri` 与剥前缀正则（`proxy-rewrite.regex_uri`）的匹配串，
@@ -239,13 +235,13 @@ docker compose up -d --build
   登录限流是**两层分工而非重复**——网关按 IP 粗粒度削峰（`policy: local`、60/60s），
   应用做账号级精确锁定（用户名级 + 真实 IP 级 Redis 滑动窗口，IP 取自网关注入的 `X-Real-IP`）。
   两层数值刻意不同，不要当成"重复"去同步。
-- **nginx 已彻底移除**：全栈仅存的 nginx 镜像是 `acme-webroot` 与官网 `static` 两处**静态文件服务器**角色（非网关），二者与
-  APISIX 是互补关系而非重叠。
+- **nginx 已彻底移除**：全栈仅存的 nginx 镜像是 `acme-webroot` 一处**静态文件服务器**角色（非网关），
+  它与 APISIX 是互补关系而非重叠。
 
 **运行时冒烟/验收**（网关 up 后，在仓库根执行）：
 
 ```sh
-sh deploy/apisix/smoke.sh 127.0.0.1          # 13 项：301(社群/官网)/健康/GraphQL/限流/MinIO/缓存/WS/…
+sh deploy/apisix/smoke.sh 127.0.0.1          # 301(社群)/健康/GraphQL/限流/MinIO/缓存/WS/…
 SMOKE_HEAVY=1 sh deploy/apisix/smoke.sh      # 追加 100m 上传边界（真发 ~101MB）
 SMOKE_BOT=1 sh deploy/apisix/smoke.sh        # 追加 /bot 面板可达（需先 --profile bot 起 lkmbot）
 ```
@@ -451,7 +447,7 @@ IM 平台回调用，需填 `https://lkm-ahz.ltd/bot`，否则回调会打到社
 同前缀）。
 
 **升级注意**：`/bot` 路由不新增证书域，故不再需要单独首签子域证书——`render.sh` 的证书域集合
-只剩社群/官网两个（旧部署里残留的 `bot.lkm-ahz.ltd` 证书目录可删）。
+只剩社群域一个（旧部署里残留的 `bot.lkm-ahz.ltd` 证书目录可删；官网域已迁出独立部署，不在本栈内）。
 
 **代码沙箱（shipyard，同一 profile）**：
 
@@ -839,7 +835,7 @@ cd LKM-service
 - **后端反复重启(Exited 3)**:通常是密钥缺失或过短。确认 `.env` 中三个密钥已设置为强随机值,并 `docker compose up -d` 重读。
 - **上传大文件被拒**:APISIX 路由已设 `client-control.max_body_size: 104857600`(100m),与后端 `max_upload_bytes` 对齐;更大文件需同时改 `deploy/apisix/apisix.yaml` 与后端配置。
 - **数据库**:使用 PostgreSQL(`timescale/timescaledb:latest-pg16` 服务,卷持久化)。后端经 `LKM_DB_*` 环境变量以 `postgresql+asyncpg` 连接;首次启动时自动建表(默认走 `create_all` 通道)。**换库/改 schema 后需重建数据卷**(`docker compose down -v`,见「数据库」章节)。
-- **换域名**:网关侧只需在 `.env` 改 `LKM_COMMUNITY_DOMAINS` / `LKM_OFFICIAL_DOMAINS`(hosts、CORS 来源、MinIO Host、证书 SNI 全量跟随,见「单一来源」),再 `docker compose up -d apisix-render` 重渲染(bot 面板随社群域走,无需额外 DNS/证书);此外还要改后端**自身身份**类配置 `LKM_ALLOWED_HOSTS`/`LKM_ORIGIN`/`LKM_RP_ID`/`LKM_GITHUB_REDIRECT_URI`/`LKM_FRONTEND_CALLBACK`/`LKM_S3_PUBLIC_ENDPOINT_URL` 与前端 `PUBLIC_SITE_URL`/`PUBLIC_BASE_PATH`,并重新签发证书。
+- **换域名**:网关侧只需在 `.env` 改 `LKM_COMMUNITY_DOMAINS`(hosts、CORS 来源、MinIO Host、证书 SNI 全量跟随,见「单一来源」),再 `docker compose up -d apisix-render` 重渲染(bot 面板随社群域走,无需额外 DNS/证书);此外还要改后端**自身身份**类配置 `LKM_ALLOWED_HOSTS`/`LKM_ORIGIN`/`LKM_RP_ID`/`LKM_GITHUB_REDIRECT_URI`/`LKM_FRONTEND_CALLBACK`/`LKM_S3_PUBLIC_ENDPOINT_URL` 与前端 `PUBLIC_SITE_URL`/`PUBLIC_BASE_PATH`,并重新签发证书。
 
 - **头像/文件上传 404**:MinIO 桶未创建(S3 不自动建桶)。先 `mc mb .../lkm` 建桶(见上文「MinIO 首次初始化」)。
 

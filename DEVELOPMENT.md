@@ -19,18 +19,17 @@
 
 ## 一、仓库结构与文档约定
 
-LKM 网站由四个独立子项目组成(根仓库仅做编排,包含本教程与 dev 脚本):
+LKM 网站由三个独立子项目组成(根仓库仅做编排,包含本教程与 dev 脚本):
 
 ```
 LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / dev 脚本 / 本教程)
 ├── DEVELOPMENT.md            # 本文件
 ├── DEPLOYMENT.md             # 生产部署教程
-├── docker-compose.yml        # 生产编排(apisix/astro/static/postgres/redis/minio/backend/worker 等)
+├── docker-compose.yml        # 生产编排(apisix/astro/postgres/redis/minio/backend/worker 等)
 ├── dev.bat / dev.ps1 / dev.sh# 本地一键启动脚本
 ├── .gitignore                # 忽略 .env、记忆目录等敏感/本地文件
 ├── LKM社区开发方案/          # 后端设计方案与执行路线图
 ├── LKM-official-website/     # 动态前端(Astro SSR + Vue/React islands)
-├── LKM-official-static/      # 纯静态官网(Astro static)
 ├── LKM-service/              # 后端(FastAPI,REST /api/v1 + GraphQL)
 └── LKM-on-VSCode/            # 博客同步 VS Code 扩展
 ```
@@ -42,8 +41,8 @@ LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / 
 
 ## 二、环境要求
 
-- **Git**:管理根编排仓库及四个独立子项目仓库。
-- **Node.js 24+ + pnpm 11**:两个 Astro 项目与 VS Code 扩展(用 pnpm,勿用 npm)。
+- **Git**:管理根编排仓库及三个独立子项目仓库。
+- **Node.js 24+ + pnpm 11**:Astro 前端项目与 VS Code 扩展(用 pnpm,勿用 npm)。
 - **Python 3.13 + uv**:后端依赖与运行。
 - **Redis(可选)**:后端 `LKM_REDIS_URL` 留空时会**回退到单机内存版限流**(fail-open),
   本地开发不装 Redis 也能跑;需要调试共享限流/任务队列时再启动 Redis。
@@ -54,32 +53,30 @@ LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / 
 
 ### 方式一:一键脚本(推荐)
 
-根目录提供统一启动脚本，可安装依赖并并发启动动态前端、静态官网和后端：
+根目录提供统一启动脚本，可安装依赖并并发启动动态前端和后端：
 
 ```sh
 # Windows(bat)
-.\dev.bat            # 三个服务一起(单窗口实时交错日志,Ctrl+C 全部停止)
+.\dev.bat            # 两个服务一起(单窗口实时交错日志,Ctrl+C 全部停止)
 .\dev.bat front      # 仅前端
-.\dev.bat site       # 仅静态官网
 .\dev.bat back       # 仅后端
 
 # 或 PowerShell 直接调用
 powershell -NoProfile -ExecutionPolicy Bypass -File dev.ps1 -Mode all
 
 # bash
-./dev.sh           # 三个服务一起
+./dev.sh           # 两个服务一起
 ./dev.sh front     # 仅前端
-./dev.sh site      # 仅静态官网(端口 4322)
 ./dev.sh back      # 仅后端
 ./dev.sh --no-run  # 仅装依赖不启动
 ```
 
 脚本自动完成的事:
 
-1. 为两个 Astro 项目执行 `pnpm install`，为后端执行 `uv sync`。
+1. 为前端项目执行 `pnpm install`，为后端执行 `uv sync`。
 2. PowerShell 脚本在启动后端时会为缺失的 JWT/TOTP/验证码密钥生成进程级开发值；
    Bash 脚本不会生成密钥，应通过后端 `.env` 或环境变量提供。
-3. 默认并发启动动态前端、静态官网和后端。
+3. 默认并发启动动态前端和后端。
 
 ### 方式二:手动分窗启动
 
@@ -92,14 +89,10 @@ uv run uvicorn main:app --reload --port 8000
 cd LKM-official-website
 cp .env.example .env      # 首次;设置 API_URL=http://127.0.0.1:8000
 pnpm dev
-
-# 终端 3 —— 静态官网
-cd LKM-official-static
-pnpm dev -- --port 4322
 ```
 
 本地使用 **PostgreSQL**(连接参数见 `LKM-service/.env.example`);默认端口:动态前端
-`4321`、静态官网 `4322`、后端 `8000`。
+`4321`、后端 `8000`。
 
 ---
 
@@ -241,7 +234,7 @@ node scripts/generate-icons.mjs
 
 这里是**当前实际生效**的约定,尽量保持最小、不臆造规范:
 
-- **多仓库独立 git**:动态前端、静态站、后端和扩展各自独立提交;根仓库只负责编排与文档。不要在子项目里提交与该项目无关的根级文件。
+- **多仓库独立 git**:动态前端、后端和扩展各自独立提交;根仓库只负责编排与文档。不要在子项目里提交与该项目无关的根级文件。
 - **根仓库提交**:托管 docker-compose.yml、dev 脚本、.gitignore、本教程与 DEPLOYMENT.md
 - **中文注释**:代码注释如非必要一律用中文;与团队沟通用中文。
 - **文档目录**:面向运维的 `DEPLOYMENT.md`、面向开发的 `DEVELOPMENT.md`。
@@ -249,15 +242,7 @@ node scripts/generate-icons.mjs
 
 ---
 
-## 七、静态官网与 VS Code 扩展
-
-静态官网会随根级默认模式启动，也可单独运行：
-
-```sh
-cd LKM-official-static
-pnpm install
-pnpm dev -- --port 4322
-```
+## 七、VS Code 扩展
 
 VS Code 扩展的开发和验证：
 
@@ -268,7 +253,7 @@ pnpm run compile
 pnpm test
 ```
 
-完整说明分别见两个子项目的 README。
+完整说明见该子项目的 README。
 
 ---
 

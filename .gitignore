@@ -6,6 +6,10 @@ reference
 __pycache__
 
 # 子项目以 git submodule 形式跟踪
+# 官网已迁出为独立仓库 + 独立服务器部署，不再是本仓的 submodule；
+# 若本地保留了它的 clone，这里忽略掉，免得根仓 git status 把它显示成未跟踪。
+/LKM-official-static/
+
 # RS256/JWKS 密钥
 deploy/jwt/keys/
 

@@ -31,7 +31,6 @@ services:
     environment:
       # 网关配置的**单一来源**：路由 hosts 与 CORS 来源由域名变量展开，请求体上限与后端LKM_MAX_UPLOAD_BYTES 取同一个 env。
       APISIX_COMMUNITY_DOMAINS: ${LKM_COMMUNITY_DOMAINS:-lkm-ahz.ltd}
-      APISIX_OFFICIAL_DOMAINS: ${LKM_OFFICIAL_DOMAINS:-lkm-ahz.icu}
       # 注：bot 面板已并入社群域的子路径 /bot/（不再有独立子域），故无 APISIX_BOT_DOMAINS。
       APISIX_MAX_BODY_SIZE: ${LKM_MAX_UPLOAD_BYTES:-104857600}
       # bot 面板请求体上限：与上面那个**独立**（bot 单文件 512MB > 社群站 100MB）
@@ -79,8 +78,6 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-      static:
-        condition: service_started
     ports:
       - '80:9080'
       - '443:9443'
@@ -149,17 +146,6 @@ services:
       options:
         max-size: '10m'
         max-file: '3'
-    networks:
-      - lkm
-
-  static:
-    build:
-      context: ./LKM-official-static
-      dockerfile: static.Dockerfile
-    image: lkm-official-static:latest
-    ports:
-      - '${LKM_STATIC_PORT:-8082}:80'
-    restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 

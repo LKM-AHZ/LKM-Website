@@ -1,7 +1,8 @@
 #!/bin/sh
 # APISIX 网关冒烟 + 运行时验收（M5 7.2.4）。在网关已启动的宿主机上跑：
-#   sh deploy/apisix/smoke.sh [BASE_HOST] [COMMUNITY_DOMAIN] [OFFICIAL_DOMAIN]
-# 默认 BASE_HOST=127.0.0.1（本机映射 80/443），域名 lkm-ahz.ltd / lkm-ahz.icu。
+#   sh deploy/apisix/smoke.sh [BASE_HOST] [COMMUNITY_DOMAIN]
+# 默认 BASE_HOST=127.0.0.1（本机映射 80/443），域名 lkm-ahz.ltd。
+# 官网域（lkm-ahz.icu）已迁至独立服务器、不经本网关，不在本脚本覆盖范围。
 # bot 面板已并入社群域子路径 /bot/（无独立子域名），其检查见 SMOKE_BOT。
 #
 # 连接方式（与旧脚本的关键差异，均为真机验收暴露的必要修正）：
@@ -19,7 +20,7 @@
 #   LKM_BOT_BASE_PATH=<p> bot 面板子路径前缀（默认 /bot）：非默认前缀的部署要给同一个值，
 #                        否则 SMOKE_BOT 检查会探错路径（前缀本身由 render.sh 展开进路由）
 #
-# 覆盖：http→https 301（不含内部端口）、后端健康、GraphQL、官网分流、登录限流 429、
+# 覆盖：http→https 301（不含内部端口）、后端健康、GraphQL、登录限流 429、
 #       MinIO 路由（Host 改写后到达对象存储）、静态资源长缓存头、WS upgrade 转发、上传体上限、
 #       SMOKE_BOT=1 时的 bot 面板子路径可达。
 # 仍需人工/独立手段：X-Real-IP 等转发头落上游的值（需 header echo 上游）、证书续期后 reload、
@@ -28,7 +29,6 @@ set -u
 
 HOST="${1:-127.0.0.1}"
 COMMUNITY="${2:-lkm-ahz.ltd}"
-OFFICIAL="${3:-lkm-ahz.icu}"
 # 网关端口。默认 80/443（compose 直接映射）；k8s 下网关是 NodePort，
 # 用 SMOKE_HTTP_PORT/SMOKE_HTTPS_PORT 指到映射后的宿主端口（如 8080/8443）。
 # ⚠️ 非默认端口时 URL 必须显式带端口——`--resolve` 只改解析目标，不会改默认端口。
@@ -53,16 +53,15 @@ check() {
     fi
 }
 
-# 带正确 SNI 的 curl：分别解析社区域名 https/http、官网 https
+# 带正确 SNI 的 curl：分别解析社区域名 https / http
 cc()  { curl -sk --noproxy '*' --resolve "$COMMUNITY:$HTTPS_PORT:$HOST" "$@"; }
 cc80(){ curl -s  --noproxy '*' --resolve "$COMMUNITY:$HTTP_PORT:$HOST"  "$@"; }
-oc()  { curl -sk --noproxy '*' --resolve "$OFFICIAL:$HTTPS_PORT:$HOST"  "$@"; }
 
 # 容器内 https 监听端口（deploy/apisix/config.yaml 的 apisix.ssl.listen）：泄漏到 Location
-# 会让浏览器直接打不通，故任何域的重定向都不得出现它
+# 会让浏览器直接打不通，故重定向都不得出现它
 INTERNAL_HTTPS_PORT=9443
 
-# http→https 重定向的统一判据（两个域共用，别再各写一套）：
+# http→https 重定向的统一判据：
 #   必须 https；不得出现内部端口；默认 443 场景下不得出现任何显式端口。
 # 非默认端口（kind NodePort）场景下 Location 由网关用不带端口的 Host 拼出，端口值不可断言
 # （可能无端口、也可能带请求用的 HTTP 端口），故意不做等值判断以免误报。
@@ -111,11 +110,6 @@ code=$(cc80 -o /dev/null -w '%{http_code}' "http://$COMMUNITY$HP/")
 check "community http->https 301" test "$code" = "301"
 check_redirect "community redirect location" "$loc"
 
-loc=$(curl -s --noproxy '*' --resolve "$OFFICIAL:$HTTP_PORT:$HOST" -o /dev/null -w '%{redirect_url}' "http://$OFFICIAL$HP/")
-code=$(curl -s --noproxy '*' --resolve "$OFFICIAL:$HTTP_PORT:$HOST" -o /dev/null -w '%{http_code}' "http://$OFFICIAL$HP/")
-check "official http->https 301" test "$code" = "301"
-check_redirect "official redirect location" "$loc"
-
 # ── 2) 后端健康经网关 200 ──
 code=$(cc -o /dev/null -w '%{http_code}' "https://$COMMUNITY$SP/api/v1/health")
 check "backend health 200" test "$code" = "200"
@@ -131,11 +125,7 @@ else
     fail=$((fail + 1))
 fi
 
-# ── 4) 官网域名分流：.icu 经 static 输出 200 ──
-code=$(oc -o /dev/null -w '%{http_code}' "https://$OFFICIAL$SP/")
-check "official site 200" test "$code" = "200"
-
-# ── 5) 登录网关限流：60/min → 持续打应出现 429 ──
+# ── 4) 登录网关限流：60/min → 持续打应出现 429 ──
 got429=0
 i=1
 while [ "$i" -le 80 ]; do
@@ -157,7 +147,7 @@ while [ "$i" -le 80 ]; do
 done
 check "login gateway rate-limit 429" test "$got429" = "1"
 
-# ── 6) MinIO 路由：未签名 GET /lkm/ 应到达对象存储并回 403 + x-amz-request-id ──
+# ── 5) MinIO 路由：未签名 GET /lkm/ 应到达对象存储并回 403 + x-amz-request-id ──
 #    （Host 被改写为 lkm-ahz.ltd，S3 XML 响应即证明路由与 host rewrite 生效）
 hdr=$(cc -D - -o /dev/null "https://$COMMUNITY$SP/lkm/" | tr -d '\r')
 code=$(printf '%s' "$hdr" | awk 'NR==1{print $2}')
@@ -170,7 +160,7 @@ else
     fail=$((fail + 1))
 fi
 
-# ── 7) 静态资源长缓存头（response-rewrite 对 404 也应生效，故不依赖文件存在）──
+# ── 6) 静态资源长缓存头（response-rewrite 对 404 也应生效，故不依赖文件存在）──
 hdr=$(cc -D - -o /dev/null "https://$COMMUNITY$SP/static/avatars/__smoke_nonexistent__" | tr -d '\r')
 if printf '%s' "$hdr" | grep -i '^cache-control:' | grep -q 'max-age=31536000'; then
     echo "PASS  avatars long-cache header"
@@ -180,7 +170,7 @@ else
     fail=$((fail + 1))
 fi
 
-# ── 8) 100m 上传边界（可选，SMOKE_HEAVY=1）──
+# ── 7) 100m 上传边界（可选，SMOKE_HEAVY=1）──
 if [ "${SMOKE_HEAVY:-0}" = "1" ]; then
     # 100MB + 1 字节 → APISIX client-control 应回 413，且请求不到后端
     code=$(head -c 104857601 /dev/zero | cc -o /dev/null -w '%{http_code}' -X POST \
@@ -207,7 +197,7 @@ else
     echo "SKIP  upload body-limit checks (set SMOKE_HEAVY=1 to enable)"
 fi
 
-# ── 9) WebSocket upgrade：真实端点 /api/v1/ws/events 必须能穿网关到后端 ──
+# ── 8) WebSocket upgrade：真实端点 /api/v1/ws/events 必须能穿网关到后端 ──
 # 用 HTTP/1.1（HTTP/2 禁止 Connection/Upgrade 连接级头，会假失败）。
 # 无效 token → 后端在 accept 前拒绝，表现为 403；若 APISIX 未转发 upgrade，后端按普通
 # GET 处理返回 404（即本检查要抓的回归）。有效 token 时为 101。
@@ -222,7 +212,7 @@ case "$code" in
     *)           echo "FAIL  ws upgrade reaches backend (status=$code, expected 101/401/403)"; fail=$((fail + 1)) ;;
 esac
 
-# ── 10) bot 面板（社群域子路径 /bot/）──
+# ── 9) bot 面板（社群域子路径 /bot/）──
 # bot 面板已并入社群域（无独立子域名，故不再有「bot 域 301」这一项）。面板可达需 lkmbot 已起
 # （可选组件，默认不起）→ 用 SMOKE_BOT=1 显式开启，否则上游 service_name=lkmbot:6185 解析不到，
 # APISIX 回 503 会把冒烟判红。

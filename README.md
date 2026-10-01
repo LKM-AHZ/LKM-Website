@@ -1,13 +1,12 @@
 # LKM Website 全栈项目
 
-LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 SSR 网站、纯静态官网、FastAPI 后端、社区机器人面板和 VS Code 博客扩展组成，根目录负责统一启动、容器编排和跨项目文档。
+LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 SSR 网站、FastAPI 后端、社区机器人面板和 VS Code 博客扩展组成，根目录负责统一启动、容器编排和跨项目文档。纯静态官网（`lkm-ahz.icu`）已迁出为独立仓库并部署在独立服务器上，不在本编排内（见 [LKM-official-static/DEPLOYMENT.md](./LKM-official-static/DEPLOYMENT.md)）。
 
 ## 项目组成
 
 | 目录 | 技术栈 | 默认端口 | 用途 |
 |---|---|---:|---|
 | `LKM-official-website/` | Astro 7、Vue 3、React、Tailwind CSS 4 | `4321` | 社区与动态官网，SSR 运行 |
-| `LKM-official-static/` | Astro 7、Tailwind CSS 4 | `4321`（独立启动时） | 纯静态官网构建 |
 | `LKM-service/` | FastAPI、SQLAlchemy、PostgreSQL、Pulsar | `8000` / `8001` | 业务 API、AUTH 服务及后台 worker |
 | `LKM-bot/` | Python、AstrBot fork | `6185`（仅经网关 `bot.` 子域） | 社区机器人面板，可选组件（`--profile bot`） |
 | `LKM-on-VSCode/` | TypeScript、VS Code Extension API | — | 博客仓库克隆、编辑与同步 |
@@ -27,7 +26,7 @@ LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 S
 ### 本地开发
 
 ```sh
-# Linux / macOS / Git Bash：安装依赖并启动动态前端、静态官网和后端
+# Linux / macOS / Git Bash：安装依赖并启动动态前端和后端
 ./dev.sh
 
 # 只安装依赖
@@ -35,7 +34,6 @@ LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 S
 
 # 只启动一个服务
 ./dev.sh front
-./dev.sh site
 ./dev.sh back
 ```
 
@@ -50,7 +48,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File dev.ps1 -Mode all
 | 服务 | 地址 |
 |---|---|
 | 动态前端 | `http://127.0.0.1:4321` |
-| 静态官网 | `http://127.0.0.1:4322` |
 | 后端 API | `http://127.0.0.1:8000` |
 | Swagger UI | `http://127.0.0.1:8000/docs` |
 | ReDoc | `http://127.0.0.1:8000/redoc` |
@@ -74,10 +71,6 @@ docker compose ps
 ```sh
 # 动态前端
 cd LKM-official-website
-pnpm check && pnpm test && pnpm build
-
-# 静态站
-cd ../LKM-official-static
 pnpm check && pnpm test && pnpm build
 
 # 后端

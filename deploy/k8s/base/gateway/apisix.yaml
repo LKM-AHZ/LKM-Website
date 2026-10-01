@@ -67,9 +67,6 @@ spec:
             - name: APISIX_COMMUNITY_DOMAINS
               valueFrom:
                 configMapKeyRef: { name: lkm-gateway-config, key: APISIX_COMMUNITY_DOMAINS }
-            - name: APISIX_OFFICIAL_DOMAINS
-              valueFrom:
-                configMapKeyRef: { name: lkm-gateway-config, key: APISIX_OFFICIAL_DOMAINS }
             - name: APISIX_MAX_BODY_SIZE
               valueFrom:
                 configMapKeyRef: { name: lkm-config, key: LKM_MAX_UPLOAD_BYTES }
@@ -111,9 +108,6 @@ spec:
             - name: APISIX_COMMUNITY_DOMAINS
               valueFrom:
                 configMapKeyRef: { name: lkm-gateway-config, key: APISIX_COMMUNITY_DOMAINS }
-            - name: APISIX_OFFICIAL_DOMAINS
-              valueFrom:
-                configMapKeyRef: { name: lkm-gateway-config, key: APISIX_OFFICIAL_DOMAINS }
             - name: APISIX_MAX_BODY_SIZE
               valueFrom:
                 configMapKeyRef: { name: lkm-config, key: LKM_MAX_UPLOAD_BYTES }
@@ -210,12 +204,8 @@ spec:
                       path: lkm-ahz.ltd/fullchain.pem
                     - key: lkm-ahz.ltd_privkey.pem
                       path: lkm-ahz.ltd/privkey.pem
-                    - key: lkm-ahz.icu_fullchain.pem
-                      path: lkm-ahz.icu/fullchain.pem
-                    - key: lkm-ahz.icu_privkey.pem
-                      path: lkm-ahz.icu/privkey.pem
-                    # 注：bot 面板已并入社群域子路径 /bot/，不再有独立子域证书条目
-                    # （面板流量走社群域证书的 SNI）。
+                    # 注：bot 面板已并入社群域子路径 /bot/（不走独立子域证书）；
+                    # 官网域 lkm-ahz.icu 已迁至独立服务器，其证书不在此集群内。
 ---
 # 微型 ACME http-01 responder（非网关角色）：仅服务 certbot webroot 的挑战文件。
 # 保留原因与 compose 一致——APISIX 不服务静态文件，http-01 需要一个静态 responder。

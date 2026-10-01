@@ -11,7 +11,7 @@
 
 - `kubectl` 与集群版本兼容；客户端支持 Kustomize。
 - 本地验收安装 kind，且宿主机 `80/443` 未被其他服务占用。
-- 已构建并让集群可拉取 `lkm-service`、`lkm-official-website`、`lkm-official-static` 镜像；
+- 已构建并让集群可拉取 `lkm-service`、`lkm-official-website` 镜像；
   启用 bot 时还需要 `lkm-bot`（`docker compose --profile bot build lkmbot`）。
 - 根目录 `.env` 已按 `.env.example` 配置；Secret 生成脚本只输出到标准输出，不应重定向后提交。
 - 生产集群已准备 StorageClass、负载均衡、DNS、正式证书和备份方案。
@@ -26,7 +26,7 @@ deploy/k8s/
 │   ├── kustomization.yaml     # 用 configMapGenerator 直接引用仓库既有部署资产
 │   ├── app-config.yaml        # 非敏感配置（三张表：公共 / AUTH 库 / 分析+编排）
 │   ├── infra/                 # postgres redis pulsar minio clickhouse vector otel prefect
-│   ├── app/                   # backend auth workers(×10) frontend(astro+static) lkmbot(可选,replicas 0)
+│   ├── app/                   # backend auth workers(×10) frontend(astro) lkmbot(可选,replicas 0)
 │   └── gateway/               # apisix(+render init/sidecar) acme-webroot 网关配置
 └── overlays/
     ├── kind/                  # 本地单节点验收（NodePort + 站点身份）
@@ -107,7 +107,7 @@ kubectl -n lkm get pods                      # 期望：除 prefect-* 外全部 
 kubectl -n lkm get jobs                      # minio-init / prefect-init 完成
 ```
 
-网关冒烟（复用 compose 的同一脚本，14 项断言；`SMOKE_BOT=1` 且 bot 已 scale 起来时再加 1 项）：
+网关冒烟（复用 compose 的同一脚本；`SMOKE_BOT=1` 且 bot 已 scale 起来时会追加面板可达检查）：
 
 ```sh
 # kind：宿主机 80/443 已映射到 NodePort，脚本按 SNI 走域名

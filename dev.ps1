@@ -4,14 +4,13 @@
 #  用法 (由 dev.bat 转调, 也可直接运行):
 #    powershell -NoProfile -ExecutionPolicy Bypass -File dev.ps1
 #    powershell -NoProfile -ExecutionPolicy Bypass -File dev.ps1 -Mode front   # 仅 SSR 前端
-#    powershell -NoProfile -ExecutionPolicy Bypass -File dev.ps1 -Mode site    # 仅静态官网
 #    powershell -NoProfile -ExecutionPolicy Bypass -File dev.ps1 -Mode back    # 仅后端
 #
 #  注意: 本文件须以 UTF-8 带 BOM 保存, 否则 PS5.1 中文会乱码。
 # ============================================================
 
 param(
-    [ValidateSet("all", "front", "site", "back")]
+    [ValidateSet("all", "front", "back")]
     [string]$Mode = "all"
 )
 
@@ -20,12 +19,7 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 
 $RootDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $FrontDir  = Join-Path $RootDir "LKM-official-website"
-$SiteDir   = Join-Path $RootDir "LKM-official-static"
 $BackDir   = Join-Path $RootDir "LKM-service"
-
-# 静态官网端口, 默认 4322 避免与 SSR 前端 4321 冲突; 可用环境变量 LKM_SITE_PORT 覆盖
-# 只接受纯数字: 空串/非数字原样透传给 pnpm/astro 只会换来一句难懂的启动失败
-$SitePort  = if ($env:LKM_SITE_PORT -match '^\d+$') { [int]$env:LKM_SITE_PORT } else { 4322 }
 
 function Write-Log {
     # 用 [Console] 直接写终端, 即使被管道/重定向捕获也可见(Write-Host 不会进管道)。
@@ -43,14 +37,6 @@ function Install-Front {
     Pop-Location
 }
 
-function Install-Site {
-    Write-Log "安装静态官网依赖 (pnpm install) ..."
-    [Console]::WriteLine("")
-    Push-Location $SiteDir
-    & pnpm install
-    Pop-Location
-}
-
 function Install-Back {
     Write-Log "安装后端依赖 (uv sync) ..."
     [Console]::WriteLine("")
@@ -64,15 +50,10 @@ Write-Log ("模式       : " + $Mode)
 [Console]::WriteLine()
 
 # ---------- 依赖 ----------
-# 只装本次真会启动的服务所需依赖: 原条件($Mode -ne "back" 等)让 site 模式同时装前端与后端,
-# 那两次无关安装任一次失败就会 exit 1, 而这两个服务在 site 模式下根本不会启动。
+# 只装本次真会启动的服务所需依赖。
 if ($Mode -eq "all" -or $Mode -eq "front") {
     Install-Front
     if ($LASTEXITCODE -ne 0) { [Console]::WriteLine("[lkm:error] 前端依赖安装失败。"); exit 1 }
-}
-if ($Mode -eq "all" -or $Mode -eq "site") {
-    Install-Site
-    if ($LASTEXITCODE -ne 0) { [Console]::WriteLine("[lkm:error] 静态官网依赖安装失败。"); exit 1 }
 }
 if ($Mode -eq "all" -or $Mode -eq "back") {
     Install-Back
@@ -114,8 +95,8 @@ function Test-EnvFileHasKey {
     return $false
 }
 
-# 仅需后端时(back 或 all)才生成后端密钥; site/front 不起后端, 不生成。
-if ($Mode -ne "front" -and $Mode -ne "site") {
+# 仅需后端时(back 或 all)才生成后端密钥; front 不起后端, 不生成。
+if ($Mode -ne "front") {
     # RS256 密钥对(必填前置): 未在 env/.env 指定文件路径时, 用 openssl 生成到 deploy/jwt/keys。
     if ([string]::IsNullOrWhiteSpace($env:LKM_JWT_PRIVATE_KEY_FILE) -and
         [string]::IsNullOrWhiteSpace($env:LKM_JWT_PUBLIC_KEY_FILE) -and
@@ -152,19 +133,12 @@ if ($Mode -ne "front" -and $Mode -ne "site") {
     }
 }
 
-# ---------- 仅前端 / 仅静态官网 / 仅后端: 前台运行 ----------
+# ---------- 仅前端 / 仅后端: 前台运行 ----------
 if ($Mode -eq "front") {
     Write-Log "启动 SSR 前端: pnpm run dev"
     [Console]::WriteLine()
     Set-Location $FrontDir
     & pnpm run dev
-    exit $LASTEXITCODE
-}
-if ($Mode -eq "site") {
-    Write-Log "启动静态官网: pnpm run dev --port $SitePort"
-    [Console]::WriteLine()
-    Set-Location $SiteDir
-    & pnpm run dev --port "$SitePort"
     exit $LASTEXITCODE
 }
 if ($Mode -eq "back") {
@@ -175,16 +149,15 @@ if ($Mode -eq "back") {
     exit $LASTEXITCODE
 }
 
-# ---------- 同时启动: 三个后台作业, 实时交错打印日志 ----------
-Write-Log "同时启动 SSR 前端、静态官网与后端(单窗口实时交错日志)。"
+# ---------- 同时启动: 两个后台作业, 实时交错打印日志 ----------
+Write-Log "同时启动 SSR 前端与后端(单窗口实时交错日志)。"
 [Console]::WriteLine()
 Write-Log "停止: 在本窗口按 Ctrl+C 即可同时结束全部服务。"
 
-# 先声明为 $null: 作业创建也必须放进 try —— 若第 2/3 个 Start-Job 失败
+# 先声明为 $null: 作业创建也必须放进 try —— 若第 2 个 Start-Job 失败
 # (Start-Job 报错、PSRemoting/WSMan 不可用等), 已启动的作业及其孙进程
-# (pnpm/node、uv/uvicorn)就没人收尾, 4321/4322/8000 端口会一直被占。
+# (pnpm/node、uv/uvicorn)就没人收尾, 4321/8000 端口会一直被占。
 $frontJob = $null
-$siteJob  = $null
 $backJob  = $null
 
 try {
@@ -195,12 +168,6 @@ try {
         & pnpm run dev *>&1
     } -ArgumentList $FrontDir
 
-    $siteJob = Start-Job -Name "lkm-static-site" -ScriptBlock {
-        param($dir, $port)
-        Set-Location $dir
-        & pnpm run dev --port "$port" *>&1
-    } -ArgumentList $SiteDir, $SitePort
-
     $backJob = Start-Job -Name "lkm-backend" -ScriptBlock {
         param($dir)
         Set-Location $dir
@@ -209,18 +176,16 @@ try {
 
     # 简单取个别名便于在下面循环里打 tag
     $frontJobTag = "lkm-frontend"
-    $siteJobTag  = "lkm-static-site"
     $backJobTag  = "lkm-backend"
 
     # 失败只播报一次: 状态不会回到 Running, 每 200ms 重打一遍会把窗口刷爆
     $reportedFailed = @{}
 
-    # 持续消费三个任务的输出并实时打印; 消费式(不带 -Keep)天然去重
+    # 持续消费两个任务的输出并实时打印; 消费式(不带 -Keep)天然去重
     while ($true) {
-        foreach ($job in @($frontJob, $siteJob, $backJob)) {
+        foreach ($job in @($frontJob, $backJob)) {
             $tag = switch ($job.Name) {
                 $frontJobTag { "前端" }
-                $siteJobTag  { "静态官网" }
                 $backJobTag  { "后端" }
             }
             # 任务的 stderr 已在脚本块里用 *>&1 并入输出流, 这里只消费 stdout 即可。
@@ -236,9 +201,8 @@ try {
                 [Console]::WriteLine("[" + $tag + "][failed] " + $job.Name + ": " + $reason)
             }
         }
-        # 三个任务都结束时退出
+        # 两个任务都结束时退出
         if (($frontJob.State -in @("Completed", "Failed", "Stopped")) -and
-            ($siteJob.State  -in @("Completed", "Failed", "Stopped")) -and
             ($backJob.State  -in @("Completed", "Failed", "Stopped"))) {
             break
         }
@@ -247,9 +211,9 @@ try {
 }
 finally {
     [Console]::WriteLine()
-    Write-Log "退出中, 正在停止全部服务(前端/静态官网/后端)..."
+    Write-Log "退出中, 正在停止全部服务(前端/后端)..."
     # 只收尾真正起来了的作业($null 的跳过): 作业创建失败时 finally 同样可达
-    $jobs = @($frontJob, $siteJob, $backJob) | Where-Object { $_ }
+    $jobs = @($frontJob, $backJob) | Where-Object { $_ }
     if ($jobs) {
         Stop-Job $jobs -ErrorAction SilentlyContinue
         Remove-Job $jobs -Force -ErrorAction SilentlyContinue

@@ -1,5 +1,6 @@
-# 前端：astro（SSR）+ static（纯静态官网）。
-# 两者都不直接对外——唯一对外入口是 APISIX，由它按 Host/路径分流。
+# 前端：astro（SSR）。
+# 不直接对外——唯一对外入口是 APISIX，由它按 Host/路径分流。
+# 注：纯静态官网（原 static）已迁至独立服务器自包含部署，不再是本集群的组件。
 ---
 apiVersion: v1
 kind: Service
@@ -73,54 +74,3 @@ spec:
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits: { memory: 1Gi }
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: static
-  labels:
-    app.kubernetes.io/name: static
-    app.kubernetes.io/component: frontend
-    app.kubernetes.io/part-of: lkm
-spec:
-  selector:
-    app.kubernetes.io/name: static
-  ports:
-    - name: http
-      port: 80
-      targetPort: http
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: static
-  labels:
-    app.kubernetes.io/name: static
-    app.kubernetes.io/component: frontend
-    app.kubernetes.io/part-of: lkm
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: static
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: static
-        app.kubernetes.io/component: frontend
-        app.kubernetes.io/part-of: lkm
-    spec:
-      containers:
-        - name: static
-          image: lkm-official-static:latest
-          imagePullPolicy: IfNotPresent
-          ports:
-            - name: http
-              containerPort: 80
-          readinessProbe:
-            httpGet: { path: /, port: http }
-            initialDelaySeconds: 3
-            periodSeconds: 30
-          resources:
-            requests: { cpu: 20m, memory: 32Mi }
-            limits: { memory: 128Mi }
