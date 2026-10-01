@@ -29,16 +29,16 @@
 | `static` | `lkm-official-static:latest` | `8082` | 纯静态官网(独立静态文件服务器) |
 | `backend` | `lkm-service:latest` | 仅内网 `8000` | FastAPI(REST `/api/v1`)+ 论坛域 GraphQL + lag 上报 |
 | `auth` | `lkm-service:latest` | 仅内网 `8001` | AUTH 独立进程(`auth.main`) |
-| `worker` | `lkm-service:latest` | 无 | jobs + user-invalidate 订阅。`python -m app.core.worker_default` |
-| `worker-send` | `lkm-service:latest` | 无 | 发送订阅。`python -m app.core.worker_send` |
-| `worker-notify` | `lkm-service:latest` | 无 | 对象事件登记订阅。`python -m app.core.worker_notify` |
-| `worker-notification` | `lkm-service:latest` | 无 | 站内信生成订阅。`python -m app.core.worker_notification` |
-| `worker-points-reward` | `lkm-service:latest` | 无 | points 奖励入账订阅。`python -m app.core.worker_points_reward` |
-| `worker-points-stats` | `lkm-service:latest` | 无 | points 行为计数/成就订阅。`python -m app.core.worker_points_stats` |
-| `worker-points-tasks` | `lkm-service:latest` | 无 | points 每日任务订阅。`python -m app.core.worker_points_tasks` |
-| `worker-scheduler` | `lkm-service:latest` | 无 | cron 触发发布(`app.core.worker_scheduler`) |
-| `worker-dlq` | `lkm-service:latest` | 无 | 死信落库(`app.core.worker_dlq`) |
-| `worker-outbox` | `lkm-service:latest` | 无 | outbox relay(`app.core.worker_outbox`) |
+| `worker` | `lkm-service:latest` | 无 | jobs + user-invalidate 订阅。`python -m boot.workers.default` |
+| `worker-send` | `lkm-service:latest` | 无 | 发送订阅。`python -m boot.workers.send` |
+| `worker-notify` | `lkm-service:latest` | 无 | 对象事件登记订阅。`python -m boot.workers.notify` |
+| `worker-notification` | `lkm-service:latest` | 无 | 站内信生成订阅。`python -m boot.workers.notification` |
+| `worker-points-reward` | `lkm-service:latest` | 无 | points 奖励入账订阅。`python -m boot.workers.points_reward` |
+| `worker-points-stats` | `lkm-service:latest` | 无 | points 行为计数/成就订阅。`python -m boot.workers.points_stats` |
+| `worker-points-tasks` | `lkm-service:latest` | 无 | points 每日任务订阅。`python -m boot.workers.points_tasks` |
+| `worker-scheduler` | `lkm-service:latest` | 无 | cron 触发发布(`boot.workers.scheduler`) |
+| `worker-dlq` | `lkm-service:latest` | 无 | 死信落库(`boot.workers.dlq`) |
+| `worker-outbox` | `lkm-service:latest` | 无 | outbox relay(`boot.workers.outbox`) |
 | `postgres` | `timescale/timescaledb:latest-pg16` | 仅内网 `5432` | 后端数据库(biz `lkm` + auth `lkm_auth`);outbox 两表为 hypertable |
 | `redis` | `redis:7-alpine` | 仅内网 `6379` | leader 租约、共享限流 / 缓存 |
 | `pulsar` | `apachepulsar/pulsar:3.3.0` | 仅内网 `6650`/`8080` | **消息总线**(standalone,自带 ZK+BookKeeper;6650 broker / 8080 Admin REST)。**无状态化**启动包装,见下 |

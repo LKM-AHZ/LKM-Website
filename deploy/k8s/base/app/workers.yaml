@@ -30,7 +30,7 @@ spec:
         - name: worker
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
-          command: ['python', '-m', 'app.core.worker_default']
+          command: ['python', '-m', 'boot.workers.default']
           envFrom:
             - configMapRef: { name: lkm-config }
             - configMapRef: { name: lkm-config-authdb }
@@ -73,7 +73,7 @@ spec:
         - name: worker-send
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
-          command: ['python', '-m', 'app.core.worker_send']
+          command: ['python', '-m', 'boot.workers.send']
           envFrom:
             - configMapRef: { name: lkm-config }
             - secretRef: { name: lkm-secrets }
@@ -106,7 +106,7 @@ spec:
         - name: worker-notify
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
-          command: ['python', '-m', 'app.core.worker_notify']
+          command: ['python', '-m', 'boot.workers.notify']
           envFrom:
             - configMapRef: { name: lkm-config }
             - secretRef: { name: lkm-secrets }
@@ -139,7 +139,7 @@ spec:
         - name: worker-notification
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
-          command: ['python', '-m', 'app.core.worker_notification']
+          command: ['python', '-m', 'boot.workers.notification']
           envFrom:
             - configMapRef: { name: lkm-config }
             - secretRef: { name: lkm-secrets }
@@ -173,7 +173,7 @@ spec:
         - name: worker-content-index
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
-          command: ['python', '-m', 'app.core.worker_content_index']
+          command: ['python', '-m', 'boot.workers.content_index']
           envFrom:
             - configMapRef: { name: lkm-config }
             - secretRef: { name: lkm-secrets }
@@ -206,7 +206,7 @@ spec:
         - name: worker-dlq
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
-          command: ['python', '-m', 'app.core.worker_dlq']
+          command: ['python', '-m', 'boot.workers.dlq']
           envFrom:
             - configMapRef: { name: lkm-config }
             - secretRef: { name: lkm-secrets }
@@ -241,7 +241,7 @@ spec:
         - name: worker-outbox
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
-          command: ['python', '-m', 'app.core.worker_outbox']
+          command: ['python', '-m', 'boot.workers.outbox']
           envFrom:
             - configMapRef: { name: lkm-config }
             - secretRef: { name: lkm-secrets }
@@ -274,7 +274,7 @@ spec:
         - name: worker-scheduler
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
-          command: ['python', '-m', 'app.core.worker_scheduler']
+          command: ['python', '-m', 'boot.workers.scheduler']
           # compose 只给它 ENV + 三主密钥 + PULSAR_URL（不接 DB/Redis）。此处用公共表会
           # 多下发 DB/Redis 等**它不消费**的键——多余但无害（不读就不会连），换来少维护
           # 一张专属表；若将来它真去连 DB 才能被发现，届时拆表。
@@ -312,7 +312,7 @@ spec:
         - name: worker-points-reward
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
-          command: ['python', '-m', 'app.core.worker_points_reward']
+          command: ['python', '-m', 'boot.workers.points_reward']
           envFrom:
             - configMapRef: { name: lkm-config }
             - secretRef: { name: lkm-secrets }
@@ -351,7 +351,7 @@ spec:
         - name: worker-points-stats
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
-          command: ['python', '-m', 'app.core.worker_points_stats']
+          command: ['python', '-m', 'boot.workers.points_stats']
           envFrom:
             - configMapRef: { name: lkm-config }
             - secretRef: { name: lkm-secrets }
@@ -390,7 +390,7 @@ spec:
         - name: worker-points-tasks
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
-          command: ['python', '-m', 'app.core.worker_points_tasks']
+          command: ['python', '-m', 'boot.workers.points_tasks']
           envFrom:
             - configMapRef: { name: lkm-config }
             - secretRef: { name: lkm-secrets }

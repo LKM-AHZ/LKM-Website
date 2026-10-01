@@ -368,7 +368,7 @@ services:
   # Infisical 密钥管理：默认不启，不影响主栈。
   # 首启后到 Web UI 建项目 + universal-auth machine identity，把 client id/secret 与
   # project id 填回根 .env（LKM_INFISICAL_*），并置 LKM_INFISICAL_ENABLED=true；
-  # 应用经 deploy/docker-entrypoint.sh → app.core.secrets_bootstrap 启动前拉取注入。
+  # 应用经 deploy/docker-entrypoint.sh → core.secrets_bootstrap 启动前拉取注入。
   infisical-db:
     image: postgres:16-alpine
     profiles: ['infisical']
@@ -753,7 +753,7 @@ services:
 
   worker-send:
     image: lkm-service:latest
-    command: ['python', '-m', 'app.core.worker_send']
+    command: ['python', '-m', 'boot.workers.send']
     depends_on:
       redis:
         condition: service_healthy
@@ -780,7 +780,7 @@ services:
 
   worker:
     image: lkm-service:latest
-    command: ['python', '-m', 'app.core.worker_default']
+    command: ['python', '-m', 'boot.workers.default']
     depends_on:
       redis:
         condition: service_healthy
@@ -833,7 +833,7 @@ services:
   # 各由独立进程消费（reward / stats / tasks），真实故障隔离——停一个不影响其余。
   worker-points-reward:
     image: lkm-service:latest
-    command: ['python', '-m', 'app.core.worker_points_reward']
+    command: ['python', '-m', 'boot.workers.points_reward']
     depends_on:
       redis:
         condition: service_healthy
@@ -863,7 +863,7 @@ services:
 
   worker-points-stats:
     image: lkm-service:latest
-    command: ['python', '-m', 'app.core.worker_points_stats']
+    command: ['python', '-m', 'boot.workers.points_stats']
     depends_on:
       redis:
         condition: service_healthy
@@ -893,7 +893,7 @@ services:
 
   worker-points-tasks:
     image: lkm-service:latest
-    command: ['python', '-m', 'app.core.worker_points_tasks']
+    command: ['python', '-m', 'boot.workers.points_tasks']
     depends_on:
       redis:
         condition: service_healthy
@@ -923,7 +923,7 @@ services:
 
   worker-notify:
     image: lkm-service:latest
-    command: ['python', '-m', 'app.core.worker_notify']
+    command: ['python', '-m', 'boot.workers.notify']
     depends_on:
       postgres:
         condition: service_healthy
@@ -952,7 +952,7 @@ services:
   # 需 auth 读缝（触发者展示名），与 backend 同款配置。
   worker-notification:
     image: lkm-service:latest
-    command: ['python', '-m', 'app.core.worker_notification']
+    command: ['python', '-m', 'boot.workers.notification']
     depends_on:
       postgres:
         condition: service_healthy
@@ -986,7 +986,7 @@ services:
   # 故本服务随默认栈常驻、不需要 profile。
   worker-content-index:
     image: lkm-service:latest
-    command: ['python', '-m', 'app.core.worker_content_index']
+    command: ['python', '-m', 'boot.workers.content_index']
     depends_on:
       postgres:
         condition: service_healthy
@@ -1024,7 +1024,7 @@ services:
 
   worker-scheduler:
     image: lkm-service:latest
-    command: ['python', '-m', 'app.core.worker_scheduler']
+    command: ['python', '-m', 'boot.workers.scheduler']
     depends_on:
       pulsar:
         condition: service_healthy
@@ -1041,7 +1041,7 @@ services:
 
   worker-dlq:
     image: lkm-service:latest
-    command: ['python', '-m', 'app.core.worker_dlq']
+    command: ['python', '-m', 'boot.workers.dlq']
     depends_on:
       postgres:
         condition: service_healthy
@@ -1067,7 +1067,7 @@ services:
   # core.messaging.publish 发布到 Pulsar。需 DB（读 outbox）+ Redis（租约）+ Pulsar。
   worker-outbox:
     image: lkm-service:latest
-    command: ['python', '-m', 'app.core.worker_outbox']
+    command: ['python', '-m', 'boot.workers.outbox']
     depends_on:
       postgres:
         condition: service_healthy
@@ -1160,7 +1160,7 @@ services:
     command:
       - sh
       - -c
-      - prefect work-pool create "$$LKM_PREFECT_WORK_POOL" --type process || true; python -m app.flows.deploy
+      - prefect work-pool create "$$LKM_PREFECT_WORK_POOL" --type process || true; python -m boot.flows_deploy
     restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm

@@ -196,7 +196,7 @@ spec:
                 exit 0
               fi
               prefect work-pool create "$LKM_PREFECT_WORK_POOL" --type process || true
-              python -m app.flows.deploy
+              python -m boot.flows_deploy
           env:
             - name: PREFECT_API_URL
               valueFrom:

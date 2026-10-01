@@ -144,14 +144,14 @@ LKM_VERIFICATION_CODE_PEPPER=<与上面都不同>
 调度、死信和 outbox relay 分开运行。本地 dev 脚本不启动这些进程，需要验证时按目标订阅单独启动：
 
 ```sh
-uv run python -m app.core.worker_default   # 默认队列
-uv run python -m app.core.worker_send      # 发送队列
-uv run python -m app.core.worker_notify    # 对象事件登记
-uv run python -m app.core.worker_notification  # 站内信
-uv run python -m app.core.worker_points_reward # 积分入账
-uv run python -m app.core.worker_points_stats  # 积分统计/成就
-uv run python -m app.core.worker_points_tasks  # 每日任务
-uv run python -m app.core.worker_outbox    # outbox relay
+uv run python -m boot.workers.default   # 默认队列
+uv run python -m boot.workers.send      # 发送队列
+uv run python -m boot.workers.notify    # 对象事件登记
+uv run python -m boot.workers.notification  # 站内信
+uv run python -m boot.workers.points_reward # 积分入账
+uv run python -m boot.workers.points_stats  # 积分统计/成就
+uv run python -m boot.workers.points_tasks  # 每日任务
+uv run python -m boot.workers.outbox    # outbox relay
 ```
 
 ### 测试

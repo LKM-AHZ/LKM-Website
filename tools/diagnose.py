@@ -137,7 +137,7 @@ def load_subscriptions(rows: list[tuple[str, str, str]]) -> list[tuple[str, str]
     if "backend" not in running:
         return _fallback_subscriptions("backend 未运行")
     code = (
-        "from app.core import messaging as m;"
+        "from core import messaging as m;"
         "print('\\n'.join(f'{s.name}\\t{s.topic}' for s in m.SUBSCRIPTIONS.values()))"
     )
     try:
