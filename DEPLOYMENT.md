@@ -715,22 +715,62 @@ docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
 
 **改 schema 的规矩**:
 
-1. **加列/加索引**可走 create_all 通道的**加性同步**(`_sync_additive_schema`,只增不改,见《执行路线图》§8 #38)——但模型改了**也要补一条 alembic revision**,否则 Alembic 通道建出的库缺列。
+1. **加列/加索引**可走 create_all 通道的**加性同步**(`_sync_additive_schema`,只增不改,见《执行路线图》§8 #38)；超过 64 MiB 的大表及 Timescale hypertable 按第 3 步执行。模型改了**也要补一条 alembic revision**,否则 Alembic 通道建出的库缺列。
 2. **破坏性变更**(改类型 / 删列 / 改约束 / 改主键)**只能走 alembic 并人工评审**:create_all 通道不会 ALTER,直接改模型会让既有库静默失配。
-3. **大表变更先出 SQL 再进库,不要直接 `upgrade`**:
+3. **大表变更分阶段执行**，先出 SQL 评审，不要直接 `upgrade`:
 
 ```sh
 # 只生成 SQL、不连库执行(逐 revision 双向:upgrade 与 downgrade 各一份)
 LKM_USE_ALEMBIC=true docker compose exec backend \
   alembic upgrade <prev>:<rev> --sql > /tmp/mig.sql
-# 交 DBA 评审后再人工喂库(分批/低峰执行;必要时手工改成分批 DDL)
-docker compose exec -T postgres psql -U lkm -d lkm < /tmp/mig.sql
+# 先审查 /tmp/mig.sql；大表的加列、回填、建索引、非空收紧按下方工具分阶段执行。
 ```
 
-   `content_items`、`content_comments`、`outbox_events`、`interaction_view_logs` 属大表,对其
-   `ADD COLUMN ... NOT NULL DEFAULT` / 类型收紧 / 建索引务必用 `CREATE INDEX CONCURRENTLY`(手工改 SQL)
-   或分批回填,**避免全表重写与长锁**。CI 的 `migrations` job 已对每条 revision 做双向离线 SQL
-   体检(`LKM-service/scripts/check_migrations.py`),但它**不替代**上线前的人工评审。
+   `content_items`、`content_comments`、`outbox_events`、`outbox_archived`、
+   `interaction_view_logs`、`points_ledger` 属大表。已有表超过 64 MiB 或已转 hypertable 时，应用启动的
+   加性同步会拒绝自动补列，并跳过自动建索引。先以旧版应用运行，执行以下分阶段操作，
+   再发布依赖新列的镜像（命令在 `LKM-service/` 下运行，默认只打印计划，`--apply` 执行）：
+
+```sh
+# 例：给 content_items 增加可空列并从现有列回填。每批 500 行独立提交，可中断重跑。
+uv run python -m scripts.online_ddl add-column --table content_items --column new_value --type bigint
+uv run python -m scripts.online_ddl --apply add-column --table content_items --column new_value --type bigint
+uv run python -m scripts.online_ddl --apply backfill --table content_items --column new_value \
+  --expression 't.existing_value' --batch-size 500 --max-batches 1000 --sleep-ms 50
+# 根据实际模型定义创建索引；在事务外并发建索引，失败后先核对/清理无效索引再重跑。
+uv run python -m scripts.online_ddl --apply index --table content_items \
+  --name ix_content_new_value --columns new_value
+# 仅当新列需要 NOT NULL；先 VALIDATE CHECK，再短锁 SET NOT NULL。
+uv run python -m scripts.online_ddl --apply set-not-null --table content_items --column new_value
+```
+
+   回填表达式是管理员审核过的 SQL 表达式，可引用表别名 `t`；工具拒绝多语句输入，
+   但不会替代 SQL 审核。每次回填有批次上限，尚有 NULL 时返回失败，可调整上限重跑。
+   Timescale hypertable 的非唯一索引自动改用 `transaction_per_chunk`；唯一索引需单独评审，
+   分 chunk 建索引不支持唯一性。工具执行前会检查同名索引，包括失败后留下的无效索引。
+   如需回填已压缩的 `outbox_archived` chunk，先制定解压与恢复压缩的维护窗口；
+   压缩 chunk 上的更新仍受 TimescaleDB DML 限制。
+   对表达式索引、部分索引、改类型、删列等超出工具范围的变更，单独写可回滚的
+   Alembic revision 和运维 SQL，评审后低峰执行。CI 的 `migrations` job 仅做双向离线 SQL
+   体检，不代表线上 DDL 已获批准。
+
+### 后端 CI 生产部署
+
+`LKM-service/.github/workflows/ci.yml` 的 `deploy` 仅在 `master`/`main` 上手动触发，
+在 `production` environment 中构建推送 SHA 镜像，并更新集群内使用
+`lkm-service` 镜像的 backend、auth、worker 与 Prefect Deployment，逐个等待 rollout。
+集群清单先按本文件部署；CI 不重放父仓库 Kustomize 清单，也不改一次性 `prefect-init`
+Job（Job 模板不可变，Flow 定义变化时需按 `deploy/k8s/README.md` 重跑该 Job）。
+
+在 **LKM-service** GitHub 仓库设置 `REGISTRY_IMAGE` 变量（如
+`ghcr.io/lkm-ahz/lkm-service`）、可选 `REGISTRY_HOST` / `REGISTRY_USER` /
+`KUBE_NAMESPACE` 变量；非 GHCR 仓库还需在 `production` environment 设置
+`REGISTRY_TOKEN` secret（GHCR 默认使用 `GITHUB_TOKEN`）。
+并在 `production` environment 设置 `KUBE_CONFIG_B64` secret：内容为专用 kubeconfig
+文件的 base64 单行编码。该身份至少需在目标 namespace 读取、patch Deployment 并读取
+rollout 状态；生产镜像为私有仓库时，集群还需预先配置 imagePullSecret。
+任一目标不存在或 rollout 失败时 job 失败，不能将镜像推送成功误认作部署成功。
+需要人工复核时，在 GitHub 的 `production` environment 配置 required reviewers。
 
 ### 可选方案：主机手动安装 PostgreSQL
 

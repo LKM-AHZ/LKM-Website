@@ -82,7 +82,7 @@ spec:
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 3
-          # 首启要跑 alembic 迁移 + 建连接池，给足冷启动窗口
+          # 首启进程装配仍可能较慢；schema 初始化在后台重试，由 readiness 控制接流
           startupProbe:
             exec:
               command:
