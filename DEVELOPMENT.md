@@ -44,6 +44,8 @@ LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / 
 - **Git**:管理根编排仓库及三个独立子项目仓库。
 - **Node.js 24+ + pnpm 11**:Astro 前端项目与 VS Code 扩展(用 pnpm,勿用 npm)。
 - **Python 3.13 + uv**:后端依赖与运行。
+- **PostgreSQL**:后端必需；先启动数据库，并创建 `lkm` 数据库。连接参数见
+  `LKM-service/.env.example`，未配置时默认连接 `localhost:5432/lkm`，用户 `postgres`。
 - **Redis(可选)**:后端 `LKM_REDIS_URL` 留空时会**回退到单机内存版限流**(fail-open),
   本地开发不装 Redis 也能跑;需要调试共享限流/任务队列时再启动 Redis。
 
@@ -82,6 +84,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File dev.ps1 -Mode all
 3. 默认并发启动动态前端和后端。
 
 两套脚本均可通过 `FRONT_PORT` 和 `BACKEND_PORT` 环境变量覆盖默认端口；只会检查当前模式需要的工具和端口。未知参数会直接报错。
+Linux 上的 Bash 启动脚本默认让前端使用轮询监视文件，避免系统 inotify 配额耗尽时
+Vite 报 `ENOSPC: System limit for number of file watchers reached`。轮询会增加少量 CPU
+开销；若系统已提高限额，可用 `CHOKIDAR_USEPOLLING=false ./dev.sh` 恢复原生监视。
+直接进入前端仓库运行 `pnpm dev` 时，可先设置 `CHOKIDAR_USEPOLLING=1`。
+启动后端前会使用其实际配置测试 PostgreSQL 连接；数据库未就绪时脚本会直接指出目标地址，避免后端持续打印连接异常。`--no-run` 和仅前端模式不会检查数据库。
+
+Linux/macOS 若尚未配置数据库，可先运行 `./scripts/start_dev_db.sh`，在 Git 忽略的 `.dev/`
+中创建并启动独立的 PostgreSQL，生成凭据，写入后端 `.env`，同时创建 `lkm` 和 `lkm_auth`
+库。需要安装 PostgreSQL 命令行与服务端工具。重启机器后再次运行该脚本即可启动已有实例；
+它不会覆盖自定义 `.env`。
+
+若使用已有 PostgreSQL，先启动服务（Linux 常用 `sudo systemctl start postgresql`），
+确认 `pg_isready -h localhost -p 5432` 有响应，再按 `LKM-service/.env.example` 创建业务库
+`lkm` 并配置用户、密码；使用其他主机或端口时，
+在 `LKM-service/.env` 设置相应的 `LKM_DB_*`。AUTH 服务若单独运行，还需要 `lkm_auth` 库和
+`LKM_AUTH_DB_*` 配置。生产 `docker-compose.yml` 需要完整生产环境变量，不能直接替代本地数据库准备步骤。
 
 ### 方式二:手动分窗启动
 

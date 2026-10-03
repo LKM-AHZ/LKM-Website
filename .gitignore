@@ -1,6 +1,7 @@
 .claude
 docs
 .env
+.dev/
 reference
 .obsidian
 __pycache__

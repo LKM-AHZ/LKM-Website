@@ -96,6 +96,12 @@ if ($NoRun) { exit 0 }
 if ($Mode -ne "back") { $FrontPort = Get-Port "FRONT_PORT" 4321 }
 if ($Mode -ne "front") { $BackPort = Get-Port "BACKEND_PORT" 8000 }
 
+if ($Mode -ne "front") {
+    Push-Location $BackDir
+    try { & uv run python (Join-Path $RootDir "scripts\check_dev_db.py") } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
 # ---------- 后端开发密钥 ----------
 # 后端为 RS256-only(无 HS256 对称降级): 签发/验签需 RSA 密钥对, 另需 TOTP/pepper 两个对称密钥;
 # 非测试环境还会强制校验密钥强且非默认。若未通过环境变量(或 .env)提供, 这里自动生成开发用值并注入,

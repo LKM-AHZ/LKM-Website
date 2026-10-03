@@ -87,6 +87,12 @@ run_frontend() {
     error "目录不存在: $FRONTEND_DIR（子模块未初始化？）"
     return 1
   fi
+  # Linux 桌面环境常由 IDE/浏览器占满 inotify 配额，Vite 随后会以 ENOSPC 退出。
+  # Vite 内置的 Chokidar 支持此变量；只影响前端进程，显式设置可覆盖默认值。
+  if [ "$(uname -s)" = Linux ] && [ -z "${CHOKIDAR_USEPOLLING+x}" ]; then
+    export CHOKIDAR_USEPOLLING=1
+    log "Linux 前端文件监视使用轮询（CHOKIDAR_USEPOLLING=1）。"
+  fi
   log "启动 SSR 前端: pnpm run dev --port $FRONT_PORT"
   (cd "$FRONTEND_DIR" && pnpm run dev --port "$FRONT_PORT")
 }
@@ -142,6 +148,10 @@ install_deps "$MODE"
 if [ "$NO_RUN" = true ]; then
   log "依赖安装完成。"
   exit 0
+fi
+
+if [ "$MODE" != front ]; then
+  (cd "$BACKEND_DIR" && uv run python "$ROOT_DIR/scripts/check_dev_db.py")
 fi
 
 case "$MODE" in

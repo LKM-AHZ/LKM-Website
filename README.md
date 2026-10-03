@@ -20,6 +20,7 @@ LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 S
 
 - Node.js `>=24`、pnpm `11`
 - Python `>=3.13`、[uv](https://docs.astral.sh/uv/)
+- PostgreSQL（后端必需；先启动并创建 `lkm` 数据库，连接参数见 `LKM-service/.env.example`）
 - Git
 - Docker Engine + Docker Compose（运行完整基础设施时需要）
 
