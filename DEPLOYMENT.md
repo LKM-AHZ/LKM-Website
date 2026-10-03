@@ -83,7 +83,7 @@
               ├─ /graphql     ──> backend:8000   (支持 WebSocket)
               ├─ /_astro/*    ──> astro:4321     (指纹静态资源, immutable 长缓存)
               ├─ /lkm/        ──> minio:9000     (对象存储预签名直传/下载, 保留全部 path+query)
-              ├─ 其余         ──> astro:4321     (SSR)          ← 社区域名 lkm-ahz.ltd
+              ├─ 其余         ──> astro:4321     (SSR)          ← 社区域名
               └─ /bot/*       ──> lkmbot:6185    (机器人面板,剥 /bot 前缀) ← 社群域子路径
 ```
 

@@ -535,6 +535,20 @@ services:
     networks:
       - lkm
 
+  # 文件入库前病毒扫描；签名库持久化，上传路径在扫描服务不可用时拒绝登记。
+  clamav:
+    image: clamav/clamav:stable
+    environment:
+      CLAMD_CONF_StreamMaxLength: ${LKM_MAX_UPLOAD_BYTES:-104857600}
+      CLAMD_CONF_MaxFileSize: ${LKM_MAX_UPLOAD_BYTES:-104857600}
+      CLAMD_CONF_MaxScanSize: 200M
+      CLAMD_CONF_AlertExceedsMax: 'yes'
+    volumes:
+      - clamav_data:/var/lib/clamav
+    restart: ${LKM_RESTART_POLICY:-no}
+    networks:
+      - lkm
+
   backend:
     build:
       context: ./LKM-service
@@ -547,6 +561,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      clamav:
+        condition: service_healthy
       pulsar:
         condition: service_healthy
     environment:
@@ -558,6 +574,10 @@ services:
       LKM_ALLOWED_HOSTS: ${LKM_ALLOWED_HOSTS:-lkm-ahz.ltd,www.lkm-ahz.ltd,backend,auth,localhost,127.0.0.1}
       # 单文件上传上限：与网关 APISIX 的 max_body_size 同源（apisix-render 读同一个 env）
       LKM_MAX_UPLOAD_BYTES: ${LKM_MAX_UPLOAD_BYTES:-104857600}
+      LKM_FILES_CLAMAV_ADDRESS: ${LKM_FILES_CLAMAV_ADDRESS:-clamav:3310}
+      LKM_FILES_SENSITIVE_TERMS: ${LKM_FILES_SENSITIVE_TERMS:-}
+      LKM_FILES_BACKUP_DIR: /backup/files
+      LKM_FILES_ARCHIVE_DIR: /archive/files
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
@@ -630,6 +650,8 @@ services:
       LKM_CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-change-me-clickhouse}
     volumes:
       - backend_data:/data
+      - files_backup_data:/backup/files
+      - files_archive_data:/archive/files
       # RSA 公钥（只读）：单体只验签，故只挂公钥。
       - ./deploy/jwt/keys:/etc/lkm/jwt:ro
     restart: ${LKM_RESTART_POLICY:-no}
@@ -768,6 +790,8 @@ services:
         condition: service_healthy
       pulsar:
         condition: service_healthy
+      minio:
+        condition: service_healthy
     environment:
       <<: *otel-env
       LKM_ENV: production
@@ -781,6 +805,15 @@ services:
       LKM_DB_USER: ${POSTGRES_USER:-lkm}
       LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
       LKM_BLOG_REPO_DIR: /data/blog_repos   # 与 backend 同卷同路径
+      LKM_STORAGE_BACKEND: s3
+      LKM_S3_ENDPOINT_URL: http://minio:9000
+      LKM_S3_BUCKET: ${LKM_S3_BUCKET:-lkm}
+      LKM_S3_PREFIX: ${LKM_S3_PREFIX:-files}
+      LKM_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-lkmadmin}
+      LKM_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?生产需设置 MINIO_ROOT_PASSWORD}
+      LKM_FILES_BACKUP_DIR: /backup/files
+      LKM_FILES_ARCHIVE_DIR: /archive/files
+      LKM_FILES_ARCHIVE_AFTER_DAYS: ${LKM_FILES_ARCHIVE_AFTER_DAYS:-365}
       # jobs 消费者跑 user_dim 离线 ETL（auth.tasks）→ 需读 auth 库源（User/Profile），
       # 写业务库 user_dim（跨 realm 双会话）。
       LKM_AUTH_DB_HOST: postgres
@@ -804,6 +837,8 @@ services:
       LKM_CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-change-me-clickhouse}
     volumes:
       - backend_data:/data
+      - files_backup_data:/backup/files
+      - files_archive_data:/archive/files
     restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
@@ -907,6 +942,12 @@ services:
         condition: service_healthy
       pulsar:
         condition: service_healthy
+      minio:
+        condition: service_healthy
+      clamav:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
     environment:
       <<: *otel-env
       LKM_ENV: production
@@ -919,6 +960,17 @@ services:
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
       LKM_DB_USER: ${POSTGRES_USER:-lkm}
       LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
+      LKM_AUTH_HTTP_URL: ${LKM_AUTH_HTTP_URL:-http://auth:8001}
+      LKM_AUTH_HTTP_TOKEN: ${LKM_AUTH_HTTP_TOKEN:?生产需设置 LKM_AUTH_HTTP_TOKEN}
+      LKM_STORAGE_BACKEND: s3
+      LKM_S3_ENDPOINT_URL: http://minio:9000
+      LKM_S3_BUCKET: ${LKM_S3_BUCKET:-lkm}
+      LKM_S3_PREFIX: ${LKM_S3_PREFIX:-files}
+      LKM_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-lkmadmin}
+      LKM_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?生产需设置 MINIO_ROOT_PASSWORD}
+      LKM_MAX_UPLOAD_BYTES: ${LKM_MAX_UPLOAD_BYTES:-104857600}
+      LKM_FILES_CLAMAV_ADDRESS: ${LKM_FILES_CLAMAV_ADDRESS:-clamav:3310}
+      LKM_FILES_SENSITIVE_TERMS: ${LKM_FILES_SENSITIVE_TERMS:-}
     restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
@@ -1378,9 +1430,12 @@ volumes:
   prefect_pg_data:
   clickhouse_data:
   backend_data:
+  files_backup_data:
+  files_archive_data:
   postgres_data:
   redis_data:
   minio_data:
+  clamav_data:
   meili_data:
   opensearch_data:
   pulsar_data:
