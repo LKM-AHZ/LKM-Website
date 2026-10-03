@@ -6,10 +6,11 @@
 #   ./dev.sh          # 同时启动 SSR 前端(LKM-official-website)+后端(LKM-service)
 #   ./dev.sh front     # 仅启动 SSR 前端
 #   ./dev.sh back      # 仅启动后端
-#   ./dev.sh --no-run  # 仅安装依赖，不启动服务
+#   ./dev.sh --no-run  # 仅安装全部依赖，不启动服务
+#   ./dev.sh back --no-run  # 仅安装后端依赖
 #
 # 环境变量：
-#   LKM_API_KEY 前端里通过 API_URL 指向后端，默认关闭后端请求。
+#   前端通过 API_URL 指向后端，默认关闭后端请求。
 #   如需让前端连上本脚本启动的后端，可在运行前设置：export API_URL=http://localhost:8000
 #
 set -euo pipefail
@@ -37,6 +38,14 @@ require_cmd() {
   if ! command -v "$cmd" >/dev/null 2>&1; then
     error "未找到命令 '$cmd'，请先安装。"
     exit 1
+  fi
+}
+
+validate_port() {
+  local name="$1" value="$2"
+  if [[ ! "$value" =~ ^[0-9]{1,5}$ ]] || (( 10#$value < 1 || 10#$value > 65535 )); then
+    error "$name 必须是 1–65535 之间的端口号（当前: $value）。"
+    exit 2
   fi
 }
 
@@ -91,44 +100,60 @@ run_backend() {
   (cd "$BACKEND_DIR" && uv run uvicorn main:app --reload --port "$BACKEND_PORT")
 }
 
-# 仅安装依赖时
-case "${1:-}" in
-  --no-run)
-    require_cmd pnpm
-    require_cmd uv
-    install_deps all
-    log "依赖安装完成。"
-    exit 0
-    ;;
-esac
+# 只装所选模式需要的依赖；未知参数不能悄悄启动全部服务。
+MODE=all
+MODE_SEEN=false
+NO_RUN=false
+for arg in "$@"; do
+  case "$arg" in
+    all|front|back|前端|后端)
+      if [ "$MODE_SEEN" = true ]; then
+        error "只能指定一个启动模式。"
+        exit 2
+      fi
+      MODE_SEEN=true
+      case "$arg" in
+        前端) MODE=front ;;
+        后端) MODE=back ;;
+        *) MODE="$arg" ;;
+      esac
+      ;;
+    --no-run) NO_RUN=true ;;
+    *) error "未知参数: $arg（用法: ./dev.sh [all|front|back] [--no-run]）"; exit 2 ;;
+  esac
+done
 
-# 只装所选 MODE 需要的依赖（`./dev.sh front` 不该顺带跑 uv sync）。
-# uv sync / pnpm install 自身是增量的，已同步时几乎不耗时。
-MODE="${1:-all}"
 case "$MODE" in
-  front|前端)           INSTALL_TARGETS=front ;;
-  back|后端)            INSTALL_TARGETS=back ;;
-  *)                    INSTALL_TARGETS=all ;;
+  all|front) require_cmd pnpm ;;
 esac
-
-require_cmd pnpm
-# uv 只在真要跑后端时才要求：front 模式不启后端，不该因本机没装 Python 工具链而中止
-case "$INSTALL_TARGETS" in
+case "$MODE" in
   all|back) require_cmd uv ;;
 esac
+if [ "$NO_RUN" = false ]; then
+  case "$MODE" in
+    all|front) validate_port FRONT_PORT "$FRONT_PORT" ;;
+  esac
+  case "$MODE" in
+    all|back) validate_port BACKEND_PORT "$BACKEND_PORT" ;;
+  esac
+fi
 
-install_deps "$INSTALL_TARGETS"
+install_deps "$MODE"
+if [ "$NO_RUN" = true ]; then
+  log "依赖安装完成。"
+  exit 0
+fi
 
 case "$MODE" in
-  front|前端)
+  front)
     log "SSR 前端（仅）"
     run_frontend
     ;;
-  back|后端)
+  back)
     log "后端（仅）"
     run_backend
     ;;
-  all|*)
+  all)
     log "同时启动 SSR 前端与后端（Ctrl+C 可同时停止）"
     # 开作业控制：每个后台服务独占一个进程组，收尾时按进程组 kill 才能连 pnpm/node、
     # uv/python 这些孙进程一起带走。不用 `kill 0`——它连本脚本（乃至未开作业控制时的

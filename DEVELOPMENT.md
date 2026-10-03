@@ -60,6 +60,8 @@ LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / 
 .\dev.bat            # 两个服务一起(单窗口实时交错日志,Ctrl+C 全部停止)
 .\dev.bat front      # 仅前端
 .\dev.bat back       # 仅后端
+.\dev.bat --no-run   # 仅安装全部依赖
+.\dev.bat back --no-run # 仅安装后端依赖
 
 # 或 PowerShell 直接调用
 powershell -NoProfile -ExecutionPolicy Bypass -File dev.ps1 -Mode all
@@ -69,6 +71,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File dev.ps1 -Mode all
 ./dev.sh front     # 仅前端
 ./dev.sh back      # 仅后端
 ./dev.sh --no-run  # 仅装依赖不启动
+./dev.sh back --no-run # 仅安装后端依赖
 ```
 
 脚本自动完成的事:
@@ -77,6 +80,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File dev.ps1 -Mode all
 2. PowerShell 脚本在启动后端时会为缺失的 JWT/TOTP/验证码密钥生成进程级开发值；
    Bash 脚本不会生成密钥，应通过后端 `.env` 或环境变量提供。
 3. 默认并发启动动态前端和后端。
+
+两套脚本均可通过 `FRONT_PORT` 和 `BACKEND_PORT` 环境变量覆盖默认端口；只会检查当前模式需要的工具和端口。未知参数会直接报错。
 
 ### 方式二:手动分窗启动
 

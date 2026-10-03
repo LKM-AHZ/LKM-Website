@@ -31,13 +31,14 @@ LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 S
 
 # 只安装依赖
 ./dev.sh --no-run
+./dev.sh back --no-run
 
 # 只启动一个服务
 ./dev.sh front
 ./dev.sh back
 ```
 
-Windows 可运行 `dev.bat`，或执行：
+Windows 可运行 `dev.bat`（支持 `front`、`back` 和 `--no-run`），或执行：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File dev.ps1 -Mode all
