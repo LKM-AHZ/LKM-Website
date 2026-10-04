@@ -1,5 +1,4 @@
-# LKM 社区 · Vector 日志采集（M5 7.2.6 路 B）
-#
+# LKM 社区 · Vector 日志采集
 # 采集各容器 stdout/stderr（Docker json-file 日志驱动）→ 解析 core/logging.py 的
 # JsonFormatter 结构 → 写入 ClickHouse lkm.app_logs。
 #
@@ -10,6 +9,8 @@
 # 非 JSON 行（pulsar/apisix 等三方容器日志）不丢弃：level=unknown、原文进 msg/extra_fields。
 # 日志格式对齐 app/core/logging.py：ts/level/logger/msg + request_id/trace_id/span_id + exc_info；
 # extra_fields 存原始 JSON 串全文（检索兜底，避免为收集平铺字段引入脆弱 VRL）。
+
+data_dir = "/var/lib/vector"
 
 [api]
 enabled = false
@@ -84,3 +85,6 @@ auth.strategy = "basic"
 auth.user = "${CLICKHOUSE_USER}"
 auth.password = "${CLICKHOUSE_PASSWORD}"
 batch.max_events = 500
+buffer.type = "disk"
+buffer.max_size = 536870912
+buffer.when_full = "block"

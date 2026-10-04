@@ -1,9 +1,9 @@
 #!/bin/sh
-# 从根仓库 .env 生成 k8s Secret（不落盘、不进 git）。
+# 从已注入的环境变量生成 k8s Secret；本地开发可回退根仓库 .env（不落盘、不进 git）。
 #
 # 为什么用脚本而不是提交一份 Secret YAML：Secret 的键集与 compose 的变量名高度重叠但
 # 并非一一对应（如 LKM_S3_SECRET_KEY 只是 MINIO_ROOT_PASSWORD 的别名），提交一份 YAML
-# 会随之腐烂成「第二真相源」。脚本从 .env 派生，.env 仍是唯一来源。
+# 会随之腐烂成「第二真相源」。生产用 Infisical CLI 注入环境变量，.env 仅供本地开发。
 #
 # 用法：
 #   sh deploy/k8s/gen-secret.sh                     # 输出到 stdout，人工管道 apply
@@ -15,7 +15,7 @@
 # 输出含明文密钥：要落盘请自己收紧权限（重定向文件是**父 shell** 建的，脚本内 umask 管不到）：
 #   umask 077 && sh deploy/k8s/gen-secret.sh > k8s-secret.yaml
 #
-# 前置：根目录 .env 需已按 .env.example 配齐（两个主密钥、POSTGRES_PASSWORD、
+# 前置：环境变量或根目录 .env 需已按 .env.example 配齐（两个主密钥、POSTGRES_PASSWORD、
 # MINIO_ROOT_PASSWORD、LKM_AUTH_HTTP_TOKEN 必填；下面 require() 会逐个断言）。
 # 另需先生成 RS256 密钥对（deploy/jwt/gen-keys.sh）：服务只签发/接受 RS256，缺密钥即退出。
 set -eu
@@ -31,9 +31,15 @@ fi
 
 # 只读取需要的键；不 source 整个 .env（避免 .env 里任意命令被执行）。
 get() {
-    # get KEY [default]；取 .env 中最后一次赋值，去掉行内注释与首尾空白/引号
+    # get KEY [default]；Infisical CLI 注入值优先，缺失才读 .env。
     key="$1"
     def="${2-}"
+    injected="$(printenv "$key" 2>/dev/null || true)"
+    if [ -n "$injected" ]; then
+        printf '%s' "$injected"
+        return
+    fi
+    # 取 .env 中最后一次赋值，去掉行内注释与首尾空白/引号
     line="$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=//p" "$ENV_FILE" | tail -1)"
     line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
     case "$line" in
@@ -67,7 +73,7 @@ get_dq_opt() {
     if [ -n "$v" ]; then
         yaml_dq "$v"
     else
-        echo "[gen-secret] 警告：$1 未在 .env 配置，将写入占位值 '$2'（启用该组件前请改为强随机）" >&2
+        echo "[gen-secret] 警告：$1 未在环境变量/.env 配置，将写入占位值 '$2'（启用该组件前请改为强随机）" >&2
         yaml_dq "$2"
     fi
 }
@@ -128,6 +134,9 @@ stringData:
   LKM_VERIFICATION_CODE_PEPPER: "$(get_dq LKM_VERIFICATION_CODE_PEPPER)"
   LKM_AUTH_HTTP_TOKEN: "$(get_dq LKM_AUTH_HTTP_TOKEN)"
   LKM_GITHUB_CLIENT_SECRET: "$(get_dq LKM_GITHUB_CLIENT_SECRET)"
+  LKM_SEARCH_MEILI_API_KEY: "$(get_dq LKM_SEARCH_MEILI_API_KEY)"
+  LKM_SEARCH_OPENSEARCH_PASSWORD: "$(get_dq LKM_SEARCH_OPENSEARCH_PASSWORD)"
+  LKM_PREFECT_API_TOKEN: "$(get_dq LKM_PREFECT_API_TOKEN)"
   POSTGRES_USER: "$(yaml_dq "$PG_USER")"
   POSTGRES_PASSWORD: "$(get_dq POSTGRES_PASSWORD)"
   LKM_DB_PASSWORD: "$(get_dq POSTGRES_PASSWORD)"
@@ -141,9 +150,7 @@ stringData:
   CLICKHOUSE_USER: "$(get_dq CLICKHOUSE_USER lkm)"
   CLICKHOUSE_PASSWORD: "$(get_dq_opt CLICKHOUSE_PASSWORD change-me-clickhouse)"
   PREFECT_DB_PASSWORD: "$(get_dq_opt PREFECT_DB_PASSWORD change-me-prefect-db)"
-  INFISICAL_DB_PASSWORD: "$(get_dq_opt INFISICAL_DB_PASSWORD change-me-infisical-db)"
-  INFISICAL_ENCRYPTION_KEY: "$(get_dq_opt INFISICAL_ENCRYPTION_KEY change-me)"
-  INFISICAL_AUTH_SECRET: "$(get_dq_opt INFISICAL_AUTH_SECRET change-me)"
+  LKM_GRAFANA_ADMIN_PASSWORD: "$(get_dq_opt LKM_GRAFANA_ADMIN_PASSWORD change-me-grafana)"
   # bot 面板初始密码（可选组件）。**不 require**：未配就不出这个键，bot 的
   # secretKeyRef 是 optional=true → Pod 照常起，面板自生成随机密码打到日志。
   LKM_BOT_DASHBOARD_PASSWORD: "$(get_dq LKM_BOT_DASHBOARD_PASSWORD)"

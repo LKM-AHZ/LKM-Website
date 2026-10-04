@@ -10,7 +10,9 @@
 # 表/列/TTL 语义完全一致，故只有 source 段与「从 CRI 行取出原始 payload」这一步不同。
 # 该分叉已在《执行路线图》§8 登记。
 #
-# 挂载要求（见同目录 vector.yaml）：hostPath /var/log/pods 只读。
+# 挂载要求（见同目录 vector.yaml）：/var/log/pods 只读，/var/lib/lkm/vector 持久化。
+
+data_dir = "/var/lib/vector"
 
 [api]
 enabled = false
@@ -22,10 +24,7 @@ type = "file"
 # 只写 *.log 会漏掉整段轮转日志）；用 `?` 精确匹配时间戳后缀，避免把 `.gz` 压缩件也收进来
 # ——file source 不解压，收了只会把二进制当文本写进 CH。
 include = ["/var/log/pods/lkm_*/*/*.log", "/var/log/pods/lkm_*/*/*.log.????????-??????"]
-# 从「文件末尾」起读：位置数据库在 /var/lib/vector，而该卷是 emptyDir（见 vector.yaml），
-# Pod 重建即丢 offset —— 配 beginning 会把 ignore_older_secs 窗口内已投递过的日志整段
-# 重灌进 lkm.app_logs（重复行污染聚合、撑大存储直到 TTL）。代价是重启窗口内的日志会缺，
-# 日志管道接受这个取舍；要两者兼得需把 data 卷换成 hostPath/PVC（本单元文件范围外）。
+# 首次部署从文件末尾起读，避免全量回灌历史日志；之后靠持久位置数据库续读。
 read_from = "end"
 # 容器日志在节点上是持续追加的；忽略 1 天前的旧文件，避免首次部署时全量回灌
 ignore_older_secs = 86400
@@ -111,3 +110,6 @@ auth.strategy = "basic"
 auth.user = "${CLICKHOUSE_USER}"
 auth.password = "${CLICKHOUSE_PASSWORD}"
 batch.max_events = 500
+buffer.type = "disk"
+buffer.max_size = 536870912
+buffer.when_full = "block"

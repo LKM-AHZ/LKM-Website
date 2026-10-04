@@ -46,7 +46,7 @@ spec:
         fsGroup: 70
       containers:
         - name: postgres
-          # TimescaleDB 版 PG16（批 2）：outbox 两表是 hypertable，见 compose 同名注释。
+          # TimescaleDB 版 PG16：outbox、积分及 auth 审计表使用 hypertable。
           image: timescale/timescaledb:latest-pg16
           imagePullPolicy: IfNotPresent
           ports:

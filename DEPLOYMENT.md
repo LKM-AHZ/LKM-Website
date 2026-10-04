@@ -9,7 +9,7 @@
 ## 部署前检查清单
 
 - 服务器时间同步正常，公网安全组只开放实际需要的 `80/443` 和 SSH 端口。
-- 已从 `.env.example` 创建 `.env`，并替换所有密码、JWT/TOTP/验证码密钥及内部 token。
+- 已从 `.env.example` 创建 `.env` 并替换所有密码/密钥，或按下文 Infisical 整栈密钥迁移完成注入。
 - `docker compose config --quiet` 成功，且渲染结果中没有空的必填变量。
 - 域名 DNS 已指向目标主机；无域名部署已接受自签证书的限制。
 - 已确定 PostgreSQL、MinIO 和后端数据卷的备份位置及恢复负责人。
@@ -38,7 +38,7 @@
 | `worker-scheduler` | `lkm-service:latest` | 无 | cron 触发发布(`boot.workers.scheduler`) |
 | `worker-dlq` | `lkm-service:latest` | 无 | 死信落库(`boot.workers.dlq`) |
 | `worker-outbox` | `lkm-service:latest` | 无 | outbox relay(`boot.workers.outbox`) |
-| `postgres` | `timescale/timescaledb:latest-pg16` | 仅内网 `5432` | 后端数据库(biz `lkm` + auth `lkm_auth`);outbox 两表与 `points_ledger` 为 hypertable |
+| `postgres` | `timescale/timescaledb:latest-pg16` | 仅内网 `5432` | 后端数据库(biz `lkm` + auth `lkm_auth`);outbox、`points_ledger` 与 `audit_logs` 为 hypertable |
 | `redis` | `redis:7-alpine` | 仅内网 `6379` | leader 租约、共享限流 / 缓存 |
 | `pulsar` | `apachepulsar/pulsar:3.3.0` | 仅内网 `6650`/`8080` | **消息总线**(standalone,自带 ZK+BookKeeper;6650 broker / 8080 Admin REST)。**无状态化**启动包装,见下 |
 | `minio` | `minio/minio:latest` | 仅容器内 `9000`/`9001` | S3 兼容对象存储:文件库文件与成员头像 |
@@ -248,6 +248,64 @@ SMOKE_BOT=1 sh deploy/apisix/smoke.sh        # 追加 /bot 面板可达（需先
 
 脚本用 `--resolve <域名>:<端口>:127.0.0.1` 保证 TLS SNI 正确（APISIX 按 SNI 选证书，直连 IP 无 SNI 会握手失败），并用 `--noproxy '*'` 绕过宿主机代理。
 
+## 三·六·一、Infisical 整栈密钥迁移
+
+Compose 与 K8s 共用同一套 Infisical `prod` 项目密钥。Infisical 自身的数据库密码、
+`ENCRYPTION_KEY` 和 `AUTH_SECRET` 是引导密钥，必须独立保管并与 Infisical 数据库一同备份。
+引导命令只启动 Infisical、它的独立 PostgreSQL 与 Redis，不会重建主栈 Redis。
+业务库、MinIO、后端/Auth、ClickHouse 等现有环境变量名保持不变，由 Infisical CLI 在**部署时**
+注入；K8s 再将注入值生成原生 Secret。此路径无需打开应用内的 `LKM_INFISICAL_ENABLED`。
+
+```sh
+# 1) 首次引导：此文件只含 Infisical 自身的三项密钥及重启策略，已被 .gitignore 排除。
+umask 077
+{
+  printf 'INFISICAL_DB_PASSWORD=%s\n' "$(openssl rand -hex 24)"
+  printf 'INFISICAL_ENCRYPTION_KEY=%s\n' "$(openssl rand -hex 16)"
+  printf 'INFISICAL_AUTH_SECRET=%s\n' "$(openssl rand -base64 32)"
+  printf 'LKM_RESTART_POLICY=unless-stopped\n'
+} > .env.infisical
+sh deploy/infisical/bootstrap.sh
+
+# 2) 在本机 http://127.0.0.1:8085 注册管理员、建立项目和 prod 环境。
+#    按 https://infisical.com/docs/cli/overview 安装 CLI；`infisical login -i`
+#    选择自托管地址，再 `infisical init` 关联该项目。
+#    将现有 .env 的真实业务/中间件键值导入 prod；不要导入 change-me 占位值、
+#    INFISICAL_* 引导密钥或 LKM_INFISICAL_* 旧应用内拉取配置。
+#    必须包含 POSTGRES_PASSWORD、MINIO_ROOT_PASSWORD、CLICKHOUSE_PASSWORD、
+#    PREFECT_DB_PASSWORD、LKM_GRAFANA_ADMIN_PASSWORD、LKM_SIGNOZ_JWT_SECRET、
+#    LKM_BOT_SHIP_ACCESS_TOKEN、LKM_AUTH_HTTP_TOKEN、
+#    LKM_TOTP_ENCRYPTION_KEY、LKM_VERIFICATION_CODE_PEPPER，以及 JWT 的 *_FILE 路径。
+#    若启用 OAuth、Meilisearch、OpenSearch 或带鉴权的 Prefect，再导入对应的
+#    LKM_GITHUB_CLIENT_SECRET、LKM_SEARCH_MEILI_API_KEY、
+#    LKM_SEARCH_OPENSEARCH_PASSWORD、LKM_PREFECT_API_TOKEN。
+
+# 3) 验证所需密钥齐全，然后启动主栈；/dev/null 禁止 Compose 回退读取根 .env。
+infisical run --env=prod -- sh deploy/infisical/check-env.sh \
+  docker compose --env-file /dev/null config -q
+infisical run --env=prod -- sh deploy/infisical/check-env.sh \
+  docker compose --env-file /dev/null up -d
+```
+
+启用可选 profile 时，把相应的密码/token 一并导入 Infisical，再在最后一条命令中加
+`--profile clickhouse` / `--profile prefect` 等。`infisical run` 只在部署命令期间注入，
+容器仍按原有环境变量启动；轮换密钥后需重新执行并重建对应服务。PostgreSQL 等有状态服务的
+账号密码变更还要先完成服务端密码轮换，不能只改 Infisical 的值。RSA 私钥、公钥和 TLS 证书
+仍按现有文件/Secret 流程挂载，不写入 `.env`。
+
+K8s 从同一项目生成 Secret，`ENV_FILE=/dev/null` 禁止回退本地 `.env`；先在集群创建
+`lkm` namespace 与 RSA 密钥文件，然后执行（Bash 的 `pipefail` 防止生成失败却误报成功）：
+
+```sh
+kubectl apply -f deploy/k8s/base/namespace.yaml
+set -o pipefail
+infisical run --env=prod -- sh deploy/infisical/check-env.sh \
+  env ENV_FILE=/dev/null sh deploy/k8s/gen-secret.sh | kubectl apply -f -
+```
+
+核对 Secret 更新后再部署/重启消费它的 Pod。回滚时使用安全保存的上一版 Secret 与对应数据库
+凭据，不要把旧 `.env` 或 Infisical 引导密钥提交到仓库。
+
 ## 三·七、Prefect 编排
 
 复杂数据管道（首期为 `user_dim` 报表宽表对账/回填）由 Prefect flow 编排，APScheduler 仍只做简单 cron 触发入口。默认**不启用**——cron 消费者直调既有 ETL，行为与现状一致。
@@ -309,8 +367,12 @@ docker compose exec prefect-worker prefect deployment run 'analytics-clickhouse-
 docker compose exec clickhouse clickhouse-client --query "SELECT count() FROM lkm.event_failures"
 # admin 查询（须带后台 cookie；dataset ∈ app_logs / event_failures / audit_logs）
 curl -s 'http://<host>/api/v1/admin/analytics/app_logs?limit=5' -b 'lkm_admin_access=<cookie>'
+# 按小时汇总（category：日志=service、失败事件=routing_key、审计=action）
+curl -s 'http://<host>/api/v1/admin/analytics/app_logs/summary?since=2026-10-01T00:00:00Z&until=2026-10-02T00:00:00Z&interval=hour' -b 'lkm_admin_access=<cookie>'
 ```
 
+- 汇总接口只接受最长 31 天的时间窗，最多返回 `LKM_CLICKHOUSE_QUERY_LIMIT_MAX` 个时间/类别组合；可用 `interval=day` 降低结果粒度。
+- Vector 将待写日志缓存到持久卷（Compose `vector_data`；Kubernetes 节点 `/var/lib/lkm/vector`，每个节点最多 512 MiB）。缓冲满时暂停读取，源日志仍受 Docker/kubelet 轮转限制。
 - 表 TTL：`app_logs` 30 天 / `event_failures` 180 天 / `audit_logs` 365 天（**固定值**；改 `deploy/clickhouse/init.sql` 后需重建数据卷 `docker compose --profile clickhouse down -v` 才生效）。
 - CH 未启用 / 不可达时：admin 查询返 **503**（不返空列表），周期导出 no-op 不报错。
 - 回退：`LKM_CLICKHOUSE_ENABLED=false`（默认）+ `docker compose --profile clickhouse down`，不影响主栈。
@@ -351,7 +413,7 @@ curl -s -X POST http://127.0.0.1:8080/api/v1/register -H 'Content-Type: applicat
   -d '{"name":"Admin","email":"admin@example.com","password":"<强密码>","orgName":"LKM"}'
 docker compose restart signoz-otel-collector   # 注册后立即重连，否则等 30s 重试
 
-# 3) 打开 UI（只绑回环；SigNoz 无内置鉴权，勿直接暴露公网）
+# 3) 打开 UI（只绑回环；首次注册用户会成为管理员，勿在注册前直接暴露公网）
 #    http://127.0.0.1:8080  →  Services / Traces
 ```
 
@@ -663,12 +725,14 @@ CI 的 integration job 已按这两个后端做 matrix，两边都绿才算兼�
 
 `docker compose up` 会自动拉取 `timescale/timescaledb:latest-pg16` 镜像并启动;后端首次启动时自动建表(默认通道 `LKM_USE_ALEMBIC=false` 走 `create_all`,见后端 README),无需手动初始化。
 
-**为什么是 TimescaleDB 版**:`outbox_events`/`outbox_archived`/`points_ledger` 被装配为 **hypertable**(按 `created_at` 自动时间分区;outbox 冷表另加列式压缩 + 保留策略兜底),并在 `points_ledger` 上建**连续聚合视图** `points_daily`(积分度量/行为报表,读口 `/admin/points-report`),详见《执行路线图》§3.1 与 §8 #40。该引擎是 PG16 的超集,其余功能与 `postgres:16-alpine` 无差别;`prefect-postgres`、`infisical-db` 仍是原镜像。
+**为什么是 TimescaleDB 版**:`outbox_events`/`outbox_archived`/`points_ledger` 和 auth 独立库的 `audit_logs` 被装配为 **hypertable**(按 `created_at` 自动时间分区；已投递的 outbox 行先归档到冷表，冷表再按时间压缩),并在 `points_ledger` 上建**连续聚合视图** `points_daily`(积分度量/行为报表,读口 `/admin/points-report`),详见《执行路线图》§3.1 与 §8 #40。`outbox_events` 不设置按时间删除策略，避免未投递事件在长时间故障后随 chunk 被丢弃；已有策略由业务库迁移 `0007_outbox_retention` 移除。压缩率取决于实际数据，须在生产数据上测量；`prefect-postgres`、`infisical-db` 仍是普通 PG 镜像。
 
 两点部署注意:
 
 - **hypertable 的每个唯一索引必须含分区列** → 这三张表的主键是 `(created_at, id)`(`points_ledger` 的幂等键唯一约束也并入了 `created_at`,约束名不变)。因此**从旧数据卷升级不能就地生效**:`create_all` 通道只增不改(PK/约束是破坏性变更),需重建数据卷 `docker compose down -v`(注意会清空 `lkm`/`lkm_auth` 全部数据)后重起。开发期无生产数据,按蓝图「不做存量迁移」口径直接重建。**走 Alembic 通道**的库由业务库基线 `0001_uuid_baseline` 直接把 `points_ledger` 建成 hypertable 形态（主键/幂等约束已含分区列；连续聚合 `points_daily` 由**应用启动时**装配——它在事务块内建不了，连 DO 块的隐式事务都不行，故刻意不放进迁移）。注意 TimescaleDB **没有**「hypertable → 普通表」的反向转换,基线的 `downgrade` 只拆连续聚合、不回退约束(会告警),完整回退须重建该表。
 - 引擎不可用时(如误用普通 PG 镜像或手工安装的主机 PG)**不会导致启动失败**:`init_db` 会告警并降级为**普通表**——主键多一列 `created_at` 无副作用,outbox 投递语义与积分幂等(由 `reward` 的按用户行锁 + 预检承担,唯一约束只是兜底)均不变,只是失去分区裁剪/压缩,且**连续聚合视图不会被创建**(`/admin/points-report` 据此返 503,而非返回空列表冒充「无数据」)。
+
+**已有 auth 库升级**：`audit_logs` 旧主键只有 `id`，不能直接转换为 hypertable。先备份，再在维护窗口从 `LKM-service/` 执行 `uv run alembic -c alembic.auth.ini upgrade head`；`0004_audit_hypertable` 会将主键改为 `(created_at, id)`，保留历史行并转换 hypertable。这个操作会锁住审计表，数据量大时应预留足够维护时间。默认 `create_all` 只建新表，不替已有表改主键；它会告警并保留普通表。可在两个库分别用 `SELECT extname FROM pg_extension WHERE extname = 'timescaledb'`、`SELECT hypertable_name FROM timescaledb_information.hypertables` 验证装配。
 
 连接数据库:
 

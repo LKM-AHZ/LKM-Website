@@ -13,14 +13,14 @@
 - 本地验收安装 kind，且宿主机 `80/443` 未被其他服务占用。
 - 已构建并让集群可拉取 `lkm-service`、`lkm-official-website` 镜像；
   启用 bot 时还需要 `lkm-bot`（`docker compose --profile bot build lkmbot`）。
-- 根目录 `.env` 已按 `.env.example` 配置；Secret 生成脚本只输出到标准输出，不应重定向后提交。
+- 本地开发可从根目录 `.env` 生成 Secret；生产可按根级部署说明用 Infisical CLI 注入同名环境变量。
 - 生产集群已准备 StorageClass、负载均衡、DNS、正式证书和备份方案。
 
 ## 目录
 
 ```
 deploy/k8s/
-├── gen-secret.sh              # 从根 .env 派生 Secret（不落盘、不进 git）
+├── gen-secret.sh              # 从注入环境变量或根 .env 派生 Secret（不落盘、不进 git）
 ├── gen-tls.sh                 # 生成网关 TLS Secret（自签；生产可导入正式证书）
 ├── base/                      # 全栈清单（namespace lkm）
 │   ├── kustomization.yaml     # 用 configMapGenerator 直接引用仓库既有部署资产
@@ -70,7 +70,7 @@ Secret 必须落在目标命名空间里，故命名空间要先存在（清单�
 ```sh
 kubectl apply -f deploy/k8s/base/namespace.yaml
 
-# 应用密钥（三个主密钥 / PG 密码 / MinIO 密码 / AUTH seam token …）——从根 .env 派生
+# 应用密钥（三个主密钥 / PG 密码 / MinIO 密码 / AUTH seam token …）；生产见下方 Infisical 命令
 sh deploy/k8s/gen-secret.sh | kubectl apply -f -
 
 # 网关 TLS 证书（本地/验收用自签；生产换正式证书，见脚本注释）
@@ -79,7 +79,15 @@ sh deploy/k8s/gen-tls.sh | kubectl apply -f -
 
 > 首次仍需先建命名空间——`deploy/k8s/overlays/kind/setup.sh` 已按此顺序编排好，可直接用它。
 
-`.env` 缺失或必填项为空时 `gen-secret.sh` 会直接报错退出，不会生成半截 Secret。
+生产可从 Infisical 注入整栈密钥（同 Compose 项目的 `prod` 环境），并禁用本地 `.env` 回退：
+
+```sh
+set -o pipefail
+infisical run --env=prod -- sh deploy/infisical/check-env.sh \
+  env ENV_FILE=/dev/null sh deploy/k8s/gen-secret.sh | kubectl apply -f -
+```
+
+`.env` 和注入环境变量均缺失必填项时，`gen-secret.sh` 会直接报错，不会生成半截 Secret。
 
 ### 2. 应用
 
@@ -230,11 +238,13 @@ ClickHouse 同理：置 `LKM_CLICKHOUSE_ENABLED=true`，并让 `backend`（admin
 与 `worker`（回落直调导出）重建。向量采集（vector DaemonSet）与 OTel collector
 默认即在跑，无需开关。
 
+Vector 的节点目录 `/var/lib/lkm/vector` 保存文件读取位置和最多 512 MiB 的 ClickHouse 写入缓冲；首次部署从现有日志文件末尾开始，重启后从保存的位置继续读取。
+
 监控（M6.12）只需拉起两个 Deployment（配置与 compose 共用同一批文件）：
 
 ```sh
 kubectl -n lkm scale deploy/prometheus deploy/grafana --replicas=1
-# Grafana：kubectl -n lkm port-forward svc/grafana 3000:3000（默认 admin/admin）
+# Grafana：kubectl -n lkm port-forward svc/grafana 3000:3000（密码见 LKM_GRAFANA_ADMIN_PASSWORD）
 ```
 
 bot 面板同理（镜像需先构建并让集群可拉取，kind 用 `setup.sh` 注入 `lkm-bot:latest`）：

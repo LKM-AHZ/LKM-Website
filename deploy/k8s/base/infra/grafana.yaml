@@ -4,8 +4,7 @@
 # **可选组件**：副本数控制开关（默认 0 = 不部署）。数据源指向集群内的 prometheus
 # Service（FQDN，CoreDNS 不补 search domain）。
 #
-# 管理员密码：默认 admin（仅本地/内网使用时够用）；生产应在 gen-secret.sh 生成的
-# Secret 里给 GF_SECURITY_ADMIN_PASSWORD 并挂为 env（见 README 差异表）。
+# 管理员密码来自 lkm-secrets，由 gen-secret.sh 从部署环境生成。
 apiVersion: v1
 kind: Service
 metadata:
@@ -48,7 +47,8 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             - name: GF_SECURITY_ADMIN_PASSWORD
-              value: admin
+              valueFrom:
+                secretKeyRef: { name: lkm-secrets, key: LKM_GRAFANA_ADMIN_PASSWORD }
             - name: GF_USERS_ALLOW_SIGN_UP
               value: "false"
           # 数据源 URL 在 provisioning 文件里写的是短名 `prometheus:9090`（与 compose

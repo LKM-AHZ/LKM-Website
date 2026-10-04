@@ -1,6 +1,8 @@
 .claude
 docs
 .env
+.env.*
+!.env.example
 .dev/
 reference
 .obsidian

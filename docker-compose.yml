@@ -307,6 +307,7 @@ services:
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./deploy/clickhouse/vector.toml:/etc/vector/vector.toml:ro
+      - vector_data:/var/lib/vector
     restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
@@ -351,16 +352,26 @@ services:
     networks:
       - lkm
 
-  # Infisical 密钥管理：默认不启，不影响主栈。
-  # 首启后到 Web UI 建项目 + universal-auth machine identity，把 client id/secret 与
-  # project id 填回根 .env（LKM_INFISICAL_*），并置 LKM_INFISICAL_ENABLED=true；
-  # 应用经 deploy/docker-entrypoint.sh → core.secrets_bootstrap 启动前拉取注入。
+  # Infisical 密钥管理：默认不启。独立 Redis 避免首次引导时重建主栈 Redis。
+  infisical-redis:
+    image: redis:7-alpine
+    profiles: ['infisical']
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: ${LKM_RESTART_POLICY:-no}
+    networks:
+      - lkm
+
   infisical-db:
     image: postgres:16-alpine
     profiles: ['infisical']
     environment:
       POSTGRES_USER: infisical
-      POSTGRES_PASSWORD: ${INFISICAL_DB_PASSWORD:-change-me-infisical-db}
+      POSTGRES_PASSWORD: ${INFISICAL_DB_PASSWORD:-}
       POSTGRES_DB: infisical
     volumes:
       - infisical_db_data:/var/lib/postgresql/data
@@ -375,27 +386,29 @@ services:
       - lkm
 
   infisical:
-    image: infisical/infisical:latest
+    image: infisical/infisical:v0.165.16
     profiles: ['infisical']
     depends_on:
       infisical-db:
         condition: service_healthy
+      infisical-redis:
+        condition: service_healthy
     environment:
-      ENCRYPTION_KEY: ${INFISICAL_ENCRYPTION_KEY:-change-me}
-      AUTH_SECRET: ${INFISICAL_AUTH_SECRET:-change-me}
-      DB_CONNECTION_URI: postgresql://infisical:${INFISICAL_DB_PASSWORD:-change-me-infisical-db}@infisical-db:5432/infisical
-      REDIS_URL: redis://redis:6379/1
+      ENCRYPTION_KEY: ${INFISICAL_ENCRYPTION_KEY:-}
+      AUTH_SECRET: ${INFISICAL_AUTH_SECRET:-}
+      DB_CONNECTION_URI: postgresql://infisical:${INFISICAL_DB_PASSWORD:-}@infisical-db:5432/infisical
+      REDIS_URL: redis://infisical-redis:6379/0
       SITE_URL: ${INFISICAL_SITE_URL:-http://localhost:8085}
     ports:
-      - '${LKM_INFISICAL_PORT:-8085}:8080'
+      - '127.0.0.1:${LKM_INFISICAL_PORT:-8085}:8080'
     restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
 
   postgres:
-    # TimescaleDB 版 PG16 ：outbox_events/outbox_archived 是 hypertable，需该引擎
+    # TimescaleDB 版 PG16：outbox、积分流水及独立 auth 库审计表使用 hypertable
     # （官方镜像已配 shared_preload_libraries=timescaledb，扩展由 deploy/initdb 与应用侧
-    # init_db 幂等补建）。仅主库换，prefect-postgres / infisical-db 仍是 postgres:16-alpine。
+    # 两库初始化过程幂等补建）。prefect-postgres / infisical-db 仍是 postgres:16-alpine。
     # 从 postgres:16-alpine **就地换镜像**不会改动既有数据卷的 schema：hypertable 的
     # 主键必须含分区列 created_at，旧卷需重建（或手工迁移），见 DEPLOYMENT.md。
     image: timescale/timescaledb:latest-pg16
@@ -1370,6 +1383,8 @@ services:
     depends_on:
       signoz-clickhouse:
         condition: service_healthy
+      signoz-migrator:
+        condition: service_completed_successfully
     entrypoint: ['/bin/sh']
     command:
       - -c
@@ -1402,6 +1417,8 @@ services:
     depends_on:
       signoz-clickhouse:
         condition: service_healthy
+      signoz-migrator:
+        condition: service_completed_successfully
     environment:
       SIGNOZ_ALERTMANAGER_PROVIDER: signoz
       SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN: tcp://signoz-clickhouse:9000
@@ -1410,7 +1427,7 @@ services:
       SIGNOZ_TOKENIZER_JWT_SECRET: ${LKM_SIGNOZ_JWT_SECRET:-change-me-signoz-ui}
     volumes:
       - signoz_sqlite:/var/lib/signoz/
-    # 只绑回环：SigNoz UI 无内置鉴权，别直接暴露公网（与 grafana 同款取舍）。
+    # 只绑回环：首次注册用户会成为管理员，勿在注册前直接暴露公网。
     ports:
       - '127.0.0.1:8080:8080'
     healthcheck:
@@ -1429,6 +1446,7 @@ volumes:
   infisical_db_data:
   prefect_pg_data:
   clickhouse_data:
+  vector_data:
   backend_data:
   files_backup_data:
   files_archive_data:
