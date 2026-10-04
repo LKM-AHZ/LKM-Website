@@ -726,14 +726,14 @@ CI 的 integration job 已按这两个后端做 matrix，两边都绿才算兼�
 
 `docker compose up` 会自动拉取 `timescale/timescaledb:latest-pg16` 镜像并启动;后端首次启动时自动建表(默认通道 `LKM_USE_ALEMBIC=false` 走 `create_all`,见后端 README),无需手动初始化。
 
-**为什么是 TimescaleDB 版**:`outbox_events`/`outbox_archived`/`points_ledger` 和 auth 独立库的 `audit_logs` 被装配为 **hypertable**(按 `created_at` 自动时间分区；已投递的 outbox 行先归档到冷表，冷表再按时间压缩),并在 `points_ledger` 上建**连续聚合视图** `points_daily`(积分度量/行为报表,读口 `/admin/points-report`),详见《执行路线图》§3.1 与 §8 #40。`outbox_events` 不设置按时间删除策略，避免未投递事件在长时间故障后随 chunk 被丢弃；已有策略由业务库迁移 `0007_outbox_retention` 移除。压缩率取决于实际数据，须在生产数据上测量；`prefect-postgres`、`infisical-db` 仍是普通 PG 镜像。
+**为什么是 TimescaleDB 版**:`outbox_events`/`outbox_archived`/`points_ledger` 和 auth 独立库的 `audit_logs` 被装配为 **hypertable**(按 `created_at` 自动时间分区；已投递的 outbox 行先归档到冷表，冷表再按时间压缩),并在 `points_ledger` 上建**连续聚合视图** `points_daily`(积分度量/行为报表,读口 `/admin/points-report`),详见《执行路线图》§3.1 与 §8 #40。`outbox_events` 不设置按时间删除策略，避免未投递事件在长时间故障后随 chunk 被丢弃。压缩率取决于实际数据，须在生产数据上测量；`prefect-postgres`、`infisical-db` 仍是普通 PG 镜像。
 
 两点部署注意:
 
-- **hypertable 的每个唯一索引必须含分区列** → 这三张表的主键是 `(created_at, id)`(`points_ledger` 的幂等键唯一约束也并入了 `created_at`,约束名不变)。因此**从旧数据卷升级不能就地生效**:`create_all` 通道只增不改(PK/约束是破坏性变更),需重建数据卷 `docker compose down -v`(注意会清空 `lkm`/`lkm_auth` 全部数据)后重起。开发期无生产数据,按蓝图「不做存量迁移」口径直接重建。**走 Alembic 通道**的库由业务库基线 `0001_uuid_baseline` 直接把 `points_ledger` 建成 hypertable 形态（主键/幂等约束已含分区列；连续聚合 `points_daily` 由**应用启动时**装配——它在事务块内建不了，连 DO 块的隐式事务都不行，故刻意不放进迁移）。注意 TimescaleDB **没有**「hypertable → 普通表」的反向转换,基线的 `downgrade` 只拆连续聚合、不回退约束(会告警),完整回退须重建该表。
+- **hypertable 的每个唯一索引必须含分区列** → 这三张表的主键是 `(created_at, id)`(`points_ledger` 的幂等键唯一约束也并入了 `created_at`,约束名不变)。业务库由单条基线 `0001_uuid_baseline` 直接把 `points_ledger` 建成 hypertable 形态（主键/幂等约束已含分区列；连续聚合 `points_daily` 由**应用启动时**装配——它在事务块内建不了，连 DO 块的隐式事务都不行，故刻意不放进迁移）。TimescaleDB 不支持把 hypertable 原地转回普通表；基线的 `downgrade` 会删除业务表，不能用来保留数据回退。
 - 引擎不可用时(如误用普通 PG 镜像或手工安装的主机 PG)**不会导致启动失败**:`init_db` 会告警并降级为**普通表**——主键多一列 `created_at` 无副作用,outbox 投递语义与积分幂等(由 `reward` 的按用户行锁 + 预检承担,唯一约束只是兜底)均不变,只是失去分区裁剪/压缩,且**连续聚合视图不会被创建**(`/admin/points-report` 据此返 503,而非返回空列表冒充「无数据」)。
 
-**已有 auth 库升级**：`audit_logs` 旧主键只有 `id`，不能直接转换为 hypertable。先备份，再在维护窗口从 `LKM-service/` 执行 `uv run alembic -c alembic.auth.ini upgrade head`；`0004_audit_hypertable` 会将主键改为 `(created_at, id)`，保留历史行并转换 hypertable。这个操作会锁住审计表，数据量大时应预留足够维护时间。默认 `create_all` 只建新表，不替已有表改主键；它会告警并保留普通表。可在两个库分别用 `SELECT extname FROM pg_extension WHERE extname = 'timescaledb'`、`SELECT hypertable_name FROM timescaledb_information.hypertables` 验证装配。
+auth 库的 `audit_logs` 由 `0001_auth_baseline` 按 `(created_at, id)` 复合主键建表，并尝试装配为 hypertable。可在两个库分别用 `SELECT extname FROM pg_extension WHERE extname = 'timescaledb'`、`SELECT hypertable_name FROM timescaledb_information.hypertables` 验证装配。
 
 连接数据库:
 
@@ -767,7 +767,7 @@ docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
 
 ### schema 变更纪律(迁移链与大表)
 
-后端有**两条独立迁移链**,各自单头线性。**未上线,历史增量链已压平**:业务库与 auth 库各只有
+后端有**两条独立迁移链**,各自单头线性。业务库与 auth 库各只有
 **一条基线** revision(`0001_uuid_baseline` / `0001_auth_baseline`),后续变更再按 `NNNN_语义名`
 追加单头增量,与蓝图 §3.2 的「每个迁移一件事、可回滚」一致:
 
@@ -777,6 +777,8 @@ docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
 | auth 库 | `LKM-service/alembic_auth/versions/` | `alembic.auth.ini` | auth 自有 19 张表 |
 
 **默认通道仍是 `LKM_USE_ALEMBIC=false`(create_all)**,迁移链是生产后备;两者不混用。
+
+在 `LKM-service/` 对空的业务库运行 `alembic upgrade head`，对空的 auth 库运行 `alembic -c alembic.auth.ini upgrade head`，由各自的 `0001` 基线建表。
 
 **改 schema 的规矩**:
 
