@@ -80,14 +80,14 @@
 ```
 浏览器 ──> APISIX(80 与 443)
               ├─ /api/        ──> backend:8000   (保持路径, WS upgrade 已开)
-              ├─ /graphql     ──> backend:8000   (支持 WebSocket)
+              ├─ /graphql/vN  ──> backend:8000   (支持 WebSocket)
               ├─ /_astro/*    ──> astro:4321     (指纹静态资源, immutable 长缓存)
               ├─ /lkm/        ──> minio:9000     (对象存储预签名直传/下载, 保留全部 path+query)
               ├─ 其余         ──> astro:4321     (SSR)          ← 社区域名
               └─ /bot/*       ──> lkmbot:6185    (机器人面板,剥 /bot 前缀) ← 社群域子路径
 ```
 
-后端 REST 前缀为 `/api/vN`,GraphQL 为 `/graphql`。APISIX 用 Docker 内嵌 DNS(`dns_resolver: ['127.0.0.11']` + `discovery_type: dns`)在运行时动态解析 `backend`/`astro`,不依赖启动期 DNS。
+后端 REST 前缀为 `/api/vN`，GraphQL 使用 `/graphql/vN`（当前为 `/graphql/v1`）。APISIX 用 Docker 内嵌 DNS(`dns_resolver: ['127.0.0.11']` + `discovery_type: dns`)在运行时动态解析 `backend`/`astro`,不依赖启动期 DNS。
 
 > 纯静态官网(`lkm-ahz.icu`)已迁出本编排:它是独立仓库、部署在独立服务器上(自备 nginx + certbot),
 > 不再经本栈的 APISIX 分流。部署方式见 [LKM-official-static/DEPLOYMENT.md](./LKM-official-static/DEPLOYMENT.md)。
@@ -519,7 +519,7 @@ curl https://lkm-ahz.ltd/api/v1/health
 # 期望: {"code":0,"msg":"OK","data":{"status":"ok"}}
 
 # GraphQL(示例查询)
-curl -X POST https://lkm-ahz.ltd/graphql \
+curl -X POST https://lkm-ahz.ltd/graphql/v1 \
   -H 'Content-Type: application/json' \
   -d '{"query":"{ __typename }"}'
 

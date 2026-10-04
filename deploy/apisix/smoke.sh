@@ -116,7 +116,7 @@ check "backend health 200" test "$code" = "200"
 
 # ── 3) GraphQL 可达（200 或 400=已到达后端；5xx 视为故障）──
 code=$(cc -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
-    -d '{"query":"{__typename}"}' "https://$COMMUNITY$SP/graphql")
+    -d '{"query":"{__typename}"}' "https://$COMMUNITY$SP/graphql/v1")
 if [ "$code" = "200" ] || [ "$code" = "400" ]; then
     echo "PASS  graphql reachable"
     pass=$((pass + 1))
