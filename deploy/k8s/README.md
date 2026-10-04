@@ -111,8 +111,8 @@ kubectl -n lkm rollout restart deployment
 ### 3. 验收
 
 ```sh
-kubectl -n lkm get pods                      # 期望：除 prefect-* 外全部 Running/Completed
-kubectl -n lkm get jobs                      # minio-init / prefect-init 完成
+kubectl -n lkm get pods                      # 期望：prefect-server/worker 也 Running
+kubectl -n lkm get jobs                      # minio-init 完成
 ```
 
 网关冒烟（复用 compose 的同一脚本；`SMOKE_BOT=1` 且 bot 已 scale 起来时会追加面板可达检查）：
@@ -138,7 +138,7 @@ kubectl -n lkm exec deploy/backend -- python -c \
 | upstream DNS | Docker 内嵌 DNS `127.0.0.11`，服务短名 | CoreDNS ClusterIP + **FQDN** | lua-resty-dns 是裸查询，CoreDNS 不补 search domain |
 | TLS 证书 | certbot 写共享卷 | Secret `lkm-tls`（外部签发/续期） | k8s 里跨 Pod 共享证书应以 Secret 为载体 |
 | 日志采集 | 挂 docker.sock 读 json-file | DaemonSet 读 `/var/log/pods`（CRI） | 日志格式不同，source 段必然不同 |
-| 可选组件开关 | `--profile` | 副本数（prefect / prometheus / grafana / lkmbot 默认 0） | k8s 无 profile，用 0 副本表达「默认不启用」 |
+| 可选组件开关 | `--profile` | 副本数（prometheus / grafana / lkmbot 默认 0） | Prefect 常驻；其余可选组件用 0 副本表达「默认不启用」 |
 | Pulsar 数据 | `pulsar_data` 卷持久化 | **emptyDir（不持久化）** | 见上节：账本跨不了 Pod 重建，改以「每次干净启动」换自愈；租户/namespace 由 Pod 内 sidecar 建 |
 | 探针 | healthcheck | liveness / readiness / startup **三分** | 语义沿用 M6.2 的 `/liveness` 与 `/readiness` |
 
@@ -193,11 +193,9 @@ namespace 由**同 Pod 的 `pulsar-init` sidecar** 自动重建（不再依赖�
 4. **ClickHouse 未设 `nofile` ulimit**：k8s 的 Pod spec 无对应字段（compose 设了 262144）。
    CH 会打 `max_open_files` 警告但不影响功能；真实负载出现 "Too many open files" 时再经
    容器运行时配置抬高。
-5. **`worker-scheduler` 拿到了它不消费的 DB/Redis 变量**（共用公共配置表）。多余但无害
-   （不读就不会连），换来少维护一张专属表。
-6. **Job spec 不可变**：改 `minio-init` / `prefect-init` 的命令前需先
+5. **Job spec 不可变**：改 `minio-init` 的命令前需先
    `kubectl -n lkm delete job <name>`，否则 apply 报错。
-7. **指标只覆盖 backend**：`/metrics` 挂在单体 FastAPI（`app.main`），auth 进程
+6. **指标只覆盖 backend**：`/metrics` 挂在单体 FastAPI（`app.main`），auth 进程
    （`auth.main`）刻意不挂，故 Grafana 面板看不到 auth 的 QPS/延迟。Prometheus
    与 Grafana 清单里的容器间地址用的是**短名**（`backend:8000` / `prometheus:9090`），
    靠 `/etc/resolv.conf` 的 search 域解析（与 APISIX 的 lua-resty-dns 裸查询不同）。
@@ -216,23 +214,17 @@ namespace 由**同 Pod 的 `pulsar-init` sidecar** 自动重建（不再依赖�
    （新 Bay）或 `sandbox.shipyard_endpoint`（旧 Bay）+ access token。bot 默认
    `computer_use_runtime: none`，不接沙箱不影响其余功能。
 
-## Prefect / ClickHouse / 监控的启用方式
+## Prefect / ClickHouse / 监控
 
 compose 用 `--profile`，k8s 用副本数：
 
 ```sh
-# 1) server 与 worker 从 0 → 1
-kubectl -n lkm scale deploy/prefect-server deploy/prefect-worker --replicas=1
-
-# 2) 重跑注册 Job。它在「server 不可达」时会**成功退出并跳过**（k8s 无 profile，
-#    要能表达「默认不启用」），而 Job 完成后不会自动再跑，故须先删再 apply：
-kubectl -n lkm delete job prefect-init
-kubectl kustomize deploy/k8s/overlays/kind --load-restrictor LoadRestrictionsNone | kubectl apply -f -
-kubectl -n lkm wait --for=condition=complete job/prefect-init --timeout=10m
-
-# 3) 把开关打开并重建消费方
+# Prefect 默认常驻；worker 启动时自动注册 cron 与 flow deployments。
+# 可选：让 jobs handler 把复杂数据管道转交 Prefect flow。
 kubectl -n lkm set env deploy/worker LKM_PREFECT_ENABLED=true
 ```
+
+从旧 APScheduler 清单升级时，先 `kubectl -n lkm scale deploy/worker-scheduler --replicas=0`，应用新清单并等待 `prefect-worker` 就绪，再 `kubectl -n lkm delete deploy/worker-scheduler --ignore-not-found`。`kubectl apply` 不会自动删除旧 Deployment。
 
 ClickHouse 同理：置 `LKM_CLICKHOUSE_ENABLED=true`，并让 `backend`（admin 只读查询）
 与 `worker`（回落直调导出）重建。向量采集（vector DaemonSet）与 OTel collector

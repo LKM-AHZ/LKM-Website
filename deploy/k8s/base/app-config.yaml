@@ -1,6 +1,5 @@
 # 应用层非敏感配置。分三张表，避免把所有变量无差别灌进每个进程——
-# compose 里各服务的 env 集本就不同（§8 #16：worker-scheduler 不接 DB/Redis，
-# 按进程强制校验会误杀），此处按「谁真的用」分组，而不是一张大表 envFrom 全量下发。
+# compose 里各服务的 env 集本就不同，此处按「谁真的用」分组。
 ---
 # ① 公共表：backend / auth / 全部 worker 都注入
 apiVersion: v1
@@ -63,8 +62,7 @@ data:
   LKM_AUTH_DB_USER: lkm
 ---
 # ③ 分析管道 + 编排：backend（admin 只读查询）、jobs worker（回落直调导出）、
-#    prefect-worker（flow 内跑导出）需要。**不下发给 worker-scheduler**——
-#    它只做 cron 发布，compose 亦未给，下发可能改变其行为。
+#    prefect-worker（flow 内跑导出）需要。
 apiVersion: v1
 kind: ConfigMap
 metadata:

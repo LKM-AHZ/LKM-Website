@@ -1,9 +1,4 @@
-# Prefect 编排（M5 7.2.5）：复杂数据管道（首期 user_dim 对账/回填）的 server/work pool。
-#
-# 与 compose 的形态差异：compose 用 `--profile prefect` 决定「起或不起」；k8s 没有 profile，
-# 改用**默认 0 副本**承载「默认不启用」——把 prefect-server / prefect-worker 的 replicas
-# 置 0 即等价于 compose 不起 profile，且不占资源。启用时把副本改回 1（见 README）。
-# prefect-postgres 恒常驻（只是一个空闲 PG，代价小），避免「想启用时数据库还没初始化」。
+# Prefect 是 cron 唯一调度器，server / worker 必须常驻。
 apiVersion: v1
 kind: Service
 metadata:
@@ -107,8 +102,7 @@ metadata:
     app.kubernetes.io/component: orchestration
     app.kubernetes.io/part-of: lkm
 spec:
-  # 0 = 默认不启用（等价 compose 的 --profile prefect 未起）；启用时改 1
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: prefect-server
@@ -150,72 +144,8 @@ spec:
             requests: { cpu: 100m, memory: 256Mi }
             limits: { memory: 1Gi }
 ---
-# 一次性：注册 work pool 与 deployment（幂等，可重跑）。
-#
-# k8s 没有 compose 的 `--profile`，故本 Job 在「Prefect 未启用」（server 副本 0）时
-# **主动跳过并成功退出**：不这样做的话它会一直等一个不存在的 server，把 20 次重试
-# 耗光（表现为 Job 长时间 Running / 反复重启）。启用 Prefect 后需重跑本 Job，见 README。
-# Job spec 不可变——改命令须先 `kubectl -n lkm delete job prefect-init`。
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: prefect-init
-  labels:
-    app.kubernetes.io/name: prefect-init
-    app.kubernetes.io/component: orchestration
-    app.kubernetes.io/part-of: lkm
-spec:
-  backoffLimit: 20
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: prefect-init
-        app.kubernetes.io/part-of: lkm
-    spec:
-      restartPolicy: OnFailure
-      containers:
-        - name: prefect-init
-          image: lkm-service:latest
-          imagePullPolicy: IfNotPresent
-          command: ['sh', '-c']
-          args:
-            - |
-              set -e
-              ready=0
-              for i in $(seq 1 60); do
-                if python -c "import urllib.request; urllib.request.urlopen('http://prefect-server:4200/api/health', timeout=5)" 2>/dev/null; then
-                  ready=1
-                  break
-                fi
-                echo "waiting for prefect-server... ($i/60)"
-                sleep 5
-              done
-              if [ "$ready" != "1" ]; then
-                echo "prefect-server 不可达：按『Prefect 默认不启用』处理，跳过注册并成功退出。"
-                echo "启用后可重跑本 Job：kubectl -n lkm delete job prefect-init 后再 apply 一次清单。"
-                exit 0
-              fi
-              prefect work-pool create "$LKM_PREFECT_WORK_POOL" --type process || true
-              python -m boot.flows_deploy
-          env:
-            - name: PREFECT_API_URL
-              valueFrom:
-                configMapKeyRef: { name: lkm-config-analytics, key: PREFECT_API_URL }
-            - name: LKM_PREFECT_WORK_POOL
-              valueFrom:
-                configMapKeyRef: { name: lkm-config-analytics, key: LKM_PREFECT_WORK_POOL }
-            - name: LKM_PREFECT_FLOW_DEPLOYMENT_NAME
-              valueFrom:
-                configMapKeyRef: { name: lkm-config-analytics, key: LKM_PREFECT_FLOW_DEPLOYMENT_NAME }
-            - name: LKM_INFISICAL_ENABLED
-              valueFrom:
-                configMapKeyRef: { name: lkm-config, key: LKM_INFISICAL_ENABLED }
-          resources:
-            requests: { cpu: 100m, memory: 256Mi }
-            limits: { memory: 1Gi }
----
 # process 型 work pool：flow 在 worker 容器内以本地源码执行，复用 lkm-service 镜像。
-# 环境集比照 jobs worker（flow 会建 auth+业务双会话、用 Redis 锁），另加 PREFECT_API_URL。
+# 环境集比照 jobs worker，包含 Pulsar 和 Prefect API。
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -225,8 +155,7 @@ metadata:
     app.kubernetes.io/component: orchestration
     app.kubernetes.io/part-of: lkm
 spec:
-  # 0 = 默认不启用；启用时改 1
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: prefect-worker
@@ -241,9 +170,11 @@ spec:
         - name: prefect-worker
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
-          # 与 prefect-init 的 work pool 名同源
           command: ['sh', '-c']
-          args: ['prefect worker start --pool "$LKM_PREFECT_WORK_POOL" --type process']
+          args:
+            - |
+              prefect work-pool create "$LKM_PREFECT_WORK_POOL" --type process || true
+              python -m boot.flows_deploy && exec prefect worker start --pool "$LKM_PREFECT_WORK_POOL" --type process
           envFrom:
             - configMapRef: { name: lkm-config }
             - configMapRef: { name: lkm-config-authdb }

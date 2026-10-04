@@ -9,7 +9,7 @@
 # 取数点：app/core/metrics.py 的 DBPoolCollector 在抓取时刻读 app/db/session.py 的
 # Web 主池 / worker 批处理池实时水位，导出 db_pool_connections{pool,state}。
 # pool 标签用于区分打满的是哪个池：pool="web" 影响在线请求，pool="worker" 拖慢
-# outbox relay / APScheduler / 批处理。
+# outbox relay / Prefect / 批处理。
 groups:
   - name: lkm-db-pool
     rules:

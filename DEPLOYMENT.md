@@ -35,7 +35,7 @@
 | `worker-points-reward` | `lkm-service:latest` | 无 | points 奖励入账订阅。`python -m boot.workers.points_reward` |
 | `worker-points-stats` | `lkm-service:latest` | 无 | points 行为计数/成就订阅。`python -m boot.workers.points_stats` |
 | `worker-points-tasks` | `lkm-service:latest` | 无 | points 每日任务订阅。`python -m boot.workers.points_tasks` |
-| `worker-scheduler` | `lkm-service:latest` | 无 | cron 触发发布(`boot.workers.scheduler`) |
+| `prefect-server` / `prefect-worker` | `lkm-service:latest` | 仅内网 `4200` | cron 调度、flow 编排与执行 |
 | `worker-dlq` | `lkm-service:latest` | 无 | 死信落库(`boot.workers.dlq`) |
 | `worker-outbox` | `lkm-service:latest` | 无 | outbox relay(`boot.workers.outbox`) |
 | `postgres` | `timescale/timescaledb:latest-pg16` | 仅内网 `5432` | 后端数据库(biz `lkm` + auth `lkm_auth`);outbox、`points_ledger` 与 `audit_logs` 为 hypertable |
@@ -288,7 +288,7 @@ infisical run --env=prod -- sh deploy/infisical/check-env.sh \
 ```
 
 启用可选 profile 时，把相应的密码/token 一并导入 Infisical，再在最后一条命令中加
-`--profile clickhouse` / `--profile prefect` 等。`infisical run` 只在部署命令期间注入，
+`--profile clickhouse` 等。Prefect 是默认服务，`infisical run` 只在部署命令期间注入，
 容器仍按原有环境变量启动；轮换密钥后需重新执行并重建对应服务。PostgreSQL 等有状态服务的
 账号密码变更还要先完成服务端密码轮换，不能只改 Infisical 的值。RSA 私钥、公钥和 TLS 证书
 仍按现有文件/Secret 流程挂载，不写入 `.env`。
@@ -308,14 +308,14 @@ infisical run --env=prod -- sh deploy/infisical/check-env.sh \
 
 ## 三·七、Prefect 编排
 
-复杂数据管道（首期为 `user_dim` 报表宽表对账/回填）由 Prefect flow 编排，APScheduler 仍只做简单 cron 触发入口。默认**不启用**——cron 消费者直调既有 ETL，行为与现状一致。
+全部 cron 由 Prefect deployment 调度，经 Pulsar 发布事件，由 jobs worker 执行任务。复杂数据管道（如 `user_dim` 对账/回填）继续由 Prefect flow 编排。Prefect server/worker 默认启动；`LKM_PREFECT_ENABLED` 只控制 jobs handler 是否把复杂任务转交 flow。
 
 启动与接线：
 
 ```sh
-# 1) 起 server/worker（独立 prefect 库，UI 不发布公网端口）
-docker compose --profile prefect up -d
-# 2) 根 .env 配齐并开启（见 .env.example Prefect 块），重建 jobs worker 使其改走触发：
+# 1) 配好 PREFECT_DB_PASSWORD 后起全栈（独立 Prefect 库，UI 不发布公网端口）
+docker compose up -d
+# 2) 可选：开启复杂 flow 转交，重建 jobs worker：
 #    LKM_PREFECT_ENABLED=true
 #    LKM_PREFECT_API_URL=http://prefect-server:4200/api
 #    LKM_PREFECT_DEPLOYMENT=user-dim-reconcile/reconcile
@@ -335,7 +335,8 @@ docker compose exec prefect-worker prefect deployment run 'user-dim-reconcile/re
 docker compose exec prefect-worker python -m app.flows.user_dim --backfill --ids 1,2,3
 ```
 
-- 触发失败 **fail-open 回落直调**，crash-safety 对账不会因编排层故障丢跑；`LKM_PREFECT_ENABLED=false` 即整体回退。
+- 复杂 flow 触发失败会 **fail-open 回落直调**；`LKM_PREFECT_ENABLED=false` 只关闭复杂 flow 转交，不关闭 cron 调度。
+- Prefect worker 每次启动都会更新 cron 和 flow deployments。首次从 APScheduler 升级时，先停止旧 `worker-scheduler`；Compose 用包含当前启用 profiles 的 `docker compose up -d --remove-orphans` 清掉旧容器，再确认 `prefect-worker` 运行。K8s 先把旧 Deployment 缩到 0，应用新清单并等待 `prefect-worker` 就绪，最后删除旧 Deployment，避免重复触发。
 - flow 复用既有 ETL 入口，保持「命令数恒定 / 跨 auth+业务双会话 / 幂等」不变量。
 
 ## 三·八、ClickHouse 分析管道
@@ -823,8 +824,7 @@ uv run python -m scripts.online_ddl --apply set-not-null --table content_items -
 `LKM-service/.github/workflows/ci.yml` 的 `deploy` 仅在 `master`/`main` 上手动触发，
 在 `production` environment 中构建推送 SHA 镜像，并更新集群内使用
 `lkm-service` 镜像的 backend、auth、worker 与 Prefect Deployment，逐个等待 rollout。
-集群清单先按本文件部署；CI 不重放父仓库 Kustomize 清单，也不改一次性 `prefect-init`
-Job（Job 模板不可变，Flow 定义变化时需按 `deploy/k8s/README.md` 重跑该 Job）。
+集群清单先按本文件部署；CI 不重放父仓库 Kustomize 清单。Prefect worker 在滚动更新后自动更新 cron 和 flow deployments。
 
 在 **LKM-service** GitHub 仓库设置 `REGISTRY_IMAGE` 变量（如
 `ghcr.io/lkm-ahz/lkm-service`）、可选 `REGISTRY_HOST` / `REGISTRY_USER` /

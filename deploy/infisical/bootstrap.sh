@@ -23,6 +23,7 @@ done
 # Compose interpolates every service, including services not selected by `up`.
 # These values are never used: this command starts only the Infisical service.
 export POSTGRES_PASSWORD=bootstrap-only
+export PREFECT_DB_PASSWORD=bootstrap-only
 export MINIO_ROOT_PASSWORD=bootstrap-only
 export LKM_AUTH_HTTP_TOKEN=bootstrap-only
 export LKM_TOTP_ENCRYPTION_KEY=bootstrap-only
