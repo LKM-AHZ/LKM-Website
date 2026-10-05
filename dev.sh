@@ -94,7 +94,9 @@ run_frontend() {
     log "Linux 前端文件监视使用轮询（CHOKIDAR_USEPOLLING=1）。"
   fi
   log "启动 SSR 前端: pnpm run dev --port $FRONT_PORT"
-  (cd "$FRONTEND_DIR" && pnpm run dev --port "$FRONT_PORT")
+  # Astro 7 在检测到 AI agent 环境时会自动 fork 为后台服务，脱离本脚本的进程组。
+  # 设置其内部标记可保持前台运行，退出时由统一清理逻辑回收。
+  (cd "$FRONTEND_DIR" && ASTRO_DEV_BACKGROUND=0 pnpm run dev --port "$FRONT_PORT")
 }
 
 run_backend() {
@@ -156,48 +158,58 @@ if [ "$MODE" != front ]; then
   (cd "$BACKEND_DIR" && uv run python "$ROOT_DIR/scripts/prepare_dev_db.py")
 fi
 
+# 每个服务独占进程组，退出时连 pnpm/node、uv/python 等孙进程一起停止。
+# 单服务模式也走同一套收尾逻辑，避免 Ctrl+C 后留下监听端口的子进程。
+set -m
+pids=()
+cleanup() {
+  trap - HUP INT TERM EXIT
+  if (( ${#pids[@]} == 0 )); then return; fi
+  log "收到退出信号，正在停止..."
+  for p in "${pids[@]}"; do
+    kill -TERM -- "-$p" 2>/dev/null || kill -TERM "$p" 2>/dev/null || true
+  done
+  for p in "${pids[@]}"; do
+    wait "$p" 2>/dev/null || true
+  done
+  # pnpm/uv 可能先退出，实际监听端口的孙进程仍在收尾；等进程组清空再退出。
+  for _ in {1..50}; do
+    local active=false
+    for p in "${pids[@]}"; do
+      if kill -0 -- "-$p" 2>/dev/null; then active=true; fi
+    done
+    if [ "$active" = false ]; then return; fi
+    sleep 0.1
+  done
+  for p in "${pids[@]}"; do
+    kill -KILL -- "-$p" 2>/dev/null || true
+  done
+}
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+trap cleanup EXIT
+
 case "$MODE" in
-  front)
-    log "SSR 前端（仅）"
-    run_frontend
-    ;;
-  back)
-    log "后端（仅）"
-    run_backend
-    ;;
+  front) log "SSR 前端（仅）"; run_frontend & pids+=("$!") ;;
+  back) log "后端（仅）"; run_backend & pids+=("$!") ;;
   all)
     log "同时启动 SSR 前端与后端（Ctrl+C 可同时停止）"
-    # 开作业控制：每个后台服务独占一个进程组，收尾时按进程组 kill 才能连 pnpm/node、
-    # uv/python 这些孙进程一起带走。不用 `kill 0`——它连本脚本（乃至未开作业控制时的
-    # 父 shell）一起杀，且绑在 EXIT trap 上会在正常结束时自我触发、递归。
-    set -m
-    pids=""
-    cleanup() {
-      trap - INT TERM EXIT
-      echo
-      log "收到退出信号，正在停止..."
-      for p in $pids; do
-        kill -- "-$p" 2>/dev/null || kill "$p" 2>/dev/null || true
-      done
-    }
-    trap cleanup INT TERM EXIT
-    run_frontend &
-    pids="$pids $!"
-    run_backend &
-    pids="$pids $!"
-    # 无参 wait 永远返回 0：任一服务启动失败都会被当成功吞掉。改成轮询等待首个退出者，
-    # 取它的退出码（不用 `wait -n`——bash 4.3+ 才有，macOS 自带 3.2 会报错）。
-    status=0
-    while :; do
-      for p in $pids; do
-        if ! kill -0 "$p" 2>/dev/null; then
-          wait "$p" || status=$?
-          break 2
-        fi
-      done
-      sleep 1
-    done
-    cleanup
-    exit "$status"
+    run_frontend & pids+=("$!")
+    run_backend & pids+=("$!")
     ;;
 esac
+
+# 无参 wait 永远返回 0；轮询首个退出者并保留其退出码。
+# macOS 自带 Bash 3.2 不支持 wait -n。
+status=0
+while :; do
+  for p in "${pids[@]}"; do
+    if ! kill -0 "$p" 2>/dev/null; then
+      wait "$p" || status=$?
+      break 2
+    fi
+  done
+  sleep 1
+done
+exit "$status"
