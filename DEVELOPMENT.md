@@ -88,7 +88,7 @@ Linux 上的 Bash 启动脚本默认让前端使用轮询监视文件，避免�
 Vite 报 `ENOSPC: System limit for number of file watchers reached`。轮询会增加少量 CPU
 开销；若系统已提高限额，可用 `CHOKIDAR_USEPOLLING=false ./dev.sh` 恢复原生监视。
 直接进入前端仓库运行 `pnpm dev` 时，可先设置 `CHOKIDAR_USEPOLLING=1`。
-启动后端前会使用其实际配置测试 PostgreSQL 连接；数据库未就绪时脚本会直接指出目标地址，避免后端持续打印连接异常。`--no-run` 和仅前端模式不会检查数据库。
+启动后端前会使用其实际配置测试 PostgreSQL 连接，并初始化业务库和认证库的 schema；数据库未就绪时脚本会直接指出目标地址，避免后端持续打印连接异常。`--no-run` 和仅前端模式不会检查数据库。
 
 Linux/macOS 若尚未配置数据库，可先运行 `./scripts/start_dev_db.sh`，在 Git 忽略的 `.dev/`
 中创建并启动独立的 PostgreSQL，生成凭据，写入后端 `.env`，同时创建 `lkm` 和 `lkm_auth`

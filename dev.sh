@@ -152,6 +152,8 @@ fi
 
 if [ "$MODE" != front ]; then
   (cd "$BACKEND_DIR" && uv run python "$ROOT_DIR/scripts/check_dev_db.py")
+  log "准备业务库与认证库 schema..."
+  (cd "$BACKEND_DIR" && uv run python "$ROOT_DIR/scripts/prepare_dev_db.py")
 fi
 
 case "$MODE" in
