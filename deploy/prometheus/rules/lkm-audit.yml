@@ -40,7 +40,7 @@ groups:
       - alert: AuditSubscriptionBacklogHigh
         # 有生产、没消费：审计订阅的 backlog 持续不降。单出一张牌是为了把「审计链路断了」
         # 与「总线整体有问题」区分开（后者由 OutboxBacklogHigh 覆盖）。
-        expr: pulsar_subscription_backlog{subscription=~"audit(-permission)?"} > 100
+        expr: message_subscription_backlog{subscription=~"audit(-permission)?"} > 100
         for: 15m
         labels:
           severity: warning

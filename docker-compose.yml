@@ -576,8 +576,6 @@ services:
         condition: service_healthy
       clamav:
         condition: service_healthy
-      pulsar:
-        condition: service_healthy
     environment:
       LKM_ENV: production
       # 公网 Host 白名单：生产必填（缺则进程装配期 fail-fast）。内网服务名/回环
@@ -597,6 +595,8 @@ services:
       LKM_DB_USER: ${POSTGRES_USER:-lkm}
       LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
       LKM_REDIS_URL: redis://redis:6379/0
+      LKM_MESSAGE_BUS: ${LKM_MESSAGE_BUS:-pulsar}
+      LKM_RABBITMQ_URL: ${LKM_RABBITMQ_URL:-}
       LKM_PULSAR_URL: pulsar://pulsar:6650
       # lag 上报（M4）：API 进程周期拉 Admin REST 统计订阅 msgBacklog → Prometheus
       LKM_PULSAR_ADMIN_URL: http://pulsar:8080
@@ -714,6 +714,8 @@ services:
       # CORS 同 backend：生产唯一权威是 APISIX，不在此下发。
       LKM_ALLOWED_HOSTS: ${LKM_ALLOWED_HOSTS:-lkm-ahz.ltd,www.lkm-ahz.ltd,backend,auth,localhost,127.0.0.1}
       LKM_REDIS_URL: redis://redis:6379/0
+      LKM_MESSAGE_BUS: ${LKM_MESSAGE_BUS:-pulsar}
+      LKM_RABBITMQ_URL: ${LKM_RABBITMQ_URL:-}
       LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
@@ -775,14 +777,14 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      pulsar:
-        condition: service_healthy
     environment:
       <<: *otel-env
       LKM_ENV: production
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
+      LKM_MESSAGE_BUS: ${LKM_MESSAGE_BUS:-pulsar}
+      LKM_RABBITMQ_URL: ${LKM_RABBITMQ_URL:-}
       LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
@@ -801,8 +803,6 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      pulsar:
-        condition: service_healthy
       minio:
         condition: service_healthy
     environment:
@@ -811,6 +811,8 @@ services:
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
+      LKM_MESSAGE_BUS: ${LKM_MESSAGE_BUS:-pulsar}
+      LKM_RABBITMQ_URL: ${LKM_RABBITMQ_URL:-}
       LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
@@ -866,14 +868,14 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      pulsar:
-        condition: service_healthy
     environment:
       <<: *otel-env
       LKM_ENV: production
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
+      LKM_MESSAGE_BUS: ${LKM_MESSAGE_BUS:-pulsar}
+      LKM_RABBITMQ_URL: ${LKM_RABBITMQ_URL:-}
       LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
@@ -895,14 +897,14 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      pulsar:
-        condition: service_healthy
     environment:
       <<: *otel-env
       LKM_ENV: production
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
+      LKM_MESSAGE_BUS: ${LKM_MESSAGE_BUS:-pulsar}
+      LKM_RABBITMQ_URL: ${LKM_RABBITMQ_URL:-}
       LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
@@ -924,14 +926,14 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      pulsar:
-        condition: service_healthy
     environment:
       <<: *otel-env
       LKM_ENV: production
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
+      LKM_MESSAGE_BUS: ${LKM_MESSAGE_BUS:-pulsar}
+      LKM_RABBITMQ_URL: ${LKM_RABBITMQ_URL:-}
       LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
@@ -953,8 +955,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      pulsar:
-        condition: service_healthy
       minio:
         condition: service_healthy
       clamav:
@@ -967,6 +967,8 @@ services:
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
+      LKM_MESSAGE_BUS: ${LKM_MESSAGE_BUS:-pulsar}
+      LKM_RABBITMQ_URL: ${LKM_RABBITMQ_URL:-}
       LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
@@ -998,8 +1000,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      pulsar:
-        condition: service_healthy
       auth:
         condition: service_healthy
     environment:
@@ -1008,6 +1008,8 @@ services:
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
+      LKM_MESSAGE_BUS: ${LKM_MESSAGE_BUS:-pulsar}
+      LKM_RABBITMQ_URL: ${LKM_RABBITMQ_URL:-}
       LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
@@ -1031,8 +1033,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      pulsar:
-        condition: service_healthy
       auth:
         condition: service_healthy
     environment:
@@ -1041,6 +1041,8 @@ services:
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
+      LKM_MESSAGE_BUS: ${LKM_MESSAGE_BUS:-pulsar}
+      LKM_RABBITMQ_URL: ${LKM_RABBITMQ_URL:-}
       LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
@@ -1066,13 +1068,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      pulsar:
-        condition: service_healthy
     environment:
       <<: *otel-env
       LKM_ENV: production
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
+      LKM_MESSAGE_BUS: ${LKM_MESSAGE_BUS:-pulsar}
+      LKM_RABBITMQ_URL: ${LKM_RABBITMQ_URL:-}
       LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
@@ -1093,14 +1095,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      pulsar:
-        condition: service_healthy
     environment:
       <<: *otel-env
       LKM_ENV: production
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
+      LKM_MESSAGE_BUS: ${LKM_MESSAGE_BUS:-pulsar}
+      LKM_RABBITMQ_URL: ${LKM_RABBITMQ_URL:-}
       LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
@@ -1171,13 +1173,13 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      pulsar:
-        condition: service_healthy
     environment:
       LKM_ENV: production
       LKM_TOTP_ENCRYPTION_KEY: ${LKM_TOTP_ENCRYPTION_KEY:?生产需设置 LKM_TOTP_ENCRYPTION_KEY}
       LKM_VERIFICATION_CODE_PEPPER: ${LKM_VERIFICATION_CODE_PEPPER:?生产需设置 LKM_VERIFICATION_CODE_PEPPER}
       LKM_REDIS_URL: redis://redis:6379/0
+      LKM_MESSAGE_BUS: ${LKM_MESSAGE_BUS:-pulsar}
+      LKM_RABBITMQ_URL: ${LKM_RABBITMQ_URL:-}
       LKM_PULSAR_URL: pulsar://pulsar:6650
       LKM_PREFECT_WORK_POOL: ${LKM_PREFECT_WORK_POOL:-lkm}
       LKM_PREFECT_FLOW_DEPLOYMENT_NAME: ${LKM_PREFECT_FLOW_DEPLOYMENT_NAME:-reconcile}

@@ -75,6 +75,32 @@
 > `event_contract_violations_total{fn,side}`(告警规则 `deploy/prometheus/rules/lkm-event-contract.yml`)。
 > 相关测试:`LKM-service/tests/test_event_contract.py`、`tests/deploy/test_pulsar_config.py`。
 
+### 切换消息总线为 RabbitMQ
+
+应用默认使用 Pulsar。RabbitMQ 模式复用同一套 routing key、outbox、worker 与死信落库；
+Compose 使用持久化的 RabbitMQ quorum 队列，每个订阅各有一条队列，`points.apply` 的
+四个订阅仍分别收到事件。消费失败按 `LKM_PULSAR_DLQ_MAX_REDELIVER` 次重投上限进入
+`lkm.dlq-persist`，由现有 `worker-dlq` 落库。
+
+1. 在根目录 `.env` 设置 `RABBITMQ_DEFAULT_PASS` 和 `LKM_RABBITMQ_URL`，例如
+   `amqp://lkm:<URL编码后的密码>@rabbitmq:5672/`。URL 中的密码需百分号编码，且须与
+   `RABBITMQ_DEFAULT_PASS` 一致。RabbitMQ 管理端口只在容器网络内暴露。
+2. 切换前停止写入、等待 `outbox_pending_count` 和各订阅积压归零。两种 broker 的在途消息
+   不会自动迁移；不要让两套 worker 同时处理业务流量。
+3. 先运行 `docker compose down`（不要加 `-v`），再运行
+   `docker compose -f docker-compose.yml -f docker-compose.rabbitmq.yml up -d --build`。
+   覆盖文件自动把应用设为 RabbitMQ，并使 Pulsar 不启动。切回 Pulsar 时先排空
+   RabbitMQ 积压，用两份文件执行 `down`，再只用原 `docker-compose.yml` 执行 `up -d`。
+
+Kubernetes 生产部署可用 `deploy/k8s/overlays/rabbitmq`：先在密钥源设置
+`RABBITMQ_DEFAULT_PASS` 和 `LKM_RABBITMQ_URL=amqp://lkm:<URL编码后的密码>@rabbitmq:5672/`，
+重跑 `deploy/k8s/gen-secret.sh`，再渲染该 overlay。它继承 `prod` 配置，以 RabbitMQ
+StatefulSet 取代 Pulsar。切换已有集群时也需先排空旧订阅，停掉旧 worker，并显式删除
+旧的 `pulsar` StatefulSet/Service（普通 `kubectl apply` 不会删除新清单中缺席的资源）；
+切换不会搬迁 broker 中的消息。
+监控使用 `message_subscription_backlog{broker=...}`；原 `pulsar_subscription_backlog`
+保留供旧看板读取 Pulsar 指标。
+
 请求分流(有域名走 443 / 无域名走 80):
 
 ```
@@ -216,7 +242,7 @@ cd LKM-Website
 docker compose up -d --build
 ```
 
-首次构建需拉取基础镜像与依赖,可能耗时数分钟。启动顺序由 `depends_on` 健康检查保证:先 `postgres`、`redis`、`minio`、`pulsar` 就绪,再启动 `backend`/`auth` 与各 `worker`,前端 `astro` 就绪后网关 `apisix` 再启动。其中 `pulsar` 的 `healthy` **已蕴含**租户与 namespace 初始化完成(见上「Pulsar 无状态化」),故不存在等待一次性 init 容器的步骤。
+首次构建需拉取基础镜像与依赖,可能耗时数分钟。`depends_on` 等待 PostgreSQL、Redis、MinIO 等基础服务；所选消息总线可晚于应用就绪，worker 会重连，outbox relay 会重试投递，`/readiness` 在已配置 broker 不可达时返回 503。Pulsar 的 `healthy` **已蕴含**租户与 namespace 初始化完成(见上「Pulsar 无状态化」)。
 
 ## 三·六、网关：APISIX
 

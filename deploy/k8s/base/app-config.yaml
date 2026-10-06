@@ -20,6 +20,7 @@ data:
   LKM_DB_NAME: lkm
   LKM_DB_USER: lkm
   LKM_REDIS_URL: redis://redis:6379/0
+  LKM_MESSAGE_BUS: pulsar
   LKM_PULSAR_URL: pulsar://pulsar:6650
   LKM_PULSAR_ADMIN_URL: http://pulsar:8080
   LKM_AUTH_HTTP_URL: http://auth:8001

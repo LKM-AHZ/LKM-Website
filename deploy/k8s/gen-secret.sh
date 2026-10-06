@@ -145,6 +145,10 @@ stringData:
   MINIO_ROOT_PASSWORD: "$(get_dq MINIO_ROOT_PASSWORD)"
   LKM_S3_ACCESS_KEY: "$(yaml_dq "$MINIO_USER")"
   LKM_S3_SECRET_KEY: "$(get_dq MINIO_ROOT_PASSWORD)"
+  # RabbitMQ overlay 专用；默认空值不影响 Pulsar base。
+  RABBITMQ_DEFAULT_USER: "$(get_dq RABBITMQ_DEFAULT_USER lkm)"
+  RABBITMQ_DEFAULT_PASS: "$(get_dq RABBITMQ_DEFAULT_PASS)"
+  LKM_RABBITMQ_URL: "$(get_dq LKM_RABBITMQ_URL)"
   # 检索引擎：未配则不出值，search.yaml 的 secretKeyRef 是 optional=true
   SEARCH_MEILI_API_KEY: "$(get_dq LKM_SEARCH_MEILI_API_KEY)"
   CLICKHOUSE_USER: "$(get_dq CLICKHOUSE_USER lkm)"

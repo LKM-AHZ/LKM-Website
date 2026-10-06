@@ -76,14 +76,14 @@
     {
       "id": 5,
       "type": "timeseries",
-      "title": "Pulsar 订阅积压（lag）",
+      "title": "消息总线订阅积压（lag）",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
-          "expr": "pulsar_subscription_backlog",
-          "legendFormat": "{{subscription}} @ {{topic}}"
+          "expr": "message_subscription_backlog",
+          "legendFormat": "{{broker}} / {{subscription}} @ {{topic}}"
         }
       ]
     },

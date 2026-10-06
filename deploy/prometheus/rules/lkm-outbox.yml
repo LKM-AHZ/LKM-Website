@@ -19,7 +19,7 @@ groups:
           description: >-
             outbox_events 中 status=pending 的积压超过 1000 条且持续 10 分钟。
             先看 outbox_leader_total{event="acquired"} 是否还在增长（relay 是否活着），
-            再看 pulsar_subscription_backlog（下游消费是否整体滞后）。
+            再看 message_subscription_backlog（下游消费是否整体滞后）。
 
       - alert: OutboxLeaderRenewFailed
         expr: increase(outbox_leader_total{event="renew_failed"}[10m]) > 0

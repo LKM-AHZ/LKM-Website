@@ -1,0 +1,60 @@
+# 使用：LKM_RABBITMQ_URL=amqp://... \
+#       docker compose -f docker-compose.yml -f docker-compose.rabbitmq.yml up -d
+x-rabbit-env: &rabbit-env
+  LKM_MESSAGE_BUS: rabbitmq
+  LKM_RABBITMQ_URL: ${LKM_RABBITMQ_URL:?RabbitMQ 模式须设置 LKM_RABBITMQ_URL}
+
+services:
+  pulsar:
+    profiles: [pulsar]
+
+  backend:
+    environment: *rabbit-env
+  auth:
+    environment: *rabbit-env
+  worker-send:
+    environment: *rabbit-env
+  worker:
+    environment: *rabbit-env
+  worker-points-reward:
+    environment: *rabbit-env
+  worker-points-stats:
+    environment: *rabbit-env
+  worker-points-tasks:
+    environment: *rabbit-env
+  worker-notify:
+    environment: *rabbit-env
+  worker-notification:
+    environment: *rabbit-env
+  worker-content-index:
+    environment: *rabbit-env
+  worker-dlq:
+    environment: *rabbit-env
+  worker-outbox:
+    environment: *rabbit-env
+  prefect-worker:
+    environment: *rabbit-env
+
+  rabbitmq:
+    image: rabbitmq:4.2-management-alpine
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-lkm}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?RabbitMQ 模式须设置 RABBITMQ_DEFAULT_PASS}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    expose:
+      - '5672'
+      - '15672'
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: ${LKM_RESTART_POLICY:-no}
+    networks:
+      - lkm
+
+volumes:
+  rabbitmq_data:

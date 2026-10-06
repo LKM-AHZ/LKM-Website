@@ -7,7 +7,7 @@ LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 S
 | 目录 | 技术栈 | 默认端口 | 用途 |
 |---|---|---:|---|
 | `LKM-official-website/` | Astro 7、Vue 3、React、Tailwind CSS 4 | `4321` | 社区与动态官网，SSR 运行 |
-| `LKM-service/` | FastAPI、SQLAlchemy、PostgreSQL、Pulsar | `8000` / `8001` | 业务 API、AUTH 服务及后台 worker |
+| `LKM-service/` | FastAPI、SQLAlchemy、PostgreSQL、Pulsar/RabbitMQ | `8000` / `8001` | 业务 API、AUTH 服务及后台 worker |
 | `LKM-bot/` | Python、AstrBot fork | `6185`（仅经网关 `bot.` 子域） | 社区机器人面板，可选组件（`--profile bot`） |
 | `LKM-on-VSCode/` | TypeScript、VS Code Extension API | — | 博客仓库克隆、编辑与同步 |
 | `deploy/` | APISIX、Kustomize、可观测性配置 | `80` / `443` | Compose/Kubernetes 部署资产 |
