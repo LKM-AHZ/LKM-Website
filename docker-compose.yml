@@ -22,7 +22,8 @@ services:
   # ── APISIX 网关 ──
   # standalone 模式（yaml config_provider，无 etcd）：路由模板 deploy/apisix/apisix.yaml 中的
   # `# __SSL_SECTION__` 占位由 apisix-render 用 certbot 证书渲染为内联 PEM 的 ssls 段，
-  # 写入 apisix_conf 卷，APISIX 监测 mtime 自动 reload。
+  # 写入宿主目录 deploy/apisix/rendered（该目录由 docker 按需创建，已在 .gitignore 中），
+  # APISIX 监测 mtime 自动 reload。
   apisix-render:
     # 纯 shell sidecar（只跑 render.sh 的 sh/awk/sed/openssl），非 Web 服务器角色：
     # 用最小 alpine，不借用任何 Web 服务器镜像。
@@ -46,7 +47,11 @@ services:
       # RSA 公钥（只读）。目录不存在时 docker 会建空目录 → 网关验签自动关闭，不硬失败。
       - ./deploy/jwt/keys:/etc/lkm/jwt:ro
       - certbot_conf:/etc/letsencrypt
-      - apisix_conf:/out
+      # 渲染产物落**宿主目录**（而非命名卷）：render 就地写同一 inode，apisix 侧用单文件
+      # bind 才能看到 mtime 变化。若用命名卷，apisix 只能靠 volume.subpath 挂单文件，
+      # 而 Docker 26.1.5 上「volume subpath → 镜像内已存在的目标文件」必失败
+      # （open /var/lib/docker/tmp/safe-mountN: not a directory），宿主 bind 两种版本都正常。
+      - ./deploy/apisix/rendered:/out
     restart: ${LKM_RESTART_POLICY:-no}
     healthcheck:
       # 两个产物都要在：apisix.yaml（路由）+ config.yaml（DNS 解析展开）——
@@ -85,20 +90,13 @@ services:
       # config.yaml 与 apisix.yaml 都取 apisix-render 的**渲染产物**（不再是仓库原文件）：
       # config.yaml 里的上游 DNS 由 render 从 APISIX_DNS_RESOLVER 展开（compose 默认
       # 127.0.0.11，与旧行为一致），k8s 侧同一模板展开成 CoreDNS 地址——避免两份 config 副本。
-      # 命名卷内子路径单文件挂载（compose 长语法 subpath）：render 就地写同一 inode，
-      # APISIX 才能看到 mtime 变化并 reload
-      - type: volume
-        source: apisix_conf
-        target: /usr/local/apisix/conf/config.yaml
-        volume:
-          subpath: config.yaml
-        read_only: true
-      - type: volume
-        source: apisix_conf
-        target: /usr/local/apisix/conf/apisix.yaml
-        volume:
-          subpath: apisix.yaml
-        read_only: true
+      # 单文件绑定挂载 render 产物：render 就地写同一 inode（`cat tmp > 目标`），APISIX
+      # 才能看到 mtime 变化并 reload；原子替换（mv）会断开 bind 的 inode 绑定。
+      # 注：此处**不能**用命名卷 + volume.subpath —— Docker 26.1.5 上把 volume subpath
+      # 挂到镜像里已存在的目标文件（conf/config.yaml）会失败：
+      #   open /var/lib/docker/tmp/safe-mountN: not a directory
+      - ./deploy/apisix/rendered/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ./deploy/apisix/rendered/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
     healthcheck:
       test: ['CMD-SHELL', 'bash -c "exec 3<>/dev/tcp/127.0.0.1/9080"']
       interval: 15s
@@ -133,7 +131,9 @@ services:
       HOST: 0.0.0.0
       PORT: 4321
       API_URL: http://backend:8000
-      PUBLIC_SITE_URL: https://lkm-ahz.ltd
+      # 站点对外 URL：astro 的 canonical/OG 绝对链接由它决定，改域名时**必须**跟随
+      # （见 DEPLOYMENT.md「换域名」）。默认值即生产域名，本机/测试环境在 .env 覆盖。
+      PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-https://lkm-ahz.ltd}
     restart: ${LKM_RESTART_POLICY:-no}
     healthcheck:
       test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:4321/robots.txt']
@@ -1409,7 +1409,6 @@ services:
 volumes:
   certbot_conf:
   certbot_www:
-  apisix_conf:
   infisical_db_data:
   prefect_pg_data:
   clickhouse_data:

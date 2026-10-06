@@ -16,6 +16,9 @@ __pycache__
 # RS256/JWKS 密钥
 deploy/jwt/keys/
 
+# APISIX 网关配置的渲染产物（apisix-render 运行时写入，由宿主 bind 挂给 apisix）
+deploy/apisix/rendered/
+
 # 运维备份产物
 backups/
 # Added by code-review-graph

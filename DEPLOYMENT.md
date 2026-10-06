@@ -465,7 +465,8 @@ docker compose restart signoz-otel-collector   # 注册后立即重连，否则�
 
 ```sh
 # 1) .env：配面板初始密码（留空则面板自生成随机密码并打到日志）
-#    LKM_BOT_DASHBOARD_PASSWORD=<强随机>
+#    LKM_BOT_DASHBOARD_PASSWORD=<强随机>   # ≥8 位且含大小写字母+数字，否则面板启动即
+#                                          # ValueError 反复重启；openssl rand -hex 全小写会被拒
 # 2) SSO 免登（可选但推荐）：配好 RS256 密钥（含公钥），见「二、配置环境变量」的 RS256 段
 #    sh deploy/jwt/gen-keys.sh         # 未配则面板回落自带登录页，其余功能不受影响
 # 3) 起 bot（网关 /bot 路由随主栈起时已生效，无需重启 apisix）
@@ -570,10 +571,18 @@ LKM_FRONTEND_CALLBACK: http://<公网IP>/login/success
 
 # 3. deploy/apisix/apisix.yaml:各路由 hosts 列（IP 无法配 hosts，需另加按 priority 兜底的路由）；
 #    deploy/apisix/config.yaml 的 redirect.https_port 与 dns 解析按需调整
+# 4. deploy/apisix/apisix.yaml：**停用 http-redirect 路由**（见下）
 ```
 
-> **注**：网关为 APISIX，无域名/IP 直连改造只需改上述第 3 步（`deploy/apisix/` 下两个YAML），未在本教程展开。
+> **注**：网关为 APISIX，无域名/IP 直连改造只需改上述第 3、4 步（`deploy/apisix/` 下两个YAML），未在本教程展开。
 
+- **必须停用 `http-redirect` 路由**：模板里的 `http-redirect`（`hosts: [__COMMUNITY_HOSTS__]` + `redirect.http_to_https: true`）
+  是「社群域名 http → https 301」。IP 直连时该域名就是 IP 字面量，而 curl/浏览器对 IP 字面量
+  **不发 SNI**，APISIX 按 SNI 选不到证书 → 301 之后是 TLS 握手失败。保留这条路由会让
+  `http://<IP>` 整站不可达（表现为首页 301 后打不开，而非 404）。做法：注释掉该路由
+  （`deploy/apisix/apisix.yaml` 的 `id: http-redirect` 整段），`docker compose up -d apisix-render`
+  重渲染后确认 `curl -s -o /dev/null -w '%{http_code}' http://<IP>/` 是 **200 而非 301**。
+  真实域名部署应保留这条路由（强制 HTTPS 是想要的行为）。
 - **certbot 服务可停**(`docker compose stop certbot`):无域名不签正式证书,其会循环空跑 renew 报错污染日志。
 - **403 后台明文限制**:admin 后台 cookie 带 `Secure`,**纯 HTTP(80)下浏览器不发送** → 后台登录会话无法保持。
   后台请走 **`https://IP`**(自签证书,浏览器首次点"继续访问/信任")。普通用户前台走 JWT,HTTP 下正常。
@@ -965,6 +974,17 @@ cd LKM-service
 ## 常见问题
 
 - **后端反复重启(Exited 3)**:通常是密钥缺失或过短。确认 `.env` 中三个密钥已设置为强随机值,并 `docker compose up -d` 重读。
+- **镜像构建卡在 `uv sync` / `apt-get`(国内云主机)**:`files.pythonhosted.org` 在部分国内主机上只有几 KB/s,
+  构建会「看起来卡死」而非报错。根因是 `uv.lock` 里**逐条记录了下载 URL**,而 `--frozen` 只认 lock 里的地址 ——
+  仅设 `UV_INDEX_URL` / `UV_DEFAULT_INDEX` **无效**。做法:在 `LKM-service/Dockerfile` 的 builder 阶段、`uv sync` 之前
+  把 lock 里的源改写成就近镜像(镜像站逐字节同源,`--frozen` 的哈希校验仍通过),运行阶段再把 apt 源一并换掉:
+  ```dockerfile
+  RUN sed -i "s#https://files.pythonhosted.org/#https://<就近镜像>/pypi/#g;\
+             s#https://pypi.org/simple#https://<就近镜像>/pypi/simple#g" uv.lock
+  RUN sed -i 's#http://deb.debian.org#https://<就近镜像>#g' /etc/apt/sources.list.d/debian.sources
+  ```
+  `LKM-bot/Dockerfile` 同理(`PIP_INDEX_URL` / `UV_*` + apt 源)。这类改动**属于环境适配,不要提交进仓库**——不同
+  机房的就近镜像不同,写死会让别处构建失败。
 - **上传大文件被拒**:APISIX 路由已设 `client-control.max_body_size: 104857600`(100m),与后端 `max_upload_bytes` 对齐;更大文件需同时改 `deploy/apisix/apisix.yaml` 与后端配置。
 - **数据库**:使用 PostgreSQL(`timescale/timescaledb:latest-pg16` 服务,卷持久化)。后端经 `LKM_DB_*` 环境变量以 `postgresql+asyncpg` 连接;首次启动时自动建表(默认走 `create_all` 通道)。**换库/改 schema 后需重建数据卷**(`docker compose down -v`,见「数据库」章节)。
 - **换域名**:网关侧只需在 `.env` 改 `LKM_COMMUNITY_DOMAINS`(hosts、CORS 来源、MinIO Host、证书 SNI 全量跟随,见「单一来源」),再 `docker compose up -d apisix-render` 重渲染(bot 面板随社群域走,无需额外 DNS/证书);此外还要改后端**自身身份**类配置 `LKM_ALLOWED_HOSTS`/`LKM_ORIGIN`/`LKM_RP_ID`/`LKM_GITHUB_REDIRECT_URI`/`LKM_FRONTEND_CALLBACK`/`LKM_S3_PUBLIC_ENDPOINT_URL` 与前端 `PUBLIC_SITE_URL`/`PUBLIC_BASE_PATH`,并重新签发证书。
