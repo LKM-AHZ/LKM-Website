@@ -131,6 +131,7 @@ services:
       HOST: 0.0.0.0
       PORT: 4321
       API_URL: http://backend:8000
+      AI_ALLOWED_HOSTS: ${AI_ALLOWED_HOSTS:-api.openai.com}
       # 站点对外 URL：astro 的 canonical/OG 绝对链接由它决定，改域名时**必须**跟随
       # （见 DEPLOYMENT.md「换域名」）。默认值即生产域名，本机/测试环境在 .env 覆盖。
       PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-https://lkm-ahz.ltd}
