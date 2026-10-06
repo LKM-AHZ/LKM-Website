@@ -22,33 +22,133 @@
 
 ## 一、Docker / Compose 常态运维
 
+> 本栈已切 **RabbitMQ** 消息总线:凡 `up`/`build`/`down` 类命令**必须**同时带
+> `-f docker-compose.yml -f docker-compose.rabbitmq.yml`,只用第一个文件会静默退回 pulsar 栈
+> (**本文其余小节出现的 `docker compose up/build/down` 同理**)。下文用 `$COMPOSE` 代指这两个
+> 文件,只读命令 `ps`/`logs`/`exec` 可省第二个文件。
+
 ```sh
 cd ~/LKM-Website
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.rabbitmq.yml"
 
-docker compose ps                  # 查看全部容器状态
-docker compose ps --format "{{.Name}}: {{.Status}}"   # 只看状态行
-
-# 更新代码后重建并重启
-git -C LKM-official-website pull && git -C LKM-service pull
-docker compose up -d --build
-
-# 仅重建单个服务(改后端源码后只需重建 backend,worker 复用其镜像):
-docker compose up -d --build backend
-docker compose up -d --force-recreate worker worker-send   # 让 worker 吃到新镜像
+$COMPOSE ps                  # 查看全部容器状态
+$COMPOSE ps --format "{{.Name}}: {{.Status}}"   # 只看状态行
 
 # 重启 / 停止单服务
-docker compose restart backend
-docker compose stop certbot        # 无域名时 certbot 空跑,可停掉减日志噪音
+$COMPOSE restart backend
+$COMPOSE stop certbot        # 无域名时 certbot 空跑,可停掉减日志噪音
 
 # 机器人面板(可选组件,主栈 up 不会起它)
-docker compose --profile bot up -d --build    # 起面板(含 shipyard 沙箱)
-docker compose --profile bot down             # 收掉;bot 数据在宿主机目录,不受 -v 影响
-docker compose --profile bot logs -f lkmbot
+$COMPOSE --profile bot up -d --build    # 起面板(含 shipyard 沙箱)
+$COMPOSE --profile bot down             # 收掉;bot 数据在宿主机目录,不受 -v 影响
+$COMPOSE --profile bot logs -f lkmbot
 
 # 健康检查(后端依赖 DB+Redis;astro 依赖后端就绪后才由 APISIX 拉起)
 curl http://127.0.0.1/api/v1/health
 # 期望 {"code":0,"msg":"OK","data":{"status":"ok","db":{"status":"up"},"redis":{"status":"up"}}}
 # 探针分级(M6.2):/api/v1/liveness 零外部依赖(进程心跳);/api/v1/readiness 复合四项(未就绪 503)
+```
+
+### 一·二、更新代码后重建镜像与容器
+
+**先看镜像与容器的对应关系**(改哪个子仓库就重建哪个镜像):
+
+| 子仓库 | 镜像 | 需重启的容器 |
+|---|---|---|
+| `LKM-service` | `lkm-service:latest` | `backend` `auth` + 10 个 `worker*` + `prefect-server` `prefect-worker`(14 个共用同一镜像) |
+| `LKM-official-website` | `lkm-official-website:latest` | `astro` |
+| `LKM-bot` | `lkm-bot:latest` | `lkmbot`(`--profile bot`) |
+
+根仓自身的改动(`docker-compose.yml`、`deploy/apisix/*.yaml`)不构建镜像,只需重渲染 + 重启对应服务。
+
+**① 同步代码。** 服务器 `~/LKM-Website` **不是 git 工作区**(tarball 解压,无 `.git`),`git pull` 不可用。
+同步走 `git archive` → 上传 → 就地 overlay;overlay **不要带 `--delete`**,否则会删掉运行时目录
+(`deploy/apisix/rendered/`、`deploy/jwt/keys/`)。
+
+**② 核对镜像是否落后于源码。** 这一步最容易漏:源码同步了、镜像没重建,服务照常 Healthy,但跑的仍是旧代码。
+
+```sh
+# 本地仓库(有 .git):最后一次提交时间
+git -C LKM-service log -1 --format="%h %ci"
+
+# 服务器(无 .git):tar overlay 保留 commit 时间,故文件 mtime 可粗判同步到了哪一版
+ls -l --time-style=long-iso ~/LKM-Website/LKM-service/app/modules/content/graphql.py
+
+# 两端都跟镜像构建时间比
+sudo docker images --format "{{.Repository}}:{{.Tag}}|{{.CreatedAt}}" | grep -E "lkm-service|lkm-official-website"
+```
+镜像构建时间**早于**源码时间就要重建。
+
+**③ 回打服务器侧 Dockerfile 补丁。**
+
+```sh
+grep -n mirrors ~/LKM-Website/LKM-service/Dockerfile ~/LKM-Website/LKM-bot/Dockerfile
+```
+**没有输出 = 补丁被代码同步覆盖了**(该补丁只存在于服务器副本,从不进仓库)。不回打会卡在 PyPI:
+公网 `files.pythonhosted.org` 实测仅 ~7.8KB/s,`uv sync` 8 分钟无进展。后端补丁两处:
+
+```dockerfile
+# 构建阶段:`COPY pyproject.toml uv.lock ./` 之后
+# 只设 UV_INDEX_URL/UV_DEFAULT_INDEX 不生效——--frozen 下 uv 只认 lock 里逐文件记的下载 URL
+RUN sed -i 's#https://files.pythonhosted.org/#https://mirrors.tencentyun.com/pypi/#g;s#https://pypi.org/simple#https://mirrors.tencentyun.com/pypi/simple#g' uv.lock \
+    && uv sync --frozen --no-install-project
+```
+
+```dockerfile
+# 运行阶段:`apt-get update` 之前(bookworm 的 deb822 源文件,路径确实是这个)
+RUN sed -i 's#http://deb.debian.org#https://mirrors.cloud.tencent.com#g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+```
+
+**④ 构建。** 先留回滚 tag,再构建:
+
+```sh
+sudo docker tag lkm-service:latest        lkm-service:pre-<旧提交>          # 回滚点
+sudo docker tag lkm-official-website:latest lkm-official-website:pre-<旧提交>
+
+sudo $COMPOSE build backend     # 后端:镜像名是 lkm-service,服务名才叫 backend
+sudo $COMPOSE build astro       # 前端
+```
+> 改后端源码只需构建**一次**镜像,14 个容器共用。前端构建约 5~8 分钟,其中 `apk add tini`
+> 单步就要 3~4 分钟(apk 源慢,不是卡死)。
+
+**⑤ 重启。**
+
+```sh
+sudo $COMPOSE up -d astro                                  # 前端
+
+sudo $COMPOSE up -d backend auth                           # 后端先起 API 层,等 health 变 healthy
+sudo $COMPOSE up -d worker worker-send worker-notify worker-notification \
+  worker-outbox worker-dlq worker-content-index worker-points-reward \
+  worker-points-stats worker-points-tasks prefect-server prefect-worker
+```
+> worker 与 backend **共用同一镜像**:`up -d backend` 不会动 worker,必须像上面这样显式列出
+> (或用 `--force-recreate`)它们才会吃到新镜像。
+
+**⑥ 重建 `backend`/`auth` 后必须 `restart apisix`。** 容器重建会换 IP,而 APISIX 的 DNS 解析结果
+按 TTL(600s)缓存、**且每个 worker 进程各持一份**。症状是**间歇性 502**——同一秒内
+`/api/v1/health` 可能 200 而 `/graphql/v1` 502,**单次探测会误判成"已恢复"**:
+
+```sh
+sudo $COMPOSE restart apisix      # 中断数秒;配置从宿主 rendered 目录重读,无副作用
+```
+> 别用 `docker exec apisix getent hosts backend` 判断——那走容器内 libc,永远返回新 IP,
+> 与 APISIX Lua resolver 的缓存是两回事。判据是**连打多次**。
+
+**⑦ 验收。**
+
+```sh
+# 稳定性:必须连打,单次 200 不作数
+for i in $(seq 1 10); do printf "%s " "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/api/v1/health)"; done; echo
+for i in $(seq 1 5);  do printf "%s " "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1/graphql/v1 \
+  -H 'Content-Type: application/json' -d '{"query":"{__typename}"}')"; done; echo
+
+# 页面
+for p in / /my/ /forum/ /qa/ /projects/; do printf "%-12s %s\n" "$p" "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1$p)"; done
+
+# 容器与日志
+sudo $COMPOSE ps --format "{{.Service}}|{{.Status}}" | sort
+sudo docker logs --since 3m lkm-website-backend-1 2>&1 | grep -iE "error|traceback"
 ```
 
 ## 二、日志
