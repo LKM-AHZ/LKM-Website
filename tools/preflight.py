@@ -393,11 +393,11 @@ def check_certs(rep: Report, env: dict[str, str], running: set[str]) -> None:
     if "certbot" not in running:
         rep.add(SKIP, "TLS 证书", "certbot 未在跑（无域名时属正常）")
         return
-    domains = [
-        d.strip()
-        for d in env.get("LKM_COMMUNITY_DOMAINS", "").split(",")
-        if d.strip()
-    ]
+    # 分隔符规整必须与 deploy/apisix/render.sh 的 COMMUNITY 规整**逐字同规则**：那边按空格
+    # 切词渲染 hosts/证书 SNI，这里若按逗号切，多域名（空格分隔，render.sh 的既定写法）会被
+    # 当成**一个**带空格的域名去拼 /etc/letsencrypt/live/<带空格>/fullchain.pem → 必然读不到
+    # → 每轮误报「无证书」。两种写法都接受：逗号与任意空白都算分隔符。
+    domains = env.get("LKM_COMMUNITY_DOMAINS", "").replace(",", " ").split()
     if not domains:
         rep.add(SKIP, "TLS 证书", "未配置 LKM_COMMUNITY_DOMAINS")
         return

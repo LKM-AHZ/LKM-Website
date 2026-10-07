@@ -28,6 +28,12 @@ set -e
 
 # 社区域名（承载 /api、/graphql、前台与后台认证面；官网域已迁至独立服务器，不在此处）
 COMMUNITY="${APISIX_COMMUNITY_DOMAINS:-lkm-ahz.ltd}"
+# 多域名的分隔符规整：下游（hosts_of / origins_of / ssl_block 的 `for d in …`，以及取首个裸域的
+# `${COMMUNITY%% *}`）**一律按空格切词**，而 .env 里紧邻的 LKM_ALLOWED_HOSTS 是逗号分隔 ——
+# 照那边写法填 `a.com,b.com` 会被当成**一个**域名：hosts 渲染成 `a.com,b.com`，路由静默匹配
+# 不上且不报错。故此处把逗号与任意空白收敛成单空格、并去掉首尾空白：两种写法都接受，且渲染侧
+# 与 tools/preflight.py 的证书检查共用这条规则，不再各切各的。
+COMMUNITY="$(printf '%s' "$COMMUNITY" | tr -s ',[:space:]' ' ' | sed -e 's/^ *//' -e 's/ *$//')"
 SRC="${APISIX_SRC:-/src/apisix.yaml}"
 OUT="${APISIX_OUT:-/out/apisix.yaml}"
 SRC_CONFIG="${APISIX_SRC_CONFIG:-/src/config.yaml}"

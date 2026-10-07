@@ -250,7 +250,9 @@ docker compose up -d --build
 
 - `apisix-render` sidecar 读路由模板 + certbot 证书，渲染出内联 PEM 的 `ssls` 段写入共享卷（每 6h 或重启时重渲染），APISIX 监测文件变化自动 reload。
   它同时是**网关配置的单一模板展开点**：模板里只放占位，域名与请求体上限从环境变量展开——
-  `LKM_COMMUNITY_DOMAINS` → 各路由 `hosts`、CORS `allow_origins`、MinIO Host 改写、证书 SNI；
+  `LKM_COMMUNITY_DOMAINS` → 各路由 `hosts`、CORS `allow_origins`、MinIO Host 改写、证书 SNI
+  （多域名用空格分隔，逗号也接受；**首个**域名充当 MinIO Host 改写目标，每域自动带 www 变体 —
+  渲染与 `tools/preflight.py` 的证书检查共用同一条分隔符规整规则，两种写法不会各切各的）；
   `LKM_MAX_UPLOAD_BYTES` → 社群站各路由 `client-control.max_body_size`（与后端校验同源），
   `LKM_BOT_MAX_UPLOAD_BYTES` → **仅** bot 路由的同名项（bot 单文件上限 512MB，与社群站不可共用），
   `LKM_BOT_BASE_PATH` → bot 三条路由的 `uri` 与剥前缀正则（`proxy-rewrite.regex_uri`）的匹配串，

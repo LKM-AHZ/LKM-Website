@@ -126,11 +126,15 @@ else
 fi
 
 # ── 4) 登录网关限流：60/min → 持续打应出现 429 ──
+# 请求体字段名是 `account`（auth/schemas.py 的 UserLoginPassword），**不是** `username`：
+# 写错会拿 422 —— 请求照样被网关计数、限流照样能触发，但那时探针打的是「请求体校验失败」，
+# 而不是登录路径，等于这条检查答非所问。凭据故意用不存在的账号 + 短口令，凭据本身无所谓
+# （账号存在与否都只影响 401/200 分支，不影响网关计数），关键是**必须通过请求体校验**。
 got429=0
 i=1
 while [ "$i" -le 80 ]; do
     code=$(cc -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
-        -d '{"username":"smoke","password":"x"}' "https://$COMMUNITY$SP/api/v1/auth/login/password")
+        -d '{"account":"smoke","password":"x"}' "https://$COMMUNITY$SP/api/v1/auth/login/password")
     if [ "$code" = "429" ]; then
         got429=1
         # 第 1 次就 429 → 60/60s 的额度在本窗口内已被消耗（上一轮冒烟或同源其它流量），
