@@ -40,17 +40,19 @@
 | `worker-outbox` | `lkm-service:latest` | 无 | outbox relay(`boot.workers.outbox`) |
 | `postgres` | `timescale/timescaledb:latest-pg16` | 仅内网 `5432` | 后端数据库(biz `lkm` + auth `lkm_auth`);outbox、`points_ledger` 与 `audit_logs` 为 hypertable |
 | `redis` | `redis:7-alpine` | 仅内网 `6379` | leader 租约、共享限流 / 缓存 |
-| `pulsar` | `apachepulsar/pulsar:3.3.0` | 仅内网 `6650`/`8080` | **消息总线**(standalone,自带 ZK+BookKeeper;6650 broker / 8080 Admin REST)。**无状态化**启动包装,见下 |
+| `rabbitmq` | `rabbitmq:4.2-management-alpine` | 仅内网 `5672`/`15672` | **默认消息总线**(管理端口不发布到宿主) |
+| `pulsar` | `apachepulsar/pulsar:3.3.0` | 仅内网 `6650`/`8080` | **备选消息总线**(standalone,自带 ZK+BookKeeper;6650 broker / 8080 Admin REST)。仅 `--profile pulsar` 启动,见下 |
 | `minio` | `minio/minio:latest` | 仅容器内 `9000`/`9001` | S3 兼容对象存储:文件库文件与成员头像 |
 | `lkmbot` | `lkm-bot:latest` | 仅经网关 `/bot/` 子路径 | 社区机器人面板(AstrBot fork)。**可选组件**(`--profile bot`);面板 `6185` 不发布到宿主 |
 | `shipyard` | `soulter/shipyard-bay:latest` | 无 | bot 代码沙箱(旧版 Bay)。**可选组件**(`--profile bot`),挂 docker.sock |
 
 > `worker*` 与 `backend`/`auth` 共用 `lkm-service:latest` 镜像,仅启动入口不同;各自常驻消费
-> 一个 Pulsar 订阅(get 消费失败重投超限后进死信 topic `system/dlq`,由 `worker-dlq` 落库)。
+> 一个订阅(默认 RabbitMQ 队列;消费失败重投超限后进死信 `system/dlq` / `lkm.dlq-persist`,
+> 由 `worker-dlq` 落库)。
 > points 拆三个订阅(reward/stats/tasks)消费同一 `biz/points.apply` topic 实现扇出与故障隔离;
 > `worker-notification`(M6.8)以第四个订阅消费同一 topic 生成站内信,同样独立记账、互不阻塞。
 
-> **Pulsar 无状态化**:`pulsar` 由 `deploy/pulsar/entrypoint.sh` 包装启动——
+> **Pulsar 无状态化**(仅切回 Pulsar 时相关):`pulsar` 由 `deploy/pulsar/entrypoint.sh` 包装启动——
 > 每次启动**先清空数据目录**,broker 就绪后**幂等重建** `lkm` 租户与 `biz/auth/system` namespace;
 > healthcheck 语义为「broker 就绪**且** namespace 已建」,故依赖它的 12 个应用服务按
 > `service_healthy` 等它就绪即可(原一次性 `pulsar-init` 服务已随之删除:它只在首次 `up` 时跑,

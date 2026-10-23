@@ -22,14 +22,14 @@
 
 ## 一、Docker / Compose 常态运维
 
-> 本栈已切 **RabbitMQ** 消息总线:凡 `up`/`build`/`down` 类命令**必须**同时带
-> `-f docker-compose.yml -f docker-compose.rabbitmq.yml`,只用第一个文件会静默退回 pulsar 栈
-> (**本文其余小节出现的 `docker compose up/build/down` 同理**)。下文用 `$COMPOSE` 代指这两个
-> 文件,只读命令 `ps`/`logs`/`exec` 可省第二个文件。
+> 本栈默认使用 **RabbitMQ** 消息总线,已内置在 `docker-compose.yml`,
+> 直接 `docker compose up/build/down` 即可。
+> Pulsar 仅作备选:`LKM_MESSAGE_BUS=pulsar` + `docker compose --profile pulsar up -d`。
+> 下文用 `$COMPOSE` 代指 `docker compose`。
 
 ```sh
 cd ~/LKM-Website
-COMPOSE="docker compose -f docker-compose.yml -f docker-compose.rabbitmq.yml"
+COMPOSE="docker compose"
 
 $COMPOSE ps                  # 查看全部容器状态
 $COMPOSE ps --format "{{.Name}}: {{.Status}}"   # 只看状态行
