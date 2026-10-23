@@ -159,7 +159,7 @@ LKM_VERIFICATION_CODE_PEPPER=<与上面不同>
 
 ### 任务队列(worker)
 
-后端通过 Pulsar 订阅和独立进程消费异步任务；生产 Compose 将默认任务、发送、通知、积分、
+后端通过消息总线（默认 RabbitMQ，可切 Pulsar）订阅和独立进程消费异步任务；生产 Compose 将默认任务、发送、通知、积分、
 调度、死信和 outbox relay 分开运行。本地 dev 脚本不启动这些进程，需要验证时按目标订阅单独启动：
 
 ```sh

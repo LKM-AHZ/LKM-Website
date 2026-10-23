@@ -77,22 +77,23 @@
 > `event_contract_violations_total{fn,side}`(告警规则 `deploy/prometheus/rules/lkm-event-contract.yml`)。
 > 相关测试:`LKM-service/tests/test_event_contract.py`、`tests/deploy/test_pulsar_config.py`。
 
-### 切换消息总线为 RabbitMQ
+### 消息总线：RabbitMQ（默认）与切回 Pulsar
 
-应用默认使用 Pulsar。RabbitMQ 模式复用同一套 routing key、outbox、worker 与死信落库；
-Compose 使用持久化的 RabbitMQ quorum 队列，每个订阅各有一条队列，`points.apply` 的
-四个订阅仍分别收到事件。消费失败按 `LKM_PULSAR_DLQ_MAX_REDELIVER` 次重投上限进入
-`lkm.dlq-persist`，由现有 `worker-dlq` 落库。
+Compose 默认使用 RabbitMQ（`rabbitmq` 服务内置在 `docker-compose.yml`，无需覆盖文件）。
+它复用同一套 routing key、outbox、worker 与死信落库；使用持久化的 RabbitMQ quorum 队列，
+每个订阅各有一条队列，`points.apply` 的四个订阅仍分别收到事件。消费失败按
+`LKM_PULSAR_DLQ_MAX_REDELIVER` 次重投上限进入 `lkm.dlq-persist`，由现有 `worker-dlq` 落库。
 
 1. 在根目录 `.env` 设置 `RABBITMQ_DEFAULT_PASS` 和 `LKM_RABBITMQ_URL`，例如
    `amqp://lkm:<URL编码后的密码>@rabbitmq:5672/`。URL 中的密码需百分号编码，且须与
    `RABBITMQ_DEFAULT_PASS` 一致。RabbitMQ 管理端口只在容器网络内暴露。
-2. 切换前停止写入、等待 `outbox_pending_count` 和各订阅积压归零。两种 broker 的在途消息
-   不会自动迁移；不要让两套 worker 同时处理业务流量。
-3. 先运行 `docker compose down`（不要加 `-v`），再运行
-   `docker compose -f docker-compose.yml -f docker-compose.rabbitmq.yml up -d --build`。
-   覆盖文件自动把应用设为 RabbitMQ，并使 Pulsar 不启动。切回 Pulsar 时先排空
-   RabbitMQ 积压，用两份文件执行 `down`，再只用原 `docker-compose.yml` 执行 `up -d`。
+2. 直接运行 `docker compose up -d --build`。
+3. **切回 Pulsar**：先停止写入、等待 `outbox_pending_count` 和各订阅积压归零（两种 broker
+   的在途消息不会自动迁移；不要让两套 worker 同时处理业务流量），再运行
+   `docker compose down`（不要加 `-v`），在 `.env` 设 `LKM_MESSAGE_BUS=pulsar`，最后用
+   `docker compose --profile pulsar up -d --build` 启动。合并后 Pulsar 仅在 `--profile pulsar`
+   时启用；RabbitMQ 服务仍会被 `up` 拉起但无流量，可 `docker compose stop rabbitmq` 省资源。
+   切回 RabbitMQ 时反向操作：排空 Pulsar 积压、`down`、去掉 `LKM_MESSAGE_BUS=pulsar` 后再 `up`。
 
 Kubernetes 生产部署可用 `deploy/k8s/overlays/rabbitmq`：先在密钥源设置
 `RABBITMQ_DEFAULT_PASS` 和 `LKM_RABBITMQ_URL=amqp://lkm:<URL编码后的密码>@rabbitmq:5672/`，
