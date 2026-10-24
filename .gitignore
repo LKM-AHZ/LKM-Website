@@ -6,6 +6,10 @@ docs
 .dev/
 reference
 .obsidian
+.codex
+.ruff_cache
+.aws
+.agents
 __pycache__
 
 # 子项目以 git submodule 形式跟踪

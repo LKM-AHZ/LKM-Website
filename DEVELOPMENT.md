@@ -203,6 +203,19 @@ uv run python scripts/check_raw_sql.py # 裸 SQL 门禁:业务查询必须走 OR
 约定:以 **ty + ruff** 为准(ty 0 诊断 + ruff 干净);`basedpyright` 作为补充可选。
 测试文件豁免返回值类型标注(ruff 的 `ANN` 规则于 `tests/**` 关闭)。
 
+**金路径验收**:起好后端后可跑 `./scripts/demo_golden_path.sh`(注册 → 登录 → 发帖 →
+评论 → 文件审核 → 通知查询),逐步骤 HTTP 状态写入 `docs/acceptance/golden-path-<UTC>.log`。
+两条注册路径:
+
+- 真实验证码注册:后端开 `LKM_DEV_CODE_SINK=1`(仅 dev/local/test,生产启动校验会拒绝),
+  脚本设 `DEMO_REGISTER_EMAIL` 与 `AUTH_INTERNAL_TOKEN`(= `LKM_AUTH_HTTP_TOKEN`);脚本走
+  `/reg/normal` → `/auth/internal/dev-code` 取码 → `/reg/normal/verify`,再用新账号登录。
+  验证码仍只以哈希落库,明文仅出现在该内部响应,不写日志/不落盘。
+- 未开 dev-code:只跑 `/reg/local` 做接口 smoke,内容路径用已 seed 的 `DEMO_USER`。
+
+其余可选:`DEMO_USER2` 产生通知、`DEMO_TOTP_SECRET` 自动完成管理员 2FA step-up、
+`DEMO_ADMIN/DEMO_ADMIN_PASSWORD` 做文件审核。
+
 **数据库访问一律走 ORM**:PostgreSQL 查询用 SQLAlchemy ORM 与
 `app/db/repository.py` 的 `AsyncRepository` 表达,不要写裸 SQL——基类已内置软删除过滤、
 批量 upsert(`pg_upsert`)、`update_where`/`hard_delete_where` 等,service 层也靠它守住
