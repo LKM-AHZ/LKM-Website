@@ -235,7 +235,7 @@ uv run python scripts/check_raw_sql.py # 裸 SQL 门禁:业务查询必须走 OR
 
 ```sh
 API_URL=                # 指向后端:本地 http://127.0.0.1:8000;留空则不请求后端
-PUBLIC_SITE_URL=        # 站点对外 URL(可选,默认读 src/data/config.yaml)
+PUBLIC_SITE_URL=        # 站点对外 URL(可选;留空不绑定域名,使用相对 URL 且不生成 sitemap)
 PUBLIC_BASE_PATH=       # 子路径部署(可选,默认 /)
 ```
 

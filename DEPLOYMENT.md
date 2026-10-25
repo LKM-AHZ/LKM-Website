@@ -128,6 +128,9 @@ StatefulSet 取代 Pulsar。切换已有集群时也需先排空旧订阅，停�
   > 浏览器访问经 APISIX 统一入口即可,无需在安全组另开 9000。
 - **域名可选**:有域名走 `.env` 中 `LKM_COMMUNITY_DOMAINS` 配置的地址 + Let's Encrypt 正式证书;**无域名可用公网 IP 直连**——
   此时走 **HTTP(80)+自签证书(443)** 模式(见下文「无域名/IP 直连」一节),浏览器访问 IP 即可。
+  > **前端默认不绑定域名**:`PUBLIC_SITE_URL` 默认留空,此时 canonical/OG 使用相对 URL 且不生成
+  > sitemap。若部署环境有稳定域名并需要绝对分享链接和 sitemap,再设置
+  > `PUBLIC_SITE_URL=https://<你的域名>` 后重新构建前端。
 - 已安装 Docker 与 Docker Compose 插件(`docker compose version` 可正常输出)。
 - 如果需要 k8s 则需要安装 kubeadm 或使用发行版。
 - 已有 k8s 集群的情况下只需要安装 kubectl 不需要安装全套。

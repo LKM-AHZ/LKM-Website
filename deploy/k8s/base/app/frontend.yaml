@@ -55,9 +55,10 @@ spec:
             # SSR 服务端直连集群内 backend（不经网关，省一跳）
             - name: API_URL
               value: http://backend:8000
-            # 浏览器侧可见的站点地址：域名在 overlay 覆盖
+            # 浏览器侧可见的站点地址：默认留空，不绑定域名。
+            # 需要绝对 canonical/OG URL 或 sitemap 时，由具体 overlay 覆盖。
             - name: PUBLIC_SITE_URL
-              value: https://lkm-ahz.ltd
+              value: ""
           readinessProbe:
             exec:
               command: ['wget', '-qO-', 'http://127.0.0.1:4321/robots.txt']

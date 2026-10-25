@@ -132,9 +132,10 @@ services:
       PORT: 4321
       API_URL: http://backend:8000
       AI_ALLOWED_HOSTS: ${AI_ALLOWED_HOSTS:-api.openai.com}
-      # 站点对外 URL：astro 的 canonical/OG 绝对链接由它决定，改域名时**必须**跟随
-      # （见 DEPLOYMENT.md「换域名」）。默认值即生产域名，本机/测试环境在 .env 覆盖。
-      PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-https://lkm-ahz.ltd}
+      # 站点对外 URL 为可选参数：本项目默认不绑定域名。
+      # 留空时前端使用相对 canonical/OG URL，并跳过 sitemap 生成；
+      # 有稳定域名时再在 .env 中设置 PUBLIC_SITE_URL。
+      PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-}
     restart: ${LKM_RESTART_POLICY:-no}
     healthcheck:
       test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:4321/robots.txt']

@@ -4,15 +4,25 @@ LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 S
 
 ## 项目组成
 
-| 目录 | 技术栈 | 默认端口 | 用途 |
-|---|---|---:|---|
-| `LKM-official-website/` | Astro 7、Vue 3、React、Tailwind CSS 4 | `4321` | 社区与动态官网，SSR 运行 |
-| `LKM-service/` | FastAPI、SQLAlchemy、PostgreSQL、Pulsar/RabbitMQ | `8000` / `8001` | 业务 API、AUTH 服务及后台 worker |
-| `LKM-bot/` | Python、AstrBot fork | `6185`（仅经网关 `bot.` 子域） | 社区机器人面板，可选组件（`--profile bot`） |
-| `LKM-on-VSCode/` | TypeScript、VS Code Extension API | — | 博客仓库克隆、编辑与同步 |
-| `deploy/` | APISIX、Kustomize、可观测性配置 | `80` / `443` | Compose/Kubernetes 部署资产 |
+| 目录                    | 技术栈                                           |                       默认端口 | 用途                                        |
+| ----------------------- | ------------------------------------------------ | -----------------------------: | ------------------------------------------- |
+| `LKM-official-website/` | Astro 7、Vue 3、React、Tailwind CSS 4            |                         `4321` | 社区与动态官网，SSR 运行                    |
+| `LKM-service/`          | FastAPI、SQLAlchemy、PostgreSQL、Pulsar/RabbitMQ |                `8000` / `8001` | 业务 API、AUTH 服务及后台 worker            |
+| `LKM-bot/`              | Python、AstrBot fork                             | `6185`（仅经网关 `bot.` 子域） | 社区机器人面板，可选组件（`--profile bot`） |
+| `LKM-on-VSCode/`        | TypeScript、VS Code Extension API                |                              — | 博客仓库克隆、编辑与同步                    |
+| `deploy/`               | APISIX、Kustomize、可观测性配置                  |                   `80` / `443` | Compose/Kubernetes 部署资产                 |
 
 各子目录是独立 Git 仓库；根仓库只管理编排、部署资产和跨项目文档。提交前请在实际修改的仓库中分别检查 `git status`。
+
+## 文档导航
+
+| 入口                                                       | 用途                                             |
+| ---------------------------------------------------------- | ------------------------------------------------ |
+| [docs/README.md](./docs/README.md)                         | 跨项目文档索引、阅读路径与维护约定               |
+| [docs/后端架构与现状.md](./docs/后端架构与现状.md)         | 后端服务拓扑、数据模型、认证、消息链路与模块边界 |
+| [docs/社区需求与开发规划.md](./docs/社区需求与开发规划.md) | 一期业务现状、差距、优先级与验收口径             |
+| [DEVELOPMENT.md](./DEVELOPMENT.md)                         | 本地开发、环境变量与常用命令                     |
+| [DEPLOYMENT.md](./DEPLOYMENT.md)                           | Compose/Kubernetes 部署、网关、证书与运维        |
 
 ## 快速开始
 
@@ -47,12 +57,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File dev.ps1 -Mode all
 
 启动后常用地址：
 
-| 服务 | 地址 |
-|---|---|
-| 动态前端 | `http://127.0.0.1:4321` |
-| 后端 API | `http://127.0.0.1:8000` |
-| Swagger UI | `http://127.0.0.1:8000/docs` |
-| ReDoc | `http://127.0.0.1:8000/redoc` |
+| 服务       | 地址                          |
+| ---------- | ----------------------------- |
+| 动态前端   | `http://127.0.0.1:4321`       |
+| 后端 API   | `http://127.0.0.1:8000`       |
+| Swagger UI | `http://127.0.0.1:8000/docs`  |
+| ReDoc      | `http://127.0.0.1:8000/redoc` |
 
 完整步骤、环境变量和排错见 [DEVELOPMENT.md](./DEVELOPMENT.md)。
 
