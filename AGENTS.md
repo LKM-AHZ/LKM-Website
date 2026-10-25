@@ -13,7 +13,7 @@ Make code changes and commits in the owning submodule. Check its own `AGENTS.md`
 
 ## Build, Test, and Development Commands
 
-Run `git submodule update --init --recursive` after cloning. From the root, `./dev.sh` installs dependencies and starts the frontend and backend; `./dev.sh --no-run` only installs them. `docker compose config` validates the full stack configuration before deployment.
+Run `git submodule update --init --recursive` after cloning. From the root, `./dev.sh` (Linux/macOS) or `./dev.ps1` (Windows PowerShell 5.1+, and pwsh on any OS) installs dependencies and starts the frontend and backend; adding `--no-run` only installs them. `docker compose config` validates the full stack configuration before deployment.
 
 Run checks from the relevant submodule:
 

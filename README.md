@@ -52,11 +52,16 @@ LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 S
 ./dev.sh back
 ```
 
-Windows 可运行 `dev.bat`（支持 `front`、`back` 和 `--no-run`），或执行：
+Windows 及装了 `pwsh` 的 Linux/macOS 使用同一份 `dev.ps1`，参数与 Bash 版一致：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File dev.ps1 -Mode all
+.\dev.ps1                # Windows PowerShell：全部服务
+.\dev.ps1 front          # 仅前端（front / back / --no-run 同 Bash 版）
+pwsh ./dev.ps1 front     # Linux / macOS
 ```
+
+Windows 上若执行策略不允许运行脚本：
+`powershell -NoProfile -ExecutionPolicy Bypass -File .\dev.ps1 front`。
 
 启动后常用地址：
 

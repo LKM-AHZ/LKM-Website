@@ -19,18 +19,18 @@
 
 ## 一、仓库结构与文档约定
 
-LKM 网站由三个独立子项目组成(根仓库仅做编排,包含本教程与 dev 脚本):
+LKM 网站由四个独立子项目组成(根仓库仅做编排,包含文档与 dev 脚本):
 
 ```
-LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / dev 脚本 / 本教程)
-├── DEVELOPMENT.md            # 本文件
-├── DEPLOYMENT.md             # 生产部署教程
+LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / dev 脚本 / 文档)
+├── docs/                     # 架构、部署、运维与开发文档(本文件即 docs/DEVELOPMENT.md)
 ├── docker-compose.yml        # 生产编排(apisix/astro/postgres/redis/minio/backend/worker 等)
-├── dev.bat / dev.ps1 / dev.sh# 本地一键启动脚本
+├── dev.ps1                   # 本地一键启动脚本(Windows PowerShell 与 pwsh 通用)
+├── dev.sh                    # 本地一键启动脚本(Linux / macOS,参数与 dev.ps1 一致)
 ├── .gitignore                # 忽略 .env、记忆目录等敏感/本地文件
-├── LKM社区开发方案/          # 后端设计方案与执行路线图
 ├── LKM-official-website/     # 动态前端(Astro SSR + Vue/React islands)
 ├── LKM-service/              # 后端(FastAPI,REST /api/v1 + GraphQL)
+├── LKM-bot/                  # 机器人(astrbot)
 └── LKM-on-VSCode/            # 博客同步 VS Code 扩展
 ```
 
@@ -57,16 +57,18 @@ LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / 
 
 根目录提供统一启动脚本，可安装依赖并并发启动动态前端和后端：
 
-```sh
-# Windows(bat)
-.\dev.bat            # 两个服务一起(单窗口实时交错日志,Ctrl+C 全部停止)
-.\dev.bat front      # 仅前端
-.\dev.bat back       # 仅后端
-.\dev.bat --no-run   # 仅安装全部依赖
-.\dev.bat back --no-run # 仅安装后端依赖
+```powershell
+# Windows(PowerShell 5.1 或 7),参数与 bash 版一致
+.\dev.ps1            # 两个服务一起(单窗口实时交错日志,Ctrl+C 全部停止)
+.\dev.ps1 front      # 仅前端
+.\dev.ps1 back       # 仅后端
+.\dev.ps1 --no-run   # 仅安装全部依赖
+.\dev.ps1 back --no-run # 仅安装后端依赖
 
-# 或 PowerShell 直接调用
-powershell -NoProfile -ExecutionPolicy Bypass -File dev.ps1 -Mode all
+# 执行策略受限时用完整命令
+powershell -NoProfile -ExecutionPolicy Bypass -File .\dev.ps1 front
+
+# Linux / macOS 装了 pwsh 时可用同一份脚本: pwsh ./dev.ps1 front
 
 # bash
 ./dev.sh           # 两个服务一起
@@ -84,9 +86,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File dev.ps1 -Mode all
 3. 默认并发启动动态前端和后端。
 
 两套脚本均可通过 `FRONT_PORT` 和 `BACKEND_PORT` 环境变量覆盖默认端口；只会检查当前模式需要的工具和端口。未知参数会直接报错。
-Linux 上的 Bash 启动脚本默认让前端使用轮询监视文件，避免系统 inotify 配额耗尽时
+Linux 上 `dev.sh` 与 `dev.ps1` 都会默认让前端使用轮询监视文件，避免系统 inotify 配额耗尽时
 Vite 报 `ENOSPC: System limit for number of file watchers reached`。轮询会增加少量 CPU
-开销；若系统已提高限额，可用 `CHOKIDAR_USEPOLLING=false ./dev.sh` 恢复原生监视。
+开销；若系统已提高限额，可用 `CHOKIDAR_USEPOLLING=false` 覆盖，例如
+`CHOKIDAR_USEPOLLING=false ./dev.sh`。
 直接进入前端仓库运行 `pnpm dev` 时，可先设置 `CHOKIDAR_USEPOLLING=1`。
 启动后端前会使用其实际配置测试 PostgreSQL 连接，并初始化业务库和认证库的 schema；数据库未就绪时脚本会直接指出目标地址，避免后端持续打印连接异常。`--no-run` 和仅前端模式不会检查数据库。
 
