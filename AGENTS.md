@@ -21,6 +21,7 @@ Run checks from the relevant submodule:
 - Backend: `uv run pytest && uv run ty check && uv run ruff check && uv run python scripts/check_raw_sql.py`.
 - Bot: `python -m pytest`.
 - VS Code extension: `pnpm run compile && pnpm test`.
+- Root contracts/docs: `cd LKM-service && uv run pytest tests/deploy -q`, `python3 scripts/check_doc_links.py`, `python3 scripts/check_submodule_pointers.py`.
 
 ## Coding Style & Testing Guidelines
 

@@ -38,7 +38,7 @@ jobs:
       #   若本 job 被设为必需检查，路径不匹配时它根本不会上报状态，PR 会永远卡在
       #   "Expected — Waiting for status to be reported"。改成 job 内判定：job 照常跑、
       #   照常上报成功，只是跳过昂贵的步骤。
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # 需要完整历史才能把 HEAD 与 base 做 diff（默认 fetch-depth: 1 只有一个提交）
           fetch-depth: 0
@@ -82,7 +82,7 @@ jobs:
           fi
           git submodule status --recursive
 
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         if: steps.changed.outputs.run == 'true'
         with:
           enable-cache: true
@@ -103,12 +103,36 @@ jobs:
           LKM_REQUIRE_MONOREPO: "1"
         run: uv run pytest tests/deploy -q
 
+  doc-links:
+    name: 文档链接
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # 文档搬家时链接不会自动跟着改，而 Markdown 渲染器不会报错——只有点开的人才
+      # 发现 404（docs/ 迁移那次就留了 24 条断链，事后才靠人工全量扫描发现）。
+      - run: python3 scripts/check_doc_links.py
+
+  submodule-pointers:
+    name: 子模块指针
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # 只需 gitlink 与 .gitmodules，不必递归检出子模块（省时间也避免指针不可达时先炸）
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # 跨仓检查 GitHub 不互认：子仓 CI 红了根仓库照样能合。这里主动查指针 commit 的
+      # check-runs；未完成/无 CI 只告警，已完成且失败才判红（见脚本头部说明）。
+      - name: 校验指针可达性与子仓 CI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/check_submodule_pointers.py
+
   compose-config:
     name: compose 插值 + 挂载源校验
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: docker compose config
         # `:?` 必填项需要值才能完成插值；下面全是一次性假值，不连接任何服务、
         # 也不会进入任何镜像（只是本步骤的环境变量）。

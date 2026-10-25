@@ -1,0 +1,19 @@
+# 根仓库只做编排：没有应用依赖，需要跟的是 workflow 里的 action 与 compose 里的镜像。
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    # 所有 action 的更新合成一个 PR，避免每周开一堆单条升级
+    groups:
+      github-actions:
+        patterns: ["*"]
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker-compose
+    directory: /
+    groups:
+      compose-images:
+        patterns: ["*"]
+    schedule:
+      interval: weekly

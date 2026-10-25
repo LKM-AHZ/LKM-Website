@@ -122,6 +122,30 @@ pnpm dev
 
 ---
 
+### 方式三:CI 门禁与本地等价命令
+
+每个仓库的门禁都能在本地原样跑一遍，提交前可逐条对照：
+
+| 仓库 | 门禁 | 本地命令 |
+| --- | --- | --- |
+| 根仓库 | 跨仓部署契约 | `cd LKM-service && uv run pytest tests/deploy -q`（**不需要数据库**） |
+| 根仓库 | 文档链接 | `python3 scripts/check_doc_links.py` |
+| 根仓库 | 子模块指针 | `python3 scripts/check_submodule_pointers.py`（指针可达 + 子仓 CI 结论） |
+| 根仓库 | compose 插值 | `docker compose config --quiet`（先按 `.env.example` 导出必填变量） |
+| LKM-service | lint / 格式 / 边界 / 类型 | `uv run ruff check app auth core boot tests scripts`、`uv run ruff format --check …`、`uv run lint-imports`、`uv run ty check app auth core boot scripts` |
+| LKM-service | 测试 | `uv run pytest -q`（需要 PostgreSQL） |
+| 官网 | 构建 + 产物检查 | `PUBLIC_SITE_URL=https://lkm-ci.example pnpm run build` 后跑 `check:seo` / `check:links` / `check:budget` |
+| LKM-bot | 类型 / 格式 / 测试 | `uv run ty check .`、`uv run ruff format --check .`、`uv run pytest` |
+| LKM-on-VSCode | 编译 + 单测 | `pnpm run compile && pnpm test` |
+
+几点约定：
+
+- 官网的 sitemap 只在设置了 `PUBLIC_SITE_URL` 时才生成，所以 CI 用 RFC 2606 保留的
+  `.example` 域名做「生产形态构建」；不设这个变量时 `check:seo` 会因为缺 sitemap 直接失败。
+- `contracts` 只读根仓库的 compose / deploy 资产，**不需要数据库**——本地没起 PostgreSQL 也能跑。
+- 子模块指针改动的正确顺序是：先让对应子仓库的 CI 变绿并 push，再更新根仓库指针；
+  `submodule-pointers` 会检查指针 commit 的 check-runs，红的会被拦下。
+
 ## 四、后端开发(LKM-service)
 
 ### 环境变量
