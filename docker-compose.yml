@@ -27,7 +27,7 @@ services:
   apisix-render:
     # 纯 shell sidecar（只跑 render.sh 的 sh/awk/sed/openssl），非 Web 服务器角色：
     # 用最小 alpine，不借用任何 Web 服务器镜像。
-    image: alpine:3.19
+    image: alpine:3.20
     entrypoint: ['sh', '/src/render.sh']
     environment:
       # 网关配置的**单一来源**：路由 hosts 与 CORS 来源由域名变量展开，请求体上限与后端LKM_MAX_UPLOAD_BYTES 取同一个 env。
@@ -66,7 +66,7 @@ services:
 
   # 微型 ACME http-01 responder（非网关角色，仅服务 certbot webroot；见 apisix.yaml acme-challenge 路由）
   acme-webroot:
-    image: nginx:1.27-alpine
+    image: nginx:1.30-alpine
     volumes:
       - ./deploy/apisix/acme-webroot.conf:/etc/nginx/conf.d/default.conf:ro
       - certbot_www:/var/www/certbot:ro
@@ -75,7 +75,7 @@ services:
       - lkm
 
   apisix:
-    image: apache/apisix:3.9.0-debian
+    image: apache/apisix:3.19.0-debian
     depends_on:
       apisix-render:
         condition: service_healthy
@@ -248,7 +248,7 @@ services:
   # 启用：LKM_OTEL_ENABLED=true 且 LKM_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318/v1/traces
   # 后 `docker compose --profile otel up -d`。内部指标 :8888/metrics 可查接收 span 数。
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.109.0
+    image: otel/opentelemetry-collector-contrib:0.163.2
     profiles: ['otel']
     command: ['--config=/etc/otelcol/config.yaml']
     volumes:
@@ -267,7 +267,7 @@ services:
   # `docker compose --profile clickhouse up -d`。DDL 由 deploy/clickhouse/init.sql
   # 在数据卷首启时执行；表结构变更需重建卷（down -v）或手动 ALTER。
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8-alpine
+    image: clickhouse/clickhouse-server:26.8-alpine
     profiles: ['clickhouse']
     environment:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-lkm}
@@ -294,7 +294,7 @@ services:
   # Vector 日志采集：读 Docker 容器日志 →
   # 解析 core/logging.py 的 JSON → 写 lkm.app_logs。需挂 docker socket 与日志目录。
   vector:
-    image: timberio/vector:0.43.0-alpine
+    image: timberio/vector:0.60.0-alpine
     profiles: ['clickhouse']
     depends_on:
       clickhouse:
@@ -317,7 +317,7 @@ services:
   # Prometheus 指标抓取：只抓 backend 的 /metrics
   # （auth 进程刻意不挂 /metrics，见部署文档「已知限制」）。默认不启。
   prometheus:
-    image: prom/prometheus:v2.54.1
+    image: prom/prometheus:v3.15.1
     profiles: ['monitoring']
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -339,7 +339,7 @@ services:
   # 配置只在启动时需要，且 Alertmanager 不自动重载——改地址后需
   # `docker compose restart alertmanager`（见 docs/DEPLOYMENT.md「告警投递」）。
   alertmanager-render:
-    image: alpine:3.19
+    image: alpine:3.20
     profiles: ['monitoring']
     entrypoint: ['sh', '/src/render.sh']
     environment:
@@ -359,7 +359,7 @@ services:
   # 此前只有 rule_files，既没有 alerting 段也没有本服务 —— 告警只在 Prometheus UI
   # 里可见，等于没人会知道（DBPoolExhausted / OutboxBacklogHigh 这类尤其致命）。
   alertmanager:
-    image: prom/alertmanager:v0.27.0
+    image: prom/alertmanager:v0.34.1
     profiles: ['monitoring']
     depends_on:
       # 必须等渲染完成：单文件 bind 的源不存在时 Docker 会把挂载点建成**目录**，
@@ -383,7 +383,7 @@ services:
   # deploy/grafana/provisioning 预置（QPS/P50/P95/错误率/outbox 积压/Pulsar lag）。
   # 默认只绑回环，公网暴露请自行经网关加鉴权。
   grafana:
-    image: grafana/grafana:11.2.0
+    image: grafana/grafana:13.2.4
     profiles: ['monitoring']
     depends_on:
       - prometheus
@@ -402,7 +402,7 @@ services:
 
   # Infisical 密钥管理：默认不启。独立 Redis 避免首次引导时重建主栈 Redis。
   infisical-redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     profiles: ['infisical']
     command: ['redis-server', '--save', '', '--appendonly', 'no']
     healthcheck:
@@ -415,7 +415,7 @@ services:
       - lkm
 
   infisical-db:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     profiles: ['infisical']
     environment:
       POSTGRES_USER: infisical
@@ -434,7 +434,7 @@ services:
       - lkm
 
   infisical:
-    image: infisical/infisical:v0.165.16
+    image: infisical/infisical:v0.167.0
     profiles: ['infisical']
     depends_on:
       infisical-db:
@@ -485,7 +485,7 @@ services:
   # **不持久化**（默认 `--save "" --appendonly no`）：原先靠 AOF 兜底的租约/限流状态已改为
   # 不依赖持久化，重启即空属预期。
   redis:
-    image: ${LKM_REDIS_IMAGE:-redis:7-alpine}
+    image: ${LKM_REDIS_IMAGE:-redis:8-alpine}
     command: ${LKM_REDIS_COMMAND:-redis-server --save "" --appendonly no}
     volumes:
       - redis_data:/data
@@ -513,7 +513,7 @@ services:
   # 9 个 worker 全卡 Created（本机已复发三次，三条「钉住地址」的路实测均无效）。
   pulsar:
     profiles: ['pulsar']
-    image: apachepulsar/pulsar:3.3.0
+    image: apachepulsar/pulsar:5.0.0
     entrypoint: ['/bin/sh', '/pulsar-entrypoint.sh']
     environment:
       # standalone 内存受限，避免开发机/小主机被 OOM
@@ -567,7 +567,7 @@ services:
   # 检索引擎 P2（可选：`--profile search`）。中文分词开箱（CJK 按字切分），
   # 正好补 P1 的「2 字中文退化为顺序扫描」；主键固定 id 由应用侧建索引时声明。
   meilisearch:
-    image: getmeili/meilisearch:v1.11
+    image: getmeili/meilisearch:v1.55
     profiles: ['search']
     environment:
       MEILI_ENV: production
@@ -585,7 +585,7 @@ services:
   # 检索引擎 P3（可选：`--profile search`）。单节点、关闭安全插件（内网部署）；
   # 中文分词依赖集群侧插件（ik/smartcn），未装则用 standard 分析器，见 §8 登记。
   opensearch:
-    image: opensearchproject/opensearch:2.17.1
+    image: opensearchproject/opensearch:2.19.7
     profiles: ['search']
     environment:
       discovery.type: single-node
@@ -1192,7 +1192,7 @@ services:
   # LKM_PREFECT_ENABLED 只控制 jobs handler 是否转交复杂 flow。
   # UI 不发布公网端口（运维经 SSH 隧道访问 server:4200）。
   prefect-postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: prefect
       POSTGRES_PASSWORD: ${PREFECT_DB_PASSWORD:?生产需设置 PREFECT_DB_PASSWORD}
@@ -1302,7 +1302,7 @@ services:
   # 保持单一来源、不手改；升级即整目录替换）。注意上游 main 已改用 Foundry 安装，
   # 故这里**钉死 tag**而不是跟 main（路线图 §8 有登记）。
   signoz-init-clickhouse:
-    image: clickhouse/clickhouse-server:25.5.6
+    image: clickhouse/clickhouse-server:26.9.24.8
     profiles: ['signoz']
     # 一次性：拉取 histogramQuantile UDF 可执行文件到共享卷（custom-function.xml 引用它）。
     # 这一步**需要容器出网**（GitHub Releases）；受限网络下会失败，此时 ClickHouse 仍能起，
@@ -1330,7 +1330,7 @@ services:
       - signoz
 
   signoz-zookeeper:
-    image: signoz/zookeeper:3.7.1
+    image: signoz/zookeeper:3.9.3
     profiles: ['signoz']
     user: root
     # 官方 cluster.xml 里 ZooKeeper 主机名写死为 `zookeeper-1`，故在此打网络别名，
@@ -1359,7 +1359,7 @@ services:
     restart: ${LKM_RESTART_POLICY:-no}
 
   signoz-clickhouse:
-    image: clickhouse/clickhouse-server:25.5.6
+    image: clickhouse/clickhouse-server:26.9.24.8
     profiles: ['signoz']
     tty: true
     depends_on:
@@ -1397,7 +1397,7 @@ services:
 
   # 一次性：建库建表（bootstrap + sync up + async up），跑完即退。
   signoz-migrator:
-    image: signoz/signoz-otel-collector:v0.144.5
+    image: signoz/signoz-otel-collector:v0.144.14
     profiles: ['signoz']
     depends_on:
       signoz-clickhouse:
@@ -1419,7 +1419,7 @@ services:
       - signoz
 
   signoz-otel-collector:
-    image: signoz/signoz-otel-collector:v0.144.5
+    image: signoz/signoz-otel-collector:v0.144.14
     profiles: ['signoz']
     depends_on:
       signoz-clickhouse:
@@ -1453,7 +1453,7 @@ services:
       - signoz
 
   signoz:
-    image: signoz/signoz:v0.128.0
+    image: signoz/signoz:v0.147.0
     profiles: ['signoz']
     depends_on:
       signoz-clickhouse:
