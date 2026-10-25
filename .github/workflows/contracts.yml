@@ -16,6 +16,9 @@ on:
   push:
     branches: [master, main]
   pull_request:
+  # 合并队列：PR 进入队列后，GitHub 生成的是合成提交，`pull_request` 事件不再触发。
+  # 没有这个触发器，等于「排队合入的那次没有验过」——而它正是最终落进主干的提交。
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -31,33 +34,77 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # 刻意**不用** workflow 级 `paths:` 过滤：
+      #   若本 job 被设为必需检查，路径不匹配时它根本不会上报状态，PR 会永远卡在
+      #   "Expected — Waiting for status to be reported"。改成 job 内判定：job 照常跑、
+      #   照常上报成功，只是跳过昂贵的步骤。
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          # 必须递归检出：这批测试会读 LKM-bot 的源码（sso.py / Dockerfile / .dockerignore）
-          # 与根仓库的 deploy/。缺子模块时 conftest 会整批 skip —— 这里要的是真跑。
-          submodules: recursive
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
-        with:
-          enable-cache: true
-      - name: 安装后端依赖
-        working-directory: LKM-service
-        run: uv sync --frozen
-      - name: 跑跨仓部署契约
-        working-directory: LKM-service
-        run: uv run pytest tests/deploy -q
-      - name: 断言没有被跳过
-        # 上一步若因缺子模块而全部 skip，pytest 仍退出 0 —— 那会变成「绿着但没验」。
-        # 这里把 skip 视为失败，让守卫的降级路径不会污染根仓库 CI。
-        working-directory: LKM-service
+          # 需要完整历史才能把 HEAD 与 base 做 diff（默认 fetch-depth: 1 只有一个提交）
+          fetch-depth: 0
+
+      - name: 判断契约相关资产是否变化
+        id: changed
+        # 取不到 base 时一律按「有变化」处理（fail-open）：宁可多跑一次，
+        # 也不能因为浅克隆/强推/事件形态差异把真正的契约变更漏掉。
         run: |
-          uv run pytest tests/deploy -q --no-header | tee /tmp/deploy.log
-          if grep -qE '[0-9]+ skipped' /tmp/deploy.log; then
-            echo "::error::tests/deploy 出现 skipped：说明子模块未检出，跨仓契约没被真正验证"
-            exit 1
+          set -eu
+          base="${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}"
+          if [ -z "$base" ] || [ "${base//0/}" = "" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "无法确定可比较的 base（事件 ${{ github.event_name }}，base='${base}'），按有变化处理"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$base"...HEAD)
+          echo "--- 相对 $base 的变更 ---"
+          echo "$changed"
+          # 清单来自 tests/deploy 实际读取的资产：compose、deploy/、.env.example、
+          # .gitignore、`docs/`（恢复演练断言会读 docs/DEPLOYMENT.md 的正文）、
+          # tools/（backup.py）、scripts/，以及会改变被测内容的子模块指针。
+          # `DEPLOYMENT.md` 单独保留：文档若被移回根目录也能触发（多跑一次的代价可忽略）。
+          if echo "$changed" | grep -qE '^(docker-compose\.yml|\.env\.example|\.gitignore|DEPLOYMENT\.md|docs/|deploy/|tools/|scripts/|LKM-service|LKM-bot|\.github/workflows/contracts\.yml)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "本次变更不涉及契约资产，跳过昂贵步骤（job 仍上报成功）"
           fi
 
+      - name: 检出子模块
+        if: steps.changed.outputs.run == 'true'
+        # 不用 actions/checkout 的 submodules 选项：它在指针不可达时只抛一条
+        # `upload-pack: not our ref <sha>`，看不出是「子仓库没 push」。这里包一层，
+        # 把最常见的成因和修法直接打出来。
+        run: |
+          set -eu
+          if ! git submodule sync --recursive || ! git submodule update --init --recursive; then
+            echo "::error title=子模块检出失败::根仓库提交的 LKM-* 指针可能指向 GitHub 上尚不存在的 commit。最常见原因：子仓库改完没 push，就更新了根仓库的指针。修法：先在对应子仓库 git push，再重新提交根仓库指针。"
+            exit 1
+          fi
+          git submodule status --recursive
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        if: steps.changed.outputs.run == 'true'
+        with:
+          enable-cache: true
+
+      - name: 安装后端依赖
+        if: steps.changed.outputs.run == 'true'
+        working-directory: LKM-service
+        run: uv sync --frozen
+
+      - name: 跑跨仓部署契约
+        if: steps.changed.outputs.run == 'true'
+        working-directory: LKM-service
+        env:
+          # 前提缺失时**失败**而不是 skip。
+          # 本工作流已递归检出子仓库，缺子模块属于配置错误；若退化成 skip，
+          # 结果会是「绿灯但跨仓契约一条没验」。用环境契约而不是去 grep pytest 输出：
+          # 抓人类可读的 "N skipped" 依赖汇总格式，pytest 改一次就静默失效。
+          LKM_REQUIRE_MONOREPO: "1"
+        run: uv run pytest tests/deploy -q
+
   compose-config:
-    name: compose 插值校验
+    name: compose 插值 + 挂载源校验
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -78,4 +125,7 @@ jobs:
           LKM_RABBITMQ_URL: amqp://ci:ci@rabbitmq:5672/
         # --quiet 只校验（语法 + 变量插值 + 服务引用），不产生输出。
         # 静态 yaml.safe_load 查不出插值失败，这条是 tests/deploy 的补充而非重复。
+        # 语义层（bind 源是否被跟踪、服务是否有 image、命名卷是否声明）在
+        # LKM-service/tests/deploy/test_compose_semantics.py —— 那里能在本地跑，
+        # 不依赖 docker。
         run: docker compose config --quiet

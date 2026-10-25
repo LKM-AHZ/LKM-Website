@@ -14,7 +14,7 @@
 # 「不投递」的接收器，告警仍在 UI 可见）：
 #   kubectl -n lkm create secret generic lkm-alert-webhook \
 #     --from-literal=url='https://...'
-# 详见 DEPLOYMENT.md「告警投递」。
+# 详见 docs/DEPLOYMENT.md「告警投递」。
 apiVersion: v1
 kind: Service
 metadata:

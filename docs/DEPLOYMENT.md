@@ -119,7 +119,7 @@ StatefulSet 取代 Pulsar。切换已有集群时也需先排空旧订阅，停�
 后端 REST 前缀为 `/api/vN`，GraphQL 使用 `/graphql/vN`（当前为 `/graphql/v1`）。APISIX 用 Docker 内嵌 DNS(`dns_resolver: ['127.0.0.11']` + `discovery_type: dns`)在运行时动态解析 `backend`/`astro`,不依赖启动期 DNS。
 
 > 纯静态官网(`lkm-ahz.icu`)已迁出本编排:它是独立仓库、部署在独立服务器上(自备 nginx + certbot),
-> 不再经本栈的 APISIX 分流。部署方式见 [LKM-official-static/DEPLOYMENT.md](./LKM-official-static/DEPLOYMENT.md)。
+> 不再经本栈的 APISIX 分流。部署方式见 [LKM-official-static/DEPLOYMENT.md](https://github.com/LKM-AHZ/LKM-official-static/blob/main/DEPLOYMENT.md)。
 
 ## 前置条件
 
@@ -714,7 +714,7 @@ docker compose up -d --build
 ## 八、Kubernetes 部署（可选，与 compose 并列）
 
 除本教程的 compose 形态外，仓库另提供一套 **Kustomize 清单**把整栈搬到 k8s，
-入口是 [`deploy/k8s/README.md`](deploy/k8s/README.md)：
+入口是 [`deploy/k8s/README.md`](../deploy/k8s/README.md)：
 
 ```sh
 # Secret 与网关证书（从根目录 .env 与自签证书生成）

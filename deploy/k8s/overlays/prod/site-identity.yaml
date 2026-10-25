@@ -1,5 +1,5 @@
 # 生产站点身份：后端「自己的身份」类配置 + 对外地址。
-# 这些**不**由网关的域名变量派生（见 DEPLOYMENT.md「换域名」一节）：
+# 这些**不**由网关的域名变量派生（见 docs/DEPLOYMENT.md「换域名」一节）：
 # WebAuthn 的 RP_ID/Origin、GitHub OAuth 回调、前端回跳、S3 预签名 URL 的对外 host。
 #
 # ⚠️ 换域名时这几项必须与 LKM_COMMUNITY_DOMAINS 一起改，漏改的表现是：

@@ -156,7 +156,7 @@ services:
   # 对外只经网关的**社群域子路径** /bot/（`deploy/apisix/apisix.yaml` 的 bot-* 路由，
   # 网关剥前缀后转发到这里），面板由社区后台以同源 iframe 内嵌，登录走社区后台 SSO 免登。
   # **刻意不发布 6185**：面板是管理员面，多一个宿主端口就多一个绕过网关限流的入口。
-  # 6199（OneBot v11 / NapCat WebSocket）同样不发布，接法见 DEPLOYMENT.md「LKM Bot」一节。
+  # 6199（OneBot v11 / NapCat WebSocket）同样不发布，接法见 docs/DEPLOYMENT.md「LKM Bot」一节。
   lkmbot:
     profiles: ['bot']
     build:
@@ -214,7 +214,7 @@ services:
   # ⚠️ 安全面：挂 docker.sock ≈ 把宿主机 root 交给容器；仅 profile=bot 启用，用完 down。
   # ⚠️ 与 bot 默认 booter 不匹配：bot 默认 sandbox.booter=shipyard_neo，而本服务是**旧 Bay**。
   #    要生效需在面板「配置 → 沙箱」把 booter 改成 shipyard 并填 endpoint http://shipyard:8156
-  #    + 这里的 ACCESS_TOKEN（见 DEPLOYMENT.md）。
+  #    + 这里的 ACCESS_TOKEN（见 docs/DEPLOYMENT.md）。
   # ⚠️ SHIP_DATA_DIR 是**宿主机绝对路径**（bay 原样交给 Docker API 做 bind），默认取自
   #    ${PWD}，故必须从仓库根执行 compose；换目录执行会指向错误位置。
   shipyard:
@@ -337,7 +337,7 @@ services:
   # 一次性容器把 deploy/alertmanager/alertmanager.yml.tpl 展开成 rendered/alertmanager.yml。
   # 与 apisix-render 同一套「模板 + 运行时展开」模式，但这里是**一次性**而非常驻：
   # 配置只在启动时需要，且 Alertmanager 不自动重载——改地址后需
-  # `docker compose restart alertmanager`（见 DEPLOYMENT.md「告警投递」）。
+  # `docker compose restart alertmanager`（见 docs/DEPLOYMENT.md「告警投递」）。
   alertmanager-render:
     image: alpine:3.19
     profiles: ['monitoring']
@@ -458,7 +458,7 @@ services:
     # （官方镜像已配 shared_preload_libraries=timescaledb，扩展由 deploy/initdb 与应用侧
     # 两库初始化过程幂等补建）。prefect-postgres / infisical-db 仍是 postgres:16-alpine。
     # 从 postgres:16-alpine **就地换镜像**不会改动既有数据卷的 schema：hypertable 的
-    # 主键必须含分区列 created_at，旧卷需重建（或手工迁移），见 DEPLOYMENT.md。
+    # 主键必须含分区列 created_at，旧卷需重建（或手工迁移），见 docs/DEPLOYMENT.md。
     image: timescale/timescaledb:latest-pg16
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-lkm}
@@ -481,7 +481,7 @@ services:
   # L2 缓存 / 跨进程锁 / 限流 / pub-sub 后端。默认 Redis 7；整套可换成 Dragonfly
   # （RESP 兼容，应用零改动——唯一客户端是 LKM-service/app/core/redis.py 的 from_url）。
   # 切换只动下面三个变量，Service 名与 redis://redis:6379/0 不变；见 .env.example
-  # 的 LKM_REDIS_* 与 DEPLOYMENT.md「八·一、切换 L2 后端」。
+  # 的 LKM_REDIS_* 与 docs/DEPLOYMENT.md「八·一、切换 L2 后端」。
   # **不持久化**（默认 `--save "" --appendonly no`）：原先靠 AOF 兜底的租约/限流状态已改为
   # 不依赖持久化，重启即空属预期。
   redis:

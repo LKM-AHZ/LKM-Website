@@ -12,12 +12,16 @@
 | [Bot平台架构与现状](./Bot平台架构与现状.md)       | Bot 开发、插件作者、运维     | LKMBot 的启动拓扑、消息流水线、平台/Provider/插件、Dashboard 和 LKM SSO 定制                |
 | [VSCode扩展架构与现状](./VSCode扩展架构与现状.md) | 扩展开发、内容作者           | Blog 系列 Clone/Pull/Push、多账号、自动同步、凭证与 Git 集成                                |
 | [社区需求与开发规划](./社区需求与开发规划.md)     | 产品、前端、后端、项目协调者 | 一期各业务域的实现现状、差距、优先级与验收口径                                              |
+| [DEPLOYMENT.md](./DEPLOYMENT.md) | 部署执行者、运维 | Compose 生产架构、配置、上线与回滚、备份与恢复演练、可选组件与告警投递 |
+| [OPS-CHEATSHEET.md](./OPS-CHEATSHEET.md) | 已部署环境的日常运维 | 常用命令速查；不是首次部署教程 |
+| [DEVELOPMENT.md](./DEVELOPMENT.md) | 开发者 | 本地环境、日常命令、测试门禁与排错 |
+| [DOCUMENTATION.md](./DOCUMENTATION.md) | 所有人 | 文档地图、职责边界与权威来源 |
 
 ## 推荐阅读路径
 
 - **第一次参与后端开发**：先读《后端架构与现状》§1–§5，再读根仓库
-  [DEVELOPMENT.md](../DEVELOPMENT.md) 的本地启动章节。
-- **准备部署或排障**：先读根仓库 [DEPLOYMENT.md](../DEPLOYMENT.md)，再按《后端架构与现状》
+  [DEVELOPMENT.md](./DEVELOPMENT.md) 的本地启动章节。
+- **准备部署或排障**：先读根仓库 [DEPLOYMENT.md](./DEPLOYMENT.md)，再按《后端架构与现状》
   §7 核对可观测性、事件契约与探针。
 - **规划一期功能**：先读《社区需求与开发规划》§2 状态总览，再进入对应业务域查看“下一步需求”
   与验收条件。

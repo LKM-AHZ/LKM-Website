@@ -2,7 +2,7 @@
 # /readiness 在 Redis 不可达时返 503（M6.2 口径：L2 缺失即无一致性锚点）。
 # **不持久化**（`--save '' --appendonly no`，与 compose、Dragonfly 后端完全对齐）：
 # 原先靠 AOF 兜底的租约 / 限流计数已改为不依赖持久化——租约短 TTL 自愈、限流 fail-open、
-# admin 单设备撤销落 DB 表（`revoked_access_tokens`）。重启即空属预期，见 DEPLOYMENT.md
+# admin 单设备撤销落 DB 表（`revoked_access_tokens`）。重启即空属预期，见 docs/DEPLOYMENT.md
 # 「八·一、切换 L2 后端」。
 apiVersion: v1
 kind: Service

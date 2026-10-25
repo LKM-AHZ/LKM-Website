@@ -32,4 +32,4 @@ Recent root commits use short Chinese change summaries, without an enforced pref
 
 ## Security & Configuration
 
-Use `.env.example` as a template. Never commit `.env`, private keys, tokens, or database backups. Review `DEVELOPMENT.md` for local setup and `DEPLOYMENT.md` before production changes.
+Use `.env.example` as a template. Never commit `.env`, private keys, tokens, or database backups. Review `docs/DEVELOPMENT.md` for local setup and `docs/DEPLOYMENT.md` before production changes.

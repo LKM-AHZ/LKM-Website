@@ -1,7 +1,7 @@
 # LKM 网站运维速查
 
 本文档用于**已经完成部署**的环境。首次安装、变量说明和架构原理见
-[DEPLOYMENT.md](./DEPLOYMENT.md)；Kubernetes 环境使用 [deploy/k8s/README.md](./deploy/k8s/README.md)。
+[DEPLOYMENT.md](./DEPLOYMENT.md)；Kubernetes 环境使用 [deploy/k8s/README.md](../deploy/k8s/README.md)。
 
 > 执行重启、迁移、恢复或删除命令前，先运行 `docker compose ps` 和 `docker compose config --services`
 > 确认目标。本文不把 `down -v`、清空数据目录等破坏性命令列为日常操作。

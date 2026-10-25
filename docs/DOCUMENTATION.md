@@ -7,37 +7,38 @@
 | 需求 | 首选文档 | 补充文档 |
 |---|---|---|
 | 第一次了解项目 | [README.md](./README.md) | 各子项目 README |
-| 本地启动和开发 | [DEVELOPMENT.md](./DEVELOPMENT.md) | 动态前端的 [GETTING_STARTED.md](./LKM-official-website/GETTING_STARTED.md) |
+| 本地启动和开发 | [DEVELOPMENT.md](./DEVELOPMENT.md) | 动态前端的 [GETTING_STARTED.md](../LKM-official-website/GETTING_STARTED.md) |
 | 单机生产部署 | [DEPLOYMENT.md](./DEPLOYMENT.md) | [OPS-CHEATSHEET.md](./OPS-CHEATSHEET.md) |
-| Kubernetes 部署 | [deploy/k8s/README.md](./deploy/k8s/README.md) | `deploy/k8s/` 清单 |
-| 后端接口和测试 | [LKM-service/README.md](./LKM-service/README.md) | 运行时 `/docs`、`/redoc` |
-| 动态前端开发 | [LKM-official-website/README.md](./LKM-official-website/README.md) | `CODING_STANDARDS.md`、`AGENTS.md` |
-| 社区机器人（LKM Bot） | [DEPLOYMENT.md](./DEPLOYMENT.md) 的「LKM Bot」一节 | [LKM-bot/README_zh.md](./LKM-bot/README_zh.md)（上游文档） |
-| VS Code 扩展 | [LKM-on-VSCode/README.md](./LKM-on-VSCode/README.md) | 扩展 `package.json` |
-| 理解后端目标架构 | [后端规划.md](./LKM社区开发方案/后端规划.md) | [执行路线图.md](./LKM社区开发方案/执行路线图.md) |
+| Kubernetes 部署 | [deploy/k8s/README.md](../deploy/k8s/README.md) | `deploy/k8s/` 清单 |
+| 后端接口和测试 | [LKM-service/README.md](../LKM-service/README.md) | 运行时 `/docs`、`/redoc` |
+| 动态前端开发 | [LKM-official-website/README.md](../LKM-official-website/README.md) | `CODING_STANDARDS.md`、`AGENTS.md` |
+| 社区机器人（LKM Bot） | [DEPLOYMENT.md](./DEPLOYMENT.md) 的「LKM Bot」一节 | [LKM-bot/README_zh.md](../LKM-bot/README_zh.md)（上游文档） |
+| VS Code 扩展 | [LKM-on-VSCode/README.md](../LKM-on-VSCode/README.md) | 扩展 `package.json` |
+| 理解后端目标架构 | [后端架构与现状.md](./后端架构与现状.md) | [社区需求与开发规划.md](./社区需求与开发规划.md) |
 
 ## 文档职责
 
-### 根级文档
+### 部署与开发文档
 
-- `README.md`：项目总览、最短启动路径和跨仓库入口。
-- `DEVELOPMENT.md`：开发环境、日常命令、测试门禁和本地排错。
-- `DEPLOYMENT.md`：Compose 生产架构、配置、上线、回滚、备份和可选组件。
-- `OPS-CHEATSHEET.md`：已经部署后的常用命令；不是首次部署教程。
-- `deploy/k8s/README.md`：Kustomize 清单、集群差异和已知限制。
+- `README.md`（根仓库）：项目总览、最短启动路径和跨仓库入口。
+- `docs/DEVELOPMENT.md`：开发环境、日常命令、测试门禁和本地排错。
+- `docs/DEPLOYMENT.md`：Compose 生产架构、配置、上线、回滚、备份、恢复演练和可选组件。
+- `docs/OPS-CHEATSHEET.md`：已经部署后的常用命令；不是首次部署教程。
+- `deploy/k8s/README.md`（未移动）：Kustomize 清单、集群差异和已知限制。
 
 ### 子项目文档
 
 - 动态前端：`README.md` 讲架构，`GETTING_STARTED.md` 面向新人，`CODING_STANDARDS.md` 定义门禁，`AGENTS.md` 记录代码代理约束。
 - 后端：`README.md` 讲服务边界、运行、迁移与验证；接口字段以运行时 OpenAPI 为准。
-- 社区机器人：上游 AstrBot 文档在 `LKM-bot/docs/`（平台接入、provider 配置等）；**部署**以根
-  `DEPLOYMENT.md` 为准——bot 自带的 `compose.yml`/`k8s/` 示例已删除，收编进根编排，上游文档
+- 社区机器人：上游 AstrBot 文档在 `LKM-bot/docs/`（平台接入、provider 配置等）；**部署**以
+  `docs/DEPLOYMENT.md` 为准——bot 自带的 `compose.yml`/`k8s/` 示例已删除，收编进根编排，上游文档
   里指向它们的步骤在本仓库不再适用。
 - VS Code 扩展：`README.md` 讲安装、账号、同步行为和限制。
 
 ### 规划文档
 
-`LKM社区开发方案/` 下的文档是架构决策和实施历史，不替代当前部署手册。标记“已完成”的条目仍可能保留背景说明；判断当前实现必须回到源码和可执行配置。
+`docs/` 下的架构与规划文档（`后端架构与现状.md`、`前端架构与现状.md`、`社区需求与开发规划.md` 等）
+是架构决策和实施历史，不替代当前部署手册。标记“已完成”的条目仍可能保留背景说明；判断当前实现必须回到源码和可执行配置。
 
 ### 不作为操作手册的 Markdown
 

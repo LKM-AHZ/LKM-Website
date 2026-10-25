@@ -2,7 +2,7 @@
 # 本机用 `curl -k --resolve lkm-ahz.ltd:30443:127.0.0.1 https://lkm-ahz.ltd:30443/...`
 # 访问，SNI/Host 都正确。
 #
-# 这些是「后端自己的身份」类配置（不由网关键名变量派生，见 DEPLOYMENT.md）：
+# 这些是「后端自己的身份」类配置（不由网关键名变量派生，见 docs/DEPLOYMENT.md）：
 # WebAuthn 的 RP_ID/Origin、GitHub OAuth 回调、前端回跳、S3 预签名 URL 的对外 host。
 # 预签名 host 必须与 APISIX MinIO 路由改写后的 Host 一致，否则 S3 SigV4 校验失败。
 apiVersion: v1

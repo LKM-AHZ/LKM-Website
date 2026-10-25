@@ -5,7 +5,7 @@
 # 1) **持久化**：两边都**不持久化**（base 的 Redis 侧已改为 `--save '' --appendonly no`，
 #    Dragonfly 这里也不配 `--snapshot_cron`）——重启即空，两个后端行为完全对齐。原先靠 AOF
 #    兜底的租约 / 限流 / admin 撤销 / 直传会话 / 大 V 集合，已分别改为短 TTL 自愈、fail-open、
-#    落 DB 表或读时现算（见 DEPLOYMENT.md「八·一、切换 L2 后端」）。
+#    落 DB 表或读时现算（见 docs/DEPLOYMENT.md「八·一、切换 L2 后端」）。
 #
 # 2) **探针**：不依赖镜像内是否带 CLI，统一用 tcpSocket。Redis 版是 `redis-cli ping`
 #    （exec 依赖镜像内含 redis-cli）；Dragonfly 官方镜像是否含该工具未经确认，TCP 探测

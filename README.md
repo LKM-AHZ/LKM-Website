@@ -1,6 +1,6 @@
 # LKM Website 全栈项目
 
-LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 SSR 网站、FastAPI 后端、社区机器人面板和 VS Code 博客扩展组成，根目录负责统一启动、容器编排和跨项目文档。纯静态官网（`lkm-ahz.icu`）已迁出为独立仓库并部署在独立服务器上，不在本编排内（见 [LKM-official-static/DEPLOYMENT.md](./LKM-official-static/DEPLOYMENT.md)）。
+LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 SSR 网站、FastAPI 后端、社区机器人面板和 VS Code 博客扩展组成，根目录负责统一启动、容器编排和跨项目文档。纯静态官网（`lkm-ahz.icu`）已迁出为独立仓库并部署在独立服务器上，不在本编排内（见 [LKM-official-static/DEPLOYMENT.md](https://github.com/LKM-AHZ/LKM-official-static/blob/main/DEPLOYMENT.md)）。
 
 ## 项目组成
 
@@ -24,8 +24,8 @@ LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 S
 | [docs/Bot平台架构与现状.md](./docs/Bot平台架构与现状.md)       | Bot 核心、消息流水线、插件生态与管理面板         |
 | [docs/VSCode扩展架构与现状.md](./docs/VSCode扩展架构与现状.md) | Blog 系列 Clone/Pull/Push 与多账号同步扩展       |
 | [docs/社区需求与开发规划.md](./docs/社区需求与开发规划.md)     | 一期业务现状、差距、优先级与验收口径             |
-| [DEVELOPMENT.md](./DEVELOPMENT.md)                             | 本地开发、环境变量与常用命令                     |
-| [DEPLOYMENT.md](./DEPLOYMENT.md)                               | Compose/Kubernetes 部署、网关、证书与运维        |
+| [DEVELOPMENT.md](./docs/DEVELOPMENT.md)                             | 本地开发、环境变量与常用命令                     |
+| [DEPLOYMENT.md](./docs/DEPLOYMENT.md)                               | Compose/Kubernetes 部署、网关、证书与运维        |
 
 ## 快速开始
 
@@ -67,7 +67,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File dev.ps1 -Mode all
 | Swagger UI | `http://127.0.0.1:8000/docs`  |
 | ReDoc      | `http://127.0.0.1:8000/redoc` |
 
-完整步骤、环境变量和排错见 [DEVELOPMENT.md](./DEVELOPMENT.md)。
+完整步骤、环境变量和排错见 [DEVELOPMENT.md](./docs/DEVELOPMENT.md)。
 
 ### 完整容器栈
 
@@ -79,7 +79,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-不要把 `.env`、私钥、数据库备份或访问令牌提交到 Git。生产部署前必须阅读 [DEPLOYMENT.md](./DEPLOYMENT.md)。
+不要把 `.env`、私钥、数据库备份或访问令牌提交到 Git。生产部署前必须阅读 [DEPLOYMENT.md](./docs/DEPLOYMENT.md)。
 
 ## 常用验证
 
@@ -105,14 +105,14 @@ pnpm run compile && pnpm test
 
 ## 文档
 
-从 [DOCUMENTATION.md](./DOCUMENTATION.md) 查看文档地图、适用场景和权威来源。常用入口：
+从 [DOCUMENTATION.md](./docs/DOCUMENTATION.md) 查看文档地图、适用场景和权威来源。常用入口：
 
-- [本地开发](./DEVELOPMENT.md)
-- [Compose 生产部署](./DEPLOYMENT.md)
-- [运维速查](./OPS-CHEATSHEET.md)
+- [本地开发](./docs/DEVELOPMENT.md)
+- [Compose 生产部署](./docs/DEPLOYMENT.md)
+- [运维速查](./docs/OPS-CHEATSHEET.md)
 - [Kubernetes 部署](./deploy/k8s/README.md)
-- [后端设计方案](./LKM社区开发方案/后端规划.md)
-- [后端执行路线图](./LKM社区开发方案/执行路线图.md)
+- [后端设计方案](./docs/后端架构与现状.md)
+- [后端执行路线图](./docs/社区需求与开发规划.md)
 
 ## 文档与实现的优先级
 
