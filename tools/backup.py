@@ -14,6 +14,7 @@
 用法：
     python3 tools/backup.py backup                  # 产出到 ./backups/<日期>/
     python3 tools/backup.py backup --out /mnt/bak    # 指定输出根目录
+    python3 tools/backup.py backup --keep 14         # 成功后只留最近 14 份（定时任务用）
     python3 tools/backup.py list                     # 列出已有备份
     python3 tools/backup.py restore --from backups/2026-09-19 --only db --yes
 """
@@ -23,6 +24,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -30,6 +32,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = REPO_ROOT / "backups"
+
+#: 备份目录名必须是严格的 ISO 日期。保留策略只认这种名字，人工建的目录一律不碰。
+_DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def compose(*args: str, timeout: int = 900) -> subprocess.CompletedProcess[str]:
@@ -192,6 +197,41 @@ def backup_volume(target: Path, volume: str) -> bool:
     return True
 
 
+def prune_backups(out_root: Path, keep: int) -> list[Path]:
+    """只保留最近 ``keep`` 份日期备份，返回被删除的目录（安全边界见下）。
+
+    为什么备份工具要自带保留策略：每日全量备份若只增不减，迟早把磁盘写满——那时
+    PostgreSQL 与 MinIO 会**因为备份**而挂掉，比没有备份更糟。预设关闭（``--keep 0``），
+    由定时任务显式打开。
+
+    安全边界（备份删除是不可逆操作，宁可少删也不误删）：
+    - 只删名字严格匹配 ``YYYY-MM-DD`` 的**目录**；``notes/``、手工解压出来的目录不动；
+    - ``keep < 1`` 直接拒绝：``--keep 0`` 若被当成「全删」是灾难；
+    - 名字匹配但日期非法（如 2026-13-45）跳过并告警。
+    """
+    if keep < 1:
+        raise ValueError("keep 必须 >= 1（不接受「保留 0 份」这种全删语义）")
+    if not out_root.is_dir():
+        return []
+
+    dated: list[tuple[datetime.date, Path]] = []
+    for entry in out_root.iterdir():
+        if not entry.is_dir() or not _DATE_DIR_RE.match(entry.name):
+            continue
+        try:
+            dated.append((datetime.date.fromisoformat(entry.name), entry))
+        except ValueError:
+            print(f"  警告：跳过日期非法的备份目录 {entry.name}", file=sys.stderr)
+
+    # 按日期升序，保留末尾 keep 个（等价于「最新的 keep 份」）
+    dated.sort(key=lambda pair: pair[0])
+    stale = [path for _, path in dated[:-keep]]
+    for path in stale:
+        shutil.rmtree(path)
+        print(f"    - 清理旧备份 {path.name}（超出 --keep {keep}）")
+    return stale
+
+
 def cmd_backup(args: argparse.Namespace) -> int:
     stamp = datetime.date.today().isoformat()
     dest = Path(args.out) / stamp
@@ -205,6 +245,11 @@ def cmd_backup(args: argparse.Namespace) -> int:
         ok &= backup_minio(dest / "minio", env_value("LKM_S3_BUCKET", "lkm"))
     if not args.skip_volume:
         ok &= backup_volume(dest / "backend_files.tar.gz", f"{project_name()}_backend_data")
+
+    # 只在本次备份**完全成功**后清理旧备份：失败时清掉历史，
+    # 等于用「新备份坏了 + 旧备份被删」换一次磁盘空间。
+    if ok and args.keep:
+        prune_backups(Path(args.out), args.keep)
 
     print("\n完成。" if ok else "\n存在失败项，请检查上面 ✗。")
     return 0 if ok else 1
@@ -365,6 +410,12 @@ def main() -> int:
     p_backup.add_argument("--skip-db", action="store_true")
     p_backup.add_argument("--skip-minio", action="store_true")
     p_backup.add_argument("--skip-volume", action="store_true")
+    p_backup.add_argument(
+        "--keep",
+        type=int,
+        default=0,
+        help="成功后只保留最近 N 份日期备份（默认 0 = 不清理）；供定时任务使用",
+    )
     p_backup.set_defaults(func=cmd_backup)
 
     p_restore = sub.add_parser("restore", help="从备份目录恢复（破坏性）")

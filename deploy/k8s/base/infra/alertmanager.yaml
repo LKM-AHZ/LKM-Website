@@ -1,0 +1,111 @@
+# Alertmanager（M6 补）：把 prometheus 算出的告警真正投递出去。
+#
+# 与 compose **逐机制对应**（见 deploy/k8s/README.md「与 compose 的差异」）：
+#   - 配置来源同一份 deploy/alertmanager/alertmanager.yml.tpl + render.sh；
+#   - 渲染时机：compose 用一次性 alertmanager-render 容器（depends_on
+#     service_completed_successfully），k8s 用 initContainer —— 语义等价：主容器启动前
+#     产物必须已在 emptyDir 里。
+#   - 差异只在「凭证怎么进来」：compose 从 .env 取，k8s 从 Secret 取。
+#
+# **可选组件**：与 prometheus / grafana 同款，用副本数控制开关（默认 0 = 不部署），
+# 因为 k8s 没有 compose 的 --profile 机制。
+#
+# 前置：webhook 地址是凭证，不进 git。部署前手工建 Secret（可选键，缺失时渲染出
+# 「不投递」的接收器，告警仍在 UI 可见）：
+#   kubectl -n lkm create secret generic lkm-alert-webhook \
+#     --from-literal=url='https://...'
+# 详见 DEPLOYMENT.md「告警投递」。
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  labels:
+    app.kubernetes.io/name: alertmanager
+    app.kubernetes.io/component: observability
+    app.kubernetes.io/part-of: lkm
+spec:
+  selector:
+    app.kubernetes.io/name: alertmanager
+  ports:
+    - name: http
+      port: 9093
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  labels:
+    app.kubernetes.io/name: alertmanager
+    app.kubernetes.io/component: observability
+    app.kubernetes.io/part-of: lkm
+spec:
+  replicas: 0 # 可选组件：需要时改 1（compose 侧对应 --profile monitoring）
+  # Alertmanager 的 nflog/silences 不建议多副本共享 emptyDir；单副本是当前明确取舍。
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alertmanager
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: alertmanager
+        app.kubernetes.io/component: observability
+        app.kubernetes.io/part-of: lkm
+    spec:
+      initContainers:
+        # 渲染一次，保证主容器启动时配置已存在且占位符已展开
+        - name: alertmanager-render-init
+          image: alpine:3.19
+          imagePullPolicy: IfNotPresent
+          command: ['sh', '/src/render.sh']
+          env:
+            # 与 compose 的 ALERT_WEBHOOK_URL 同名同义。optional: true —— Secret 缺失
+            # 时不让 Pod 卡在 Init:CreateContainerConfigError，而是渲染出「不投递」
+            # 的接收器（降级优于起不来，理由见 render.sh 头部注释）。
+            - name: ALERT_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: lkm-alert-webhook
+                  key: url
+                  optional: true
+          volumeMounts:
+            - name: src
+              mountPath: /src
+              readOnly: true
+            - name: rendered
+              mountPath: /out
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.27.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
+          ports:
+            - name: http
+              containerPort: 9093
+          volumeMounts:
+            - name: rendered
+              mountPath: /etc/alertmanager
+              readOnly: true
+            # 与 prometheus 同款 emptyDir：silence 属于「可重建的运维状态」。
+            # 代价是 Pod 重建后静默丢失（需重新静音），换来不引入持久卷依赖。
+            - name: data
+              mountPath: /alertmanager
+          readinessProbe:
+            httpGet: { path: /-/ready, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 20m, memory: 64Mi }
+            limits: { memory: 256Mi }
+      volumes:
+        - name: src
+          configMap:
+            name: alertmanager-config
+        - name: rendered
+          emptyDir: {}
+        - name: data
+          emptyDir: {}

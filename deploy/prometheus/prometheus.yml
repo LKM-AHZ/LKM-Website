@@ -12,6 +12,16 @@ global:
 rule_files:
   - /etc/prometheus/rules/*.yml
 
+# 告警投递（M6 补）：规则算出来的告警必须交出去才可能变成「人收到的通知」。
+# 此前只有 rule_files 没有本段 —— 告警只在 Prometheus UI 里可见，没人会去盯着看，
+# 等于规则白写（DBPoolExhausted / OutboxBacklogHigh 这类尤其致命）。
+# 目标用服务短名，与 scrape 的 backend:8000 同理：compose 走 Docker 内嵌 DNS，
+# k8s 靠 Pod 的 search 域补全（Prometheus 是 Go 程序，会应用 search domain）。
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
 scrape_configs:
   - job_name: prometheus
     static_configs:

@@ -34,6 +34,8 @@ resources:
   - infra/search.yaml
   # 监控（M6.12）：可选组件，清单里 replicas: 0 默认不部署
   - infra/prometheus.yaml
+  # 告警投递（M6 补）：没有它时告警只在 Prometheus UI 里可见，等于无人知晓
+  - infra/alertmanager.yaml
   - infra/grafana.yaml
   # 应用层
   - app/backend.yaml
@@ -90,6 +92,14 @@ configMapGenerator:
       - ../../prometheus/rules/lkm-pool.yml
       - ../../prometheus/rules/lkm-metrics-relay.yml
       - ../../prometheus/rules/lkm-event-contract.yml
+  # Alertmanager 告警投递配置：模板 + 渲染脚本，与 compose 的
+  # `./deploy/alertmanager:/src` 挂载的是**同一份**文件（不留 k8s 专用副本）。
+  # 渲染在 initContainer 里做（Alertmanager 不接受环境变量，只吃 --config.file），
+  # 展开后的 webhook 地址来自 Secret `lkm-alert-webhook`。
+  - name: alertmanager-config
+    files:
+      - ../../alertmanager/alertmanager.yml.tpl
+      - ../../alertmanager/render.sh
   # Grafana provisioning（数据源 / dashboard provider）与面板 JSON —— 同上，单一来源。
   # 拆三个 ConfigMap 是因为 generator 以文件 basename 作 key，同名的会互相覆盖。
   - name: grafana-provisioning-datasources

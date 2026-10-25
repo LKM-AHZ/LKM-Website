@@ -141,6 +141,7 @@ kubectl -n lkm exec deploy/backend -- python -c \
 | 可选组件开关 | `--profile` | 副本数（prometheus / grafana / lkmbot 默认 0） | Prefect 常驻；其余可选组件用 0 副本表达「默认不启用」 |
 | Pulsar 数据 | `pulsar_data` 卷持久化 | **emptyDir（不持久化）** | 见上节：账本跨不了 Pod 重建，改以「每次干净启动」换自愈；租户/namespace 由 Pod 内 sidecar 建 |
 | 探针 | healthcheck | liveness / readiness / startup **三分** | 语义沿用 M6.2 的 `/liveness` 与 `/readiness` |
+| 告警 webhook | `.env` 的 `LKM_ALERT_WEBHOOK_URL` | Secret `lkm-alert-webhook`（键 `url`,**可选**） | 地址是凭证，不进 git；两边跑**同一份** `deploy/alertmanager/render.sh` 展开模板 |
 
 ### 探针为什么用 `exec` 而不是 `httpGet`
 

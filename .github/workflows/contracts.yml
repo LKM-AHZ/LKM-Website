@@ -1,0 +1,81 @@
+name: contracts
+
+# 跨仓部署契约。
+#
+# 为什么这个工作流必须在**根仓库**：
+#   `LKM-service/tests/deploy/` 那批测试测的是根仓库的编排资产（docker-compose.yml、
+#   deploy/、k8s 清单、网关与 bot 配置），只是借住在 LKM-service 的测试套件里。它们用
+#   `_ROOT = parents[3]` 定位根仓库；在 LKM-service 单独 checkout 的 CI 里 parents[3]
+#   落在 runner 工作目录，根仓库文件不存在 → 要么 FileNotFoundError，要么被跳过。
+#   两种情况都等于「跨仓契约无人验证」，而它们守的恰恰是本项目最容易静默失效的地方
+#   （bot SSO 两侧字面量、k8s 规则清单漏行、网关路由冲突）。
+#
+# 子仓库指针一变、或根仓库编排资产一改，这里就会重跑。
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contracts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-contracts:
+    name: 跨仓部署契约（pytest tests/deploy）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # 必须递归检出：这批测试会读 LKM-bot 的源码（sso.py / Dockerfile / .dockerignore）
+          # 与根仓库的 deploy/。缺子模块时 conftest 会整批 skip —— 这里要的是真跑。
+          submodules: recursive
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+      - name: 安装后端依赖
+        working-directory: LKM-service
+        run: uv sync --frozen
+      - name: 跑跨仓部署契约
+        working-directory: LKM-service
+        run: uv run pytest tests/deploy -q
+      - name: 断言没有被跳过
+        # 上一步若因缺子模块而全部 skip，pytest 仍退出 0 —— 那会变成「绿着但没验」。
+        # 这里把 skip 视为失败，让守卫的降级路径不会污染根仓库 CI。
+        working-directory: LKM-service
+        run: |
+          uv run pytest tests/deploy -q --no-header | tee /tmp/deploy.log
+          if grep -qE '[0-9]+ skipped' /tmp/deploy.log; then
+            echo "::error::tests/deploy 出现 skipped：说明子模块未检出，跨仓契约没被真正验证"
+            exit 1
+          fi
+
+  compose-config:
+    name: compose 插值校验
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: docker compose config
+        # `:?` 必填项需要值才能完成插值；下面全是一次性假值，不连接任何服务、
+        # 也不会进入任何镜像（只是本步骤的环境变量）。
+        env:
+          POSTGRES_PASSWORD: ci-dummy
+          MINIO_ROOT_PASSWORD: ci-dummy
+          PREFECT_DB_PASSWORD: ci-dummy
+          RABBITMQ_DEFAULT_PASS: ci-dummy
+          LKM_AUTH_HTTP_TOKEN: ci-dummy
+          LKM_TOTP_ENCRYPTION_KEY: ci-dummy
+          LKM_VERIFICATION_CODE_PEPPER: ci-dummy
+          LKM_JWT_PRIVATE_KEY_FILE: /tmp/ci-dummy.pem
+          LKM_JWT_PUBLIC_KEY_FILE: /tmp/ci-dummy.pem
+          LKM_RABBITMQ_URL: amqp://ci:ci@rabbitmq:5672/
+        # --quiet 只校验（语法 + 变量插值 + 服务引用），不产生输出。
+        # 静态 yaml.safe_load 查不出插值失败，这条是 tests/deploy 的补充而非重复。
+        run: docker compose config --quiet

@@ -333,6 +333,52 @@ services:
     networks:
       - lkm
 
+  # 告警配置渲染（M6 补）：alertmanager 不接受环境变量（只吃 --config.file），故由
+  # 一次性容器把 deploy/alertmanager/alertmanager.yml.tpl 展开成 rendered/alertmanager.yml。
+  # 与 apisix-render 同一套「模板 + 运行时展开」模式，但这里是**一次性**而非常驻：
+  # 配置只在启动时需要，且 Alertmanager 不自动重载——改地址后需
+  # `docker compose restart alertmanager`（见 DEPLOYMENT.md「告警投递」）。
+  alertmanager-render:
+    image: alpine:3.19
+    profiles: ['monitoring']
+    entrypoint: ['sh', '/src/render.sh']
+    environment:
+      # 告警 webhook 地址（**凭证**，故不进 git）。留空 → 渲染出「不投递」的接收器：
+      # 告警仍进 Alertmanager UI，只是没人收到通知。
+      ALERT_WEBHOOK_URL: ${LKM_ALERT_WEBHOOK_URL:-}
+    volumes:
+      - ./deploy/alertmanager:/src:ro
+      # 渲染产物落**宿主目录**（理由同 apisix-render：命名卷 + volume subpath 挂单文件
+      # 在旧版 Docker 上会失败，宿主 bind 各版本都正常）。
+      - ./deploy/alertmanager/rendered:/out
+    restart: 'no'
+    networks:
+      - lkm
+
+  # 告警投递（M6 补）：把 deploy/prometheus/rules 算出的告警真正送到人手上。
+  # 此前只有 rule_files，既没有 alerting 段也没有本服务 —— 告警只在 Prometheus UI
+  # 里可见，等于没人会知道（DBPoolExhausted / OutboxBacklogHigh 这类尤其致命）。
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    profiles: ['monitoring']
+    depends_on:
+      # 必须等渲染完成：单文件 bind 的源不存在时 Docker 会把挂载点建成**目录**，
+      # alertmanager 读到目录直接起不来，而错误信息离成因很远。
+      alertmanager-render:
+        condition: service_completed_successfully
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    volumes:
+      - ./deploy/alertmanager/rendered/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # silence 与通知日志（nflog）：不持久化的话每次重启都得重新静音。
+      - alertmanager_data:/alertmanager
+    expose:
+      - '9093'
+    restart: ${LKM_RESTART_POLICY:-no}
+    networks:
+      - lkm
+
   # Grafana 总览面板：数据源与 dashboard 均由
   # deploy/grafana/provisioning 预置（QPS/P50/P95/错误率/outbox 积压/Pulsar lag）。
   # 默认只绑回环，公网暴露请自行经网关加鉴权。
@@ -1453,6 +1499,7 @@ volumes:
   pulsar_data:
   rabbitmq_data:
   prometheus_data:
+  alertmanager_data:
   grafana_data:
   # SigNoz 自托管（批 6）：数据卷独立命名，与日志分析用的 clickhouse_data 互不相通
   signoz_clickhouse:

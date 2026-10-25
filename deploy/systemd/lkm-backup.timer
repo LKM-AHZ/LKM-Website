@@ -1,0 +1,19 @@
+# 每日全量备份定时器（触发 lkm-backup.service）。安装方法见该单元的头部注释。
+[Unit]
+Description=每日 LKM 全量备份（03:30）
+
+[Timer]
+# 03:30 而不是整点：整点是各家 cron/备份的高峰，PG 的 fsync 抖动最明显。
+# 时间按**本地时区**解释；跨机部署请统一时区，否则"每日"会漂移。
+OnCalendar=*-*-* 03:30:00
+# 到点时机器是关着的 → 开机后补跑一次。
+# 不设这个，周末/假期关机就等于「那几天没有备份」，且不会有任何报错。
+Persistent=true
+# 0–15 分钟随机延迟：多机部署时避免同一刻一起压数据库。
+RandomizedDelaySec=15m
+# 精确性不重要（备份不是对时任务），允许 systemd 合并唤醒以省电。
+AccuracySec=1min
+Unit=lkm-backup.service
+
+[Install]
+WantedBy=timers.target

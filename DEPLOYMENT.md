@@ -432,6 +432,42 @@ GraphQL P95 与受控拒绝速率。
 - **已知限制**：`/metrics` 只挂在单体 `backend`；auth 进程刻意不挂，故面板无 auth 的 QPS/延迟。
 - 回退：`docker compose --profile monitoring down`（保留卷则历史保留；加 `-v` 一并清理）。
 
+### 三·九·一、告警投递(Alertmanager)
+
+`deploy/prometheus/rules/` 里的规则只负责**算出**告警;要让人真的收到,还需要 Alertmanager
+把告警送出去。此前链路缺这一段:规则在跑,但告警只在 Prometheus UI 里可见,等于没人会知道
+(`DBPoolExhausted`、`OutboxBacklogHigh` 这类尤其致命)。
+
+```sh
+# 1) 在根 .env 配置接收地址。取值是**凭证**,只放 .env,不进 git:
+#    LKM_ALERT_WEBHOOK_URL=https://example.com/hooks/lkm-alerts
+
+# 2) 拉起(prometheus + alertmanager;alertmanager-render 会先渲染配置)
+docker compose --profile monitoring up -d prometheus alertmanager
+
+# 3) 验收:Prometheus 已连上告警台,且告警台自身就绪
+docker compose exec prometheus wget -qO- http://alertmanager:9093/-/ready
+docker compose exec alertmanager amtool --alertmanager.url=http://127.0.0.1:9093 alert
+```
+
+要点(都是踩过的坑):
+
+- **改地址后必须重启** `docker compose restart alertmanager`。Alertmanager 不自动重载配置,
+  改了 `.env` 不重启等于没改(界面上一切正常,只是还在往旧地址发)。
+- **未配置地址时是降级,不是报错**:渲染出「只有 name 的接收器」,告警仍进告警台
+  (UI/`amtool` 可见、可打 silence),只是不投递,渲染期会打一条 stderr 警告。
+  故意不让它启动失败 —— 告警落不了地是降级,容器起不来会让整套 monitoring 起不来。
+- **抑制规则**只在 `deploy/alertmanager/alertmanager.yml.tpl` 里加,且加之前先读对应规则的
+  `expr`:把真告警压掉比多收几条通知糟得多。
+- **k8s 侧**:webhook 走 Secret(不是 `.env`),缺失时按可选键处理、不会卡住 Pod:
+
+  ```sh
+  kubectl -n lkm create secret generic lkm-alert-webhook \
+    --from-literal=url='https://example.com/hooks/lkm-alerts'
+  ```
+
+  alertmanager 在 k8s 里是**可选组件**(`replicas: 0`),需要时改 1。
+
 ## 三·十、SigNoz 自托管 APM（可选）
 
 链路追踪后端：应用 span → 本栈的 `otel-collector` → SigNoz → ClickHouse → UI。默认不启。
@@ -798,15 +834,65 @@ docker compose exec backend alembic upgrade head
 docker compose exec backend alembic current
 ```
 
-备份与恢复:
+### 备份与恢复
+
+**不要只备份数据库。** 文件库与成员头像都在 MinIO,博客仓库在 `backend_data` 卷里 ——
+只 dump PostgreSQL 等于丢文件。用仓库自带的 `tools/backup.py`,一条命令覆盖三处:
 
 ```sh
-# 备份
-docker compose exec -T postgres pg_dump -U lkm lkm > backup_db_$(date +%F).sql
+# 备份(产物落在 <仓库>/backups/<YYYY-MM-DD>/,已 gitignore)
+python3 tools/backup.py backup
+python3 tools/backup.py list
 
-# 恢复
+# 恢复(破坏性操作,必须 --yes 确认)
+python3 tools/backup.py restore --from backups/2026-09-19 --only db --yes
+```
+
+手工兜底(仅数据库,应急用):
+
+```sh
+docker compose exec -T postgres pg_dump -U lkm lkm > backup_db_$(date +%F).sql
 docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
 ```
+
+#### 自动定时(推荐)
+
+手工备份等于「想起来才做」,而没人会发现「三个月没备份」,直到真的需要恢复:
+
+```sh
+cp deploy/systemd/lkm-backup.service deploy/systemd/lkm-backup.timer /etc/systemd/system/
+systemctl edit lkm-backup.service      # 把 WorkingDirectory 改成实际仓库路径
+systemctl daemon-reload
+systemctl enable --now lkm-backup.timer
+systemctl list-timers lkm-backup.timer # 确认下次触发时间
+systemctl start lkm-backup.service     # 先手工跑一次,确认退出码为 0
+```
+
+默认每日 03:30(本地时区)、`Persistent=true`(到点机器关着则开机补跑)、
+`--keep 14`(保留两周)。**保留策略不是可选项**:只增不减的每日全量备份终会写满磁盘,
+而磁盘写满会让 PostgreSQL/MinIO 先于备份工具挂掉,比没有备份更糟。
+
+#### 恢复演练(至少每季度一次)
+
+没演练过的备份只是「一堆文件」。演练必须在**独立 compose 项目**里做,绝不在生产库上恢复:
+
+```sh
+# 1) 起一套与生产同版本的演练栈(独立项目名 = 独立卷/独立库,不碰生产)
+COMPOSE_PROJECT_NAME=lkm-drill docker compose up -d postgres minio backend
+
+# 2) 把生产备份恢复到演练栈(backup.py 按当前 COMPOSE_PROJECT_NAME 定位卷与库)
+COMPOSE_PROJECT_NAME=lkm-drill python3 tools/backup.py restore --from backups/<日期> --yes
+
+# 3) 逐项核对,不要只看"命令没报错"
+#    - 登录一个正常账号;打开任一含图帖子(验证 MinIO 对象真的回来了)
+#    - 随机抽 3 篇博客正文(验证 backend_data 卷)
+#    - psql: select count(*) from users;
+
+# 4) 清理演练栈(会删卷!先确认项目名是 lkm-drill 再执行)
+COMPOSE_PROJECT_NAME=lkm-drill docker compose down -v
+```
+
+演练记录至少写:备份日期、恢复耗时、各核对项结论、发现的问题。
 
 ### schema 变更纪律(迁移链与大表)
 

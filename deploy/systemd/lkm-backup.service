@@ -1,0 +1,43 @@
+# 每日全量备份的 systemd oneshot 单元（由 lkm-backup.timer 触发）。
+#
+# 为什么需要它：tools/backup.py 只是「跑一次」，此前只记在 OPS-CHEATSHEET.md 里当
+# **手工步骤**。手工步骤等于「想起来才做」，而备份恰恰是最不该靠人记得的事——
+# 且没人会发现"三个月没备份"，直到真的需要恢复。
+#
+# 安装（root）：
+#   cp deploy/systemd/lkm-backup.service deploy/systemd/lkm-backup.timer \
+#      /etc/systemd/system/
+#   systemctl edit lkm-backup.service    # 把 WorkingDirectory 改成实际仓库路径
+#   systemctl daemon-reload
+#   systemctl enable --now lkm-backup.timer
+#   systemctl list-timers lkm-backup.timer      # 确认下次触发时间
+#   systemctl start lkm-backup.service          # 先手工跑一次验证
+#
+# 备份产物落在 <仓库>/backups/<YYYY-MM-DD>/（已 gitignore），三个组成部分：
+#   db.sql / minio/ / backend_files.tar.gz —— 缺任一项都算失败（退出码非 0）。
+[Unit]
+Description=LKM 全量备份（PostgreSQL + MinIO + backend 命名卷）
+# backup.py 全程经 docker compose exec / docker cp 取数据，docker 必须先就绪
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+# ⚠️ 改为你的实际部署路径（推荐用 systemctl edit 写 override，别改本文件，
+#    否则下次从仓库更新时会被覆盖）。
+WorkingDirectory=/opt/lkm/LKM-Website
+# --keep 14 = 每日一份、保留两周。
+# 不设保留的每日全量备份迟早写满磁盘——那时 PostgreSQL/MinIO 会**因为备份**
+# 而先挂掉，比没有备份更糟。保留窗口按你的 RPO 与磁盘容量调整。
+ExecStart=/usr/bin/env python3 tools/backup.py backup --keep 14
+# 备份是长耗时重 IO：backup.py 内部单步超时 900s（pg_dump/mc/tar），
+# 而 systemd 默认 TimeoutStartSec=90s 会拦腰杀掉它，留下 .part 残file。
+TimeoutStartSec=2h
+# 让备份不跟在线请求抢 IO/CPU：备份慢一点无所谓，站点被拖慢不行。
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+SyslogIdentifier=lkm-backup
+
+[Install]
+WantedBy=multi-user.target
