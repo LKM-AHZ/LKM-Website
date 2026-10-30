@@ -3,7 +3,7 @@
 > **文档定位**：说明 `LKM-bot/` 的进程拓扑、消息处理流水线、插件/平台/模型抽象、管理面板
 > 以及 LKM 定制层。本文以该子仓库源码与配置为准。
 >
-> **更新时间**：2026-10-25。内部 Python 包名仍为 `astrbot`，面向用户的产品名和命令为
+> **结构与入口核对日期**：2026-10-31。内部 Python 包名仍为 `astrbot`，面向用户的产品名和命令为
 > `LKMBot` / `lkmbot`。
 
 ## 1. 定位
@@ -24,7 +24,7 @@ main.py
        │    ├─ 平台适配器、消息流水线、插件、Provider、定时任务
        │    └─ SQLite / 配置 / 日志 / 更新器
        └─ AstrBotDashboard
-            ├─ FastAPI-like ASGI API
+            ├─ FastAPI ASGI API
             ├─ Hypercorn
             └─ dashboard/dist 静态面板
 ```
@@ -85,6 +85,11 @@ Pipeline 的上下文、调度器和阶段基类位于 `astrbot/core/pipeline/`�
 - `astrbot/dashboard/api/` 提供认证、平台、Provider、插件、配置、会话、聊天、知识库、备份、
   统计、日志、Cron、文件、OpenAPI、Skills 等路由。
 - `astrbot/dashboard/services/` 承接业务逻辑，API 层保持薄。
+- 配置服务分别位于 `config_profile_service.py`（配置档/系统设置）、
+  `config_routing_service.py`（会话路由）、`config_display_service.py`（配置元数据）、
+  `config_file_service.py`（配置附件）、`bot_config_service.py`（平台）、
+  `provider_config_service.py`（模型源）；共享验证与保存逻辑在 `config_service.py`，
+  装配入口是 `astrbot/dashboard/api/app.py`。路由直接依赖具体服务。
 - `astrbot/dashboard/server.py` 负责 Hypercorn、静态资源、上传大小限制、限流、TOTP、CORS/安全头
   和 Dashboard base path。
 - `astrbot/dashboard/api/open_api.py` 对外提供 OpenAPI 能力，供社区站或其他服务调用。
@@ -149,6 +154,10 @@ uv run ruff check .
 uv run ty check .
 uv run pytest
 ```
+
+目录归属和生成产物规则见 [Bot 开发入口](../LKM-bot/README.md#代码结构与开发入口)。
+API 路由在 `astrbot/dashboard/api/` 装配，前端客户端由 `openspec/openapi-v1.yaml` 生成到
+`dashboard/src/api/generated/`；修改规格和路由后须同步生成客户端。
 
 ## 10. 维护边界
 

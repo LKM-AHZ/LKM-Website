@@ -27,6 +27,7 @@
   与验收条件。
 - **前端/Bot/扩展开发**：分别先读对应的《前端架构与现状》《Bot平台架构与现状》
   《VSCode扩展架构与现状》，再进入子仓库 README 与 AGENTS。
+- **查找代码或决定改哪个仓库**：先读 [代码导航与修改归属](./DOCUMENTATION.md#代码导航与修改归属)，再读对应子仓库的结构说明。
 - **跨项目改动**：同时检查根仓库 [AGENTS.md](../AGENTS.md)、
   [LKM-official-website/AGENTS.md](../LKM-official-website/AGENTS.md)、
   [LKM-bot/AGENTS.md](../LKM-bot/AGENTS.md) 与各子项目 README。

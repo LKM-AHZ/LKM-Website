@@ -3,7 +3,7 @@
 > **文档定位**：说明 `LKM-on-VSCode/` 如何把 LKM 平台的 Git 托管博客系列克隆到本地，并提供
 > 多账号、拉取/推送、系列 CRUD 与自动同步能力。本文以扩展源码和 `package.json` 为准。
 >
-> **更新时间**：2026-10-25。扩展版本 `0.0.1`，VS Code 引擎要求 `^1.85.0`。
+> **结构与入口核对日期**：2026-10-31。扩展版本 `0.0.1`，VS Code 引擎要求 `^1.85.0`。
 
 ## 1. 定位
 
@@ -19,9 +19,11 @@ LKM Blog on VS Code 是 LKM 平台的桌面编辑入口：
 
 | 模块               | 职责                                                            |
 | ------------------ | --------------------------------------------------------------- |
-| `src/extension.ts` | 扩展激活、命令注册、账号切换、Clone/Pull/Push、TreeView 接线    |
+| `src/extension.ts` | 激活装配：登记命令、TreeView、自动同步与停用清理 |
+| `src/commands.ts` | 命令 ID、账号持久化与账号/系列/Git 命令处理 |
+| `src/auto-sync.ts` | 定时、聚焦、保存监听；按仓库串行执行 Git 操作 |
 | `src/accounts.ts`  | 账号元数据与 `repo_name → 本地目录/系列 id` 映射的纯函数        |
-| `src/auth.ts`      | 用户名密码兑换 Bearer token、401 失效重试、单飞登录             |
+| `src/auth.ts`      | 用户名密码兑换 Bearer token、缓存失效与单飞登录             |
 | `src/creds.ts`     | 账号凭证读写 VS Code `SecretStorage`                            |
 | `src/api.ts`       | 后端 REST API 封装：系列列表、创建/删除、星标、克隆 URL         |
 | `src/clone.ts`     | 系列选择、目录选择、Git clone 流程编排                          |
@@ -48,7 +50,7 @@ LKM Blog on VS Code 是 LKM 平台的桌面编辑入口：
 - 账号唯一键为 `serverUrl:username`。
 - 账号元数据（serverUrl、username、系列映射）存 `context.globalState`。
 - 用户名和密码存 `context.secrets`，按账号 key 做 base64 编码后分键保存。
-- Bearer token 只在运行时缓存；401 后使缓存失效，下次操作重新登录，避免频繁触发登录限流。
+- Bearer token 只在运行时缓存，按 15 分钟 TTL 提前 60 秒重新兑换；401 后使缓存失效，下次操作重新登录，避免频繁触发登录限流。
 - 删除账号会清理扩展 SecretStorage，但不会主动删除系统 Git Credential Manager 中的凭证。
 
 ### 3.2 Clone
@@ -83,7 +85,9 @@ LKM Blog on VS Code 是 LKM 平台的桌面编辑入口：
 - `shouldPullNow`：处理首次、正常间隔、系统时钟回拨等边界；
 - `pathBelongsToAccount`：按最长目录前缀判断文件属于哪个系列的本地目录，并处理 Windows/macOS
   大小写不敏感；
-- `collectPullTargets`：按账号映射收集当前工作区中可拉取的仓库。
+- `collectPullTargets`：按账号映射收集目录并去重；当前工作区仓库是否可用由调用方通过
+  `getGitByDir` 判断。计时器、聚焦和保存事件在 `auto-sync.ts` 的 `startAutoSync` 中接线，
+  由 `extension.ts` 激活并统一登记清理。
 
 ## 5. 安全边界
 
@@ -92,6 +96,8 @@ LKM Blog on VS Code 是 LKM 平台的桌面编辑入口：
 - 后端地址来自用户配置，不能假设固定域名；扩展自身不内置服务端地址。
 - API 返回统一 `ApiResp`，扩展先校验 HTTP 状态与业务码，再解包 data。
 - Pull/Push 不绕过 Git 本身；冲突处理由 Git 和用户完成。
+
+源码、测试与产物归属见 [扩展代码结构](../LKM-on-VSCode/README.md#代码结构)。
 
 ## 6. 开发与验证
 

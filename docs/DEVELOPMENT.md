@@ -150,7 +150,7 @@ pnpm dev
 
 ### 环境变量
 
-后端通过 `LKM_` 前缀读取环境变量(详见 `app/core/config.py`)。宽松环境
+后端通过 `LKM_` 前缀读取环境变量(详见 `core/config.py`)。宽松环境
 (`dev`/`local`/`test`/未设)放行任何密钥用于本地;`production` 才强制强随机密钥。
 
 本地若需显式配置,可在 `LKM-service/` 建 `.env`:
@@ -186,7 +186,7 @@ LKM_VERIFICATION_CODE_PEPPER=<与上面不同>
 
 ### 任务队列(worker)
 
-后端通过消息总线（默认 RabbitMQ，可切 Pulsar）订阅和独立进程消费异步任务；生产 Compose 将默认任务、发送、通知、积分、
+后端通过消息总线（Compose 默认 RabbitMQ；直接启动时 Settings 默认 Pulsar，按 `LKM_MESSAGE_BUS` 选择）订阅和独立进程消费异步任务；生产 Compose 将默认任务、发送、通知、积分、
 调度、死信和 outbox relay 分开运行。本地 dev 脚本不启动这些进程，需要验证时按目标订阅单独启动：
 
 ```sh
@@ -244,11 +244,11 @@ uv run python scripts/check_raw_sql.py # 裸 SQL 门禁:业务查询必须走 OR
 `DEMO_ADMIN/DEMO_ADMIN_PASSWORD` 做文件审核。
 
 **数据库访问一律走 ORM**:PostgreSQL 查询用 SQLAlchemy ORM 与
-`app/db/repository.py` 的 `AsyncRepository` 表达,不要写裸 SQL——基类已内置软删除过滤、
+`core/db/repository.py` 的 `AsyncRepository` 表达,不要写裸 SQL——基类已内置软删除过滤、
 批量 upsert(`pg_upsert`)、`update_where`/`hard_delete_where` 等,service 层也靠它守住
 「只 flush、不 commit」的分层契约。只有 ORM 无法表达的场景才允许原生 SQL:DDL/索引/扩展
-装配与 TimescaleDB 策略(`app/db/init_db.py`)、列的 `server_default` 调 PG 函数
-(`app/db/base.py`)、健康探活 `SELECT 1`、以及 ClickHouse(独立客户端,无 ORM)。
+装配与 TimescaleDB 策略(`core/db/init_db.py`)、列的 `server_default` 调 PG 函数
+(`core/db/base.py`)、健康探活 `SELECT 1`、以及 ClickHouse(独立客户端,无 ORM)。
 `scripts/check_raw_sql.py` 用 AST 扫描守住这条线,放行名单在脚本的 `ALLOWLIST` 里
 (新增条目须确认确属 ORM 无法表达的场景)。
 

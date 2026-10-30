@@ -6,13 +6,13 @@
 
 | 需求 | 首选文档 | 补充文档 |
 |---|---|---|
-| 第一次了解项目 | [README.md](./README.md) | 各子项目 README |
+| 第一次了解项目 | [根 README.md](../README.md) | [文档索引](./README.md)、各子项目 README |
 | 本地启动和开发 | [DEVELOPMENT.md](./DEVELOPMENT.md) | 动态前端的 [GETTING_STARTED.md](../LKM-official-website/GETTING_STARTED.md) |
 | 单机生产部署 | [DEPLOYMENT.md](./DEPLOYMENT.md) | [OPS-CHEATSHEET.md](./OPS-CHEATSHEET.md) |
 | Kubernetes 部署 | [deploy/k8s/README.md](../deploy/k8s/README.md) | `deploy/k8s/` 清单 |
 | 后端接口和测试 | [LKM-service/README.md](../LKM-service/README.md) | 运行时 `/docs`、`/redoc` |
 | 动态前端开发 | [LKM-official-website/README.md](../LKM-official-website/README.md) | `CODING_STANDARDS.md`、`AGENTS.md` |
-| 社区机器人（LKM Bot） | [DEPLOYMENT.md](./DEPLOYMENT.md) 的「LKM Bot」一节 | [LKM-bot/README_zh.md](../LKM-bot/README_zh.md)（上游文档） |
+| 社区机器人（LKM Bot） | [DEPLOYMENT.md](./DEPLOYMENT.md) 的「LKM Bot」一节 | [LKM-bot/README.md](../LKM-bot/README.md)（发行版与开发入口） |
 | VS Code 扩展 | [LKM-on-VSCode/README.md](../LKM-on-VSCode/README.md) | 扩展 `package.json` |
 | 理解后端目标架构 | [后端架构与现状.md](./后端架构与现状.md) | [社区需求与开发规划.md](./社区需求与开发规划.md) |
 
@@ -28,7 +28,7 @@
 
 ### 子项目文档
 
-- 动态前端：`README.md` 讲架构，`GETTING_STARTED.md` 面向新人，`CODING_STANDARDS.md` 定义门禁，`AGENTS.md` 记录代码代理约束。
+- 动态前端：`README.md` 是新手教程，`README2.md` 讲当前架构与命令，`GETTING_STARTED.md` 补充开发环境，`CODING_STANDARDS.md` 定义门禁，`AGENTS.md` 记录代码代理约束。
 - 后端：`README.md` 讲服务边界、运行、迁移与验证；接口字段以运行时 OpenAPI 为准。
 - 社区机器人：上游 AstrBot 文档在 `LKM-bot/docs/`（平台接入、provider 配置等）；**部署**以
   `docs/DEPLOYMENT.md` 为准——bot 自带的 `compose.yml`/`k8s/` 示例已删除，收编进根编排，上游文档
@@ -43,7 +43,27 @@
 ### 不作为操作手册的 Markdown
 
 - `LKM-official-website/LICENSE.md` 是许可证原文，只随许可证变更而更新。
-- `LKM-service/app/modules/articles/markdown-test.md` 是 Markdown 渲染测试夹具，不是面向用户或运维人员的说明文档。
+- `LKM-service/app/modules/content/articles/markdown-test.md` 是 Markdown 渲染测试夹具，不是面向用户或运维人员的说明文档。
+
+## 代码导航与修改归属
+
+目录与入口核对日期：2026-10-31。四个应用目录均是 `.gitmodules` 声明的独立 Git 子模块。
+
+| 修改内容 | 从哪里进入 | 代码与文档归属 |
+|---|---|---|
+| 页面、社区交互、编辑器 | `LKM-official-website/src/pages/` → `features/` → `lib/api/` | 前端子仓库；[结构说明](../LKM-official-website/README2.md#架构) |
+| API、认证、异步任务 | `LKM-service/main.py` → `boot/backend.py` → `app/`、`auth/`、`core/` | 后端子仓库；[结构说明](../LKM-service/README.md#项目结构) |
+| Bot 消息、管理面板、社区 SSO | `LKM-bot/main.py` → `astrbot/core/initial_loader.py`；WebUI 在 `dashboard/` | Bot 子仓库；[开发导航](../LKM-bot/README.md#代码结构与开发入口) |
+| VS Code 命令、账号、Git 同步 | `LKM-on-VSCode/src/extension.ts` | 扩展子仓库；[结构说明](../LKM-on-VSCode/README.md#代码结构) |
+| 统一启动、网关、容器、跨项目契约 | `dev.sh` / `dev.ps1`、`docker-compose.yml`、`deploy/`、`scripts/` | 根仓库；本目录保存跨项目架构、开发和部署文档 |
+
+应用行为变更的测试与注释放在所属子仓库；跨服务路由、环境变量或协议变化还需同步根仓库文档和
+`LKM-service/tests/deploy/` 中的相关契约。不要把 `node_modules/`、`.venv/`、构建产物或运行期数据
+当作源码目录整理，也不要手改图标、词典或 API 客户端生成文件。
+
+提交时先在子仓库提交并推送，再在根仓库单独提交相应 gitlink 指针。根仓库的 `git diff` 不展示
+子仓库文件内容，应同时查看 `git -C <子仓库> diff`；根目录显示子模块有修改可能表示指针不同、
+子仓库有未提交文件，或两者都有。修改前先记录各仓库状态，避免把已有变更混入本次提交。
 
 ## 更新规则
 
@@ -59,7 +79,10 @@
 提交前至少执行：
 
 ```sh
-# 检查 Markdown 中引用的仓库内相对路径是否存在
+# 在根仓库检查工程文档的相对文件链接（不递归检查子模块）
+python3 scripts/check_doc_links.py
+
+# 以下检查前端构建产物中的站内 URL；与 Markdown 文件链接检查用途不同
 cd LKM-official-website
 pnpm run build
 pnpm run check:links
