@@ -8,8 +8,17 @@
 #   2) 未配置 dev-code 时：只跑 /reg/local 做接口级 smoke，内容路径使用 DEMO_USER。
 #      发帖需要 normal 权限，local 账号不能发帖。
 #
+# **验收对象必须是网关**（评审阻断项 R4）：
+#   直连 backend（:8000）只能证明「进程 + DB + Redis」可用，会整段绕过 APISIX 路由、
+#   `/lkm/` 预签名 Host 改写、CORS、证书与 WS upgrade——而这几处恰好是历史 502 的现场。
+#   因此：
+#     * BASE_URL 未设置时，取 LKM_COMMUNITY_DOMAINS 的首个域名，走 https://<域名>（默认路径）；
+#     * BASE_URL 若指向回环/容器内地址（127.0.0.1、localhost、backend:8000、:8000），
+#       默认**拒绝运行**：它产出的日志不能当作验收证据。仅本地调接口时才用 DEMO_DIRECT=1
+#       显式放行，此时日志会标注「非验收」。
+#
 # 前置（真实服务，建议 dev/预发）：
-#   export BASE_URL=http://127.0.0.1:8000
+#   export LKM_COMMUNITY_DOMAINS=lkm-ahz.ltd   # 或显式 export BASE_URL=https://<域名>
 #   export DEMO_USER=demo DEMO_PASSWORD=...            # normal 账号（或走路径 1）
 #   export DEMO_ADMIN=admin DEMO_ADMIN_PASSWORD=...    # 管理员
 #   # 可选：第二个普通账号，给帖子评论以产生通知
@@ -24,11 +33,47 @@
 #   export AUTH_INTERNAL_TOKEN=<LKM_AUTH_HTTP_TOKEN>
 #
 # 用法：./scripts/demo_golden_path.sh
-# 输出：docs/acceptance/golden-path-<UTC>.log（逐步骤 HTTP 状态 + pass/fail/skip）
+#       DEMO_DIRECT=1 ./scripts/demo_golden_path.sh   # 仅本地调接口，产物不作验收证据
+# 输出：docs/acceptance/golden-path-<UTC>.log（逐步骤 HTTP 状态 + pass/fail/skip，
+#       头部含 TARGET / GATEWAY 两行：验收时要求 GATEWAY=yes）
 set -uo pipefail
 
-BASE_URL="${BASE_URL:-http://127.0.0.1:8000}"
-BASE_URL="${BASE_URL%/}"
+# 目标地址：默认走网关（见文件头 R4 说明）。域名解析规则与 deploy/apisix/render.sh 同源：
+# 逗号与空白都当分隔符，取首个裸域；不猜 scheme——验收要求 TLS，故固定 https。
+COMMUNITY="${LKM_COMMUNITY_DOMAINS:-}"
+COMMUNITY="$(printf '%s' "$COMMUNITY" | tr -s ',[:space:]' ' ' | sed -e 's/^ *//' -e 's/ *$//')"
+TARGET="${BASE_URL:-}"
+if [[ -z "$TARGET" ]]; then
+    if [[ -n "$COMMUNITY" ]]; then
+        TARGET="https://${COMMUNITY%% *}"
+    else
+        printf '%s\n' \
+            "错误：未设置 BASE_URL，也没有 LKM_COMMUNITY_DOMAINS 可用于推导网关地址。" \
+            "验收必须打网关：export LKM_COMMUNITY_DOMAINS=<域名>（或 BASE_URL=https://<域名>）。" \
+            "仅本地调接口：DEMO_DIRECT=1 BASE_URL=http://127.0.0.1:8000 $0" >&2
+        exit 2
+    fi
+fi
+TARGET="${TARGET%/}"
+BASE_URL="$TARGET"
+
+# 直连判定：这些目标绕过网关，日志不是验收证据（R4 的核心）。用 DEMO_DIRECT=1 显式放行。
+GATEWAY=yes
+case "$TARGET" in
+    http://127.0.0.1[:/]*|http://127.0.0.1|http://localhost[:/]*|http://\[::1\][:/]*)
+        GATEWAY=no ;;
+esac
+case "$TARGET" in
+    *:8000/*|*:8000|*//backend[:/]*)
+        GATEWAY=no ;;
+esac
+if [[ "$GATEWAY" == "no" && "${DEMO_DIRECT:-0}" != "1" ]]; then
+    printf '%s\n' \
+        "拒绝执行：BASE_URL=$TARGET 绕过网关，产物不能作为「一期可交付」的验收证据（R4）。" \
+        "  · 要验收：export BASE_URL=https://<社群域名>" \
+        "  · 仅本地调接口：DEMO_DIRECT=1 $0   （日志会标注「非验收」）" >&2
+    exit 2
+fi
 DEMO_USER="${DEMO_USER:-}"
 DEMO_PASSWORD="${DEMO_PASSWORD:-}"
 DEMO_USER2="${DEMO_USER2:-}"
@@ -116,7 +161,8 @@ PY
 }
 
 log "LKM 金路径验收"
-log "base_url: $BASE_URL"
+log "TARGET: $BASE_URL"
+log "GATEWAY: $GATEWAY"   # 验收要求 yes：no 表示直连后端，日志不能当交付证据（R4）
 log "time(UTC): $STAMP"
 log "要求: DEMO_USER/DEMO_PASSWORD，或 DEMO_REGISTER_EMAIL + AUTH_INTERNAL_TOKEN（后端开 dev-code）"
 

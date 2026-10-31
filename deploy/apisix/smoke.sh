@@ -22,6 +22,7 @@
 #
 # 覆盖：http→https 301（不含内部端口）、后端健康、GraphQL、登录限流 429、
 #       MinIO 路由（Host 改写后到达对象存储）、静态资源长缓存头、WS upgrade 转发、上传体上限、
+#       内部缝 `/api/v1/auth/internal/*` 经网关不可达（403/404，评审阻断项 R2）、
 #       SMOKE_BOT=1 时的 bot 面板子路径可达。
 # 仍需人工/独立手段：X-Real-IP 等转发头落上游的值（需 header echo 上游）、证书续期后 reload、
 #       DNS discovery 在后端容器重启换 IP 后的自愈；见 ../执行路线图.md §7.2.4。
@@ -113,6 +114,23 @@ check_redirect "community redirect location" "$loc"
 # ── 2) 后端健康经网关 200 ──
 code=$(cc -o /dev/null -w '%{http_code}' "https://$COMMUNITY$SP/api/v1/health")
 check "backend health 200" test "$code" = "200"
+
+# ── 2b) 内部缝不得经网关可达（评审阻断项 R2）──
+# `/api/v1/auth/internal/*` 是 backend→auth 的进程间接口（升权、审计、验密、铸票），只应走
+# 容器网络。auth-prefix 把 /api/v1/auth/* 整体暴露给公网，所以这里必须看到 403/404。
+# 401/200 都算失败：那说明请求已经到了 auth 进程，只是被它自己的令牌校验挡住——
+# 即「缝已暴露，唯一保护是共享令牌」，正是本条要钉住的形态。
+# 探针选一个**真实存在**的内部端点（auth/router_authz.py 的 /authz 家族，GET admin-ids），
+# 而不是自造的 /health：路径若非真实端点，403 也可能来自「本来就没有这条路由」，
+# 会把「网关拦住了」与「端点不存在」混为一谈。
+code=$(cc -o /dev/null -w '%{http_code}' "https://$COMMUNITY$SP/api/v1/auth/internal/admin-ids")
+if [ "$code" = "403" ] || [ "$code" = "404" ]; then
+    echo "PASS  auth internal seam not exposed (code=$code)"
+    pass=$((pass + 1))
+else
+    echo "FAIL  auth internal seam reachable (code=$code，期望 403/404)"
+    fail=$((fail + 1))
+fi
 
 # ── 3) GraphQL 可达（200 或 400=已到达后端；5xx 视为故障）──
 code=$(cc -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \

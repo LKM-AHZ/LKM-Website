@@ -153,6 +153,19 @@ routes:
     hosts: [__COMMUNITY_HOSTS__]
     priority: 120
     plugins:
+      # 内部缝阻断：`/api/v1/auth/internal/*` 是 backend→auth 的**进程间**接口
+      # （升权、审计、验密、bot 票据签发），本该只经容器网络打 `auth:8001`。本路由把
+      # `/api/v1/auth/*` 整体暴露给公网，若不在这里显式拦截，这道缝的唯一保护就只剩共享
+      # 令牌 LKM_AUTH_HTTP_TOKEN——而运维照抄模板时那个值长期是 `change-me`，防护强度会从
+      # 「需破解」降成「默认口令」。故在网关层把该前缀拒掉（应用侧另有令牌校验，这是叠加）。
+      # 拦在本路由内而不是新开一条路由：uri-blocker 是 interceptor，命中即在转发前返回，
+      # 同一条路由仍保留 CORS 与请求体上限。容器内直连 `auth:8001/api/v1/auth/internal/*`
+      # 不经网关，不受影响；外网应为 403（见 deploy/apisix/smoke.sh 与评审报告 A2）。
+      uri-blocker:
+        block_rules:
+          - ^/api/v1/auth/internal/
+        rejected_code: 403
+        rejected_msg: internal auth seam is not exposed
       client-control:
         # 与后端 LKM_MAX_UPLOAD_BYTES 同源（render.sh 从同一 env 展开），禁两处手改
         max_body_size: __MAX_BODY_SIZE__

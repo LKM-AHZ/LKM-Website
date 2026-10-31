@@ -622,6 +622,31 @@ services:
     networks:
       - lkm
 
+  # 一次性初始化：MinIO **不会**自动建桶，后端代码也没有建桶逻辑。缺桶时文件上传与头像
+  # 全部 404，此前只能靠人工 `mc mb`（DEPLOYMENT.md 把它写成了「必做」FAQ，说明真踩过）。
+  # 幂等：桶已存在则 `--ignore-existing` 直接放过；退出码 0 表示初始化完成。
+  # `restart: 'no'` 是刻意的——它是 job，不是常驻服务。
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-lkmadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?生产需设置 MINIO_ROOT_PASSWORD}
+      LKM_S3_BUCKET: ${LKM_S3_BUCKET:-lkm}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        mc alias set lkm http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null
+        mc mb --ignore-existing "lkm/$$LKM_S3_BUCKET" >/dev/null
+        echo "minio-init: bucket $$LKM_S3_BUCKET ready"
+    restart: 'no'
+    networks:
+      - lkm
+
   # 文件入库前病毒扫描；签名库持久化，上传路径在扫描服务不可用时拒绝登记。
   clamav:
     image: clamav/clamav:stable
@@ -632,6 +657,23 @@ services:
       CLAMD_CONF_AlertExceedsMax: 'yes'
     volumes:
       - clamav_data:/var/lib/clamav
+    # 健康探针是**观测用**，不是启动闸门（依赖条件见 backend/worker-notify 的 depends_on）。
+    # 它必须显式声明：没有 healthcheck 的服务不能被 `service_healthy` 依赖，而 Compose v2 对
+    # 这种依赖在**装配期**直接失败（dependency failed to start: ... has no healthcheck
+    # configured），表现为整栈起不来、报错与「扫描不可用」的业务症状毫无关联。
+    # 但反过来也成立：`clamav/clamav:stable` 是浮动 tag，探针路径在仓库内无法锁定，所以
+    # 不拿它当启动闸门——否则「整栈能不能起」就押在一条外部镜像内的路径上。
+    # 探针两段回退：官方镜像的 clamdcheck.sh（PING/PONG），缺失时退到 clamdscan --ping。
+    # 两者都不存在 → 容器长期 unhealthy，只影响监控读数，不影响启动；扫描未就绪由应用层
+    # fail-closed 兜底（上传返回 FileErr.SCAN_UNAVAILABLE，绝不静默跳过扫描）。
+    # 目标机 `docker compose ps clamav` 见过 healthy 后，可把依赖条件收紧为 service_healthy。
+    healthcheck:
+      test: ['CMD-SHELL', 'clamdcheck.sh || clamdscan --ping 1']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # 首次启动要下载/加载签名库（空数据卷可达数分钟），期间不能判死
+      start_period: 300s
     restart: ${LKM_RESTART_POLICY:-no}
     networks:
       - lkm
@@ -649,7 +691,13 @@ services:
       minio:
         condition: service_healthy
       clamav:
-        condition: service_healthy
+        # 刻意用 service_started：Compose v2 对「依赖一个没有 healthcheck 的服务」在装配期
+        # 直接失败，而 clamav 的探针路径（镜像内 clamdcheck.sh / clamdscan）无法在本仓库锁定
+        # ——拿它当启动闸门，等于让「整栈起不起得来」取决于浮动 tag 镜像里某个文件是否存在。
+        # 扫描未就绪由应用层 fail-closed 兜底（上传返回 FileErr.SCAN_UNAVAILABLE，而不是
+        # 静默跳过扫描），所以这里不必等健康，只需等容器进程起来。
+        # 目标机确认 `docker compose ps clamav` 为 healthy 后，可收紧为 service_healthy。
+        condition: service_started
     environment:
       LKM_ENV: production
       # 公网 Host 白名单：生产必填（缺则进程装配期 fail-fast）。内网服务名/回环
@@ -708,10 +756,16 @@ services:
       LKM_JWT_PUBLIC_KEY_FILE: ${LKM_JWT_PUBLIC_KEY_FILE:?须先跑 deploy/jwt/gen-keys.sh 生成密钥}
       LKM_GITHUB_CLIENT_ID: ${LKM_GITHUB_CLIENT_ID:-}
       LKM_GITHUB_CLIENT_SECRET: ${LKM_GITHUB_CLIENT_SECRET:-}
-      LKM_RP_ID: 124.220.55.235
-      LKM_ORIGIN: http://124.220.55.235
-      LKM_GITHUB_REDIRECT_URI: http://124.220.55.235/api/v1/auth/oauth/github/callback
-      LKM_FRONTEND_CALLBACK: http://124.220.55.235/login/success
+      # 站点自身身份（换域名时改 `.env` 的这一组，**不要**改本文件）：
+      # 与 auth 容器同键同默认值，两者必须同时生效——WebAuthn 的 RP ID 必须是页面 origin 的
+      # 可注册域后缀，页面在域名而这里是 IP 时浏览器直接拒绝注册/登录；OAuth 回跳与前端回调
+      # 指向旧地址则静默失效（表现为「点了没反应」，日志里未必有错误）。
+      # 曾为字面量硬编码，`cp .env.example .env` 后换域名不生效；契约测试
+      # tests/deploy/test_site_identity_config.py 禁止再写回字面量。
+      LKM_RP_ID: ${LKM_RP_ID:-124.220.55.235}
+      LKM_ORIGIN: ${LKM_ORIGIN:-http://124.220.55.235}
+      LKM_GITHUB_REDIRECT_URI: ${LKM_GITHUB_REDIRECT_URI:-http://124.220.55.235/api/v1/auth/oauth/github/callback}
+      LKM_FRONTEND_CALLBACK: ${LKM_FRONTEND_CALLBACK:-http://124.220.55.235/login/success}
       # 链路追踪：默认关；起 otel profile 并指 ENDPOINT 才生效
       LKM_OTEL_ENABLED: ${LKM_OTEL_ENABLED:-false}
       LKM_OTEL_EXPORTER_OTLP_ENDPOINT: ${LKM_OTEL_EXPORTER_OTLP_ENDPOINT:-}
@@ -932,8 +986,11 @@ services:
     networks:
       - lkm
 
-  # points 三订阅扇出：同一 topic biz/points.apply 挂三个 Shared subscription，
-  # 各由独立进程消费（reward / stats / tasks），真实故障隔离——停一个不影响其余。
+  # points 三订阅扇出：同一 topic biz/points.apply 挂三个 Shared subscription（points-reward /
+  # points-stats / points-tasks），各由独立进程消费，真实故障隔离——停一个不影响其余。
+  # 注意：该 topic 上**一共 4 个订阅名**——第 4 个是 worker-notify 的站内信订阅（见下方
+  # worker-notify），它不属于 points 域。数订阅名时别把两个口径混在一起（曾把注释写成
+  # 「三订阅」而实际 topic 上挂 4 个，排查消息堆积时按注释数会漏掉一个消费方）。
   worker-points-reward:
     image: lkm-service:latest
     command: ['python', '-m', 'boot.workers.points_reward']
@@ -1032,7 +1089,8 @@ services:
       minio:
         condition: service_healthy
       clamav:
-        condition: service_healthy
+        # 同 backend：探针路径未在本仓库锁定，不由它把关启动（见 backend 同名注释）
+        condition: service_started
       auth:
         condition: service_healthy
     environment:
@@ -1064,7 +1122,8 @@ services:
     networks:
       - lkm
 
-  # 消费 biz/points.apply 生成站内信（与 points 三订阅同 topic 不同订阅，故障隔离）。
+  # 消费 biz/points.apply 生成站内信：本订阅是同 topic 上的**第 4 个订阅名**（另三个属 points
+  # 域的 reward/stats/tasks，见上方注释）。四者同 topic、不同订阅，互不抢消息，故障隔离。
   # 需 auth 读缝（触发者展示名），与 backend 同款配置。
   worker-notification:
     image: lkm-service:latest

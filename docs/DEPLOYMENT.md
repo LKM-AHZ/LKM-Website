@@ -10,6 +10,16 @@
 
 - 服务器时间同步正常，公网安全组只开放实际需要的 `80/443` 和 SSH 端口。
 - 已从 `.env.example` 创建 `.env` 并替换所有密码/密钥，或按下文 Infisical 整栈密钥迁移完成注入。
+- **`LKM_AUTH_HTTP_TOKEN` 必须是 `openssl rand -hex 48` 一类的真随机值**：compose 的 `${VAR:?}`
+  只拒绝空值，占位值由后端在生产校验里 fail-fast（`core/config.py` 的 `_no_insecure_secrets_outside_dev`：
+  命中 `change-me`/`changeme`/`your-`/`placeholder` 直接拒启动）。模板里默认写的是 `change-me`，
+  照抄即启动失败——这是刻意的，别为了让它起来而填个占位值。
+- **`LKM_RESTART_POLICY=unless-stopped`**：编排里 25 处默认是 `${LKM_RESTART_POLICY:-no}`，
+  不显式设置则主机重启后所有容器不自愈。
+- **`LKM_MAX_UPLOAD_BYTES` 按目标值显式写清**：编排与网关默认 `104857600`（100 MiB），
+  而模板给的示例值是 15 MB；两者都能跑，但「模板值 vs 文档/冒烟脚本假设的 100 MiB」不一致时，
+  上传边界测试会失败。选定一个数后同时确认网关 `client-control.max_body_size` 由同一变量派生。
+- 换域名时另见文末 FAQ「换域名」：后端自身身份的 5 个键也全在 `.env` 里，compose 不再写死。
 - `docker compose config --quiet` 成功，且渲染结果中没有空的必填变量。
 - 域名 DNS 已指向目标主机；无域名部署已接受自签证书的限制。
 - 已确定 PostgreSQL、MinIO 和后端数据卷的备份位置及恢复负责人。
@@ -281,6 +291,19 @@ SMOKE_BOT=1 sh deploy/apisix/smoke.sh        # 追加 /bot 面板可达（需先
 ```
 
 脚本用 `--resolve <域名>:<端口>:127.0.0.1` 保证 TLS SNI 正确（APISIX 按 SNI 选证书，直连 IP 无 SNI 会握手失败），并用 `--noproxy '*'` 绕过宿主机代理。
+其中第 2b 项专查 `/api/v1/auth/internal/*` 是否被网关挡住（期望 403/404，401/200 都算失败：
+那说明内部缝已暴露、只剩共享令牌）。
+
+**金路径验收（经网关，产物才是交付证据）**：
+
+```sh
+export LKM_COMMUNITY_DOMAINS=<社群域名>     # 脚本据此推导 https://<域名>；也可直接给 BASE_URL
+./scripts/demo_golden_path.sh                # 产物落 docs/acceptance/golden-path-<UTC>.log
+```
+
+脚本默认拒绝打 `127.0.0.1:8000` 这类直连地址：直连只覆盖「进程 + DB + Redis」，
+会整段绕过 APISIX 路由、`/lkm/` 预签名 Host 改写、CORS、证书与 WS upgrade（历史 502 的现场）。
+仅本地调接口时用 `DEMO_DIRECT=1` 显式放行，此时日志头部 `GATEWAY: no`，不能当验收证据。
 
 ## 三·六·一、Infisical 整栈密钥迁移
 
@@ -1043,15 +1066,27 @@ docker run --rm -v lkm_backend_data:/data -v "$PWD":/backup alpine \
   tar czf /backup/backend_files_$(date +%F).tar.gz -C /data .
 ```
 
-## MinIO 首次初始化(建桶)——必做!
+## MinIO 首次初始化(建桶)——已自动化,人工只在排查时用
 
-**后端 S3 存储不会自动创建 MinIO 桶**。新部署的 MinIO 里没有 `lkm` 桶,文件库上传与头像读写会全部 404/失败。
-启动前先建桶:
+**后端 S3 存储不会自动创建 MinIO 桶**,缺桶时文件库上传与头像读写会全部 404。
+因此编排里有一个一次性 job `minio-init`(`minio/mc`):
+
+- `depends_on: minio: service_healthy` → 等 MinIO 健康后再连;
+- `mc mb --ignore-existing "$LKM_S3_BUCKET"` → **幂等**,桶名与 `backend` 的 `LKM_S3_BUCKET` 同源;
+- `restart: 'no'`、退出码 0 即完成,不常驻。
+
+验证:`docker compose up -d && docker compose ps minio-init` 应看到 `Exited (0)`;
+`docker compose logs minio-init` 末行为 `minio-init: bucket <名字> ready`。
+`down -v` 抹掉卷后重新 `up -d` 也会自动重建,不再需要人工介入。
+
+仍保留人工命令,只用于「job 失败后手工补一次」的排查场景:
 
 ```sh
-# 建桶(桶名=LKM_S3_BUCKET,默认 lkm)
+# 手工建桶(桶名=LKM_S3_BUCKET,默认 lkm)。优先先看 minio-init 的日志找失败原因。
 docker exec <minio容器名> sh -c 'mc alias set m http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" && mc mb --ignore-existing m/lkm'
 ```
+
+> 该 job 的存在由部署契约测试 `LKM-service/tests/deploy/test_compose_semantics.py::test_minio_init_creates_the_configured_bucket` 锁定——删掉它或改坏桶名同源关系都会在 CI 里直接红。
 
 > 头像与文件库对象都在该桶内;上传/上传后由后端写回 MinIO,无需再手动预置。
 
@@ -1081,14 +1116,20 @@ cd LKM-service
   机房的就近镜像不同,写死会让别处构建失败。
 - **上传大文件被拒**:APISIX 路由已设 `client-control.max_body_size: 104857600`(100m),与后端 `max_upload_bytes` 对齐;更大文件需同时改 `deploy/apisix/apisix.yaml` 与后端配置。
 - **数据库**:使用 PostgreSQL(`timescale/timescaledb:latest-pg16` 服务,卷持久化)。后端经 `LKM_DB_*` 环境变量以 `postgresql+asyncpg` 连接;首次启动时自动建表(默认走 `create_all` 通道)。**换库/改 schema 后需重建数据卷**(`docker compose down -v`,见「数据库」章节)。
-- **换域名**:网关侧只需在 `.env` 改 `LKM_COMMUNITY_DOMAINS`(hosts、CORS 来源、MinIO Host、证书 SNI 全量跟随,见「单一来源」),再 `docker compose up -d apisix-render` 重渲染(bot 面板随社群域走,无需额外 DNS/证书);此外还要改后端**自身身份**类配置 `LKM_ALLOWED_HOSTS`/`LKM_ORIGIN`/`LKM_RP_ID`/`LKM_GITHUB_REDIRECT_URI`/`LKM_FRONTEND_CALLBACK`/`LKM_S3_PUBLIC_ENDPOINT_URL` 与前端 `PUBLIC_SITE_URL`/`PUBLIC_BASE_PATH`,并重新签发证书。
+- **换域名**:网关侧只需在 `.env` 改 `LKM_COMMUNITY_DOMAINS`(hosts、CORS 来源、MinIO Host、证书 SNI 全量跟随,见「单一来源」),再 `docker compose up -d apisix-render` 重渲染(bot 面板随社群域走,无需额外 DNS/证书)。后端**自身身份**类配置 `LKM_ORIGIN`/`LKM_RP_ID`/`LKM_GITHUB_REDIRECT_URI`/`LKM_FRONTEND_CALLBACK`/`LKM_S3_PUBLIC_ENDPOINT_URL` 与 `LKM_ALLOWED_HOSTS` **也都在 `.env` 里改**(compose 已全部写成 `${VAR:-默认值}`,不要再去改 `docker-compose.yml`);前端改 `PUBLIC_SITE_URL`/`PUBLIC_BASE_PATH`;最后重新签发证书。四个键漏改任何一项都是**静默失效**(WebAuthn 直接拒、OAuth 回跳旧地址、登录成功白屏、预签名被混合内容拦截),契约测试 `tests/deploy/test_site_identity_config.py` 锁的就是「不许再写回字面量」。
 
-- **头像/文件上传 404**:MinIO 桶未创建(S3 不自动建桶)。先 `mc mb .../lkm` 建桶(见上文「MinIO 首次初始化」)。
+- **头像/文件上传 404**:MinIO 桶未创建(S3 不自动建桶)。正常路径由一次性 job `minio-init` 自动建桶——先看 `docker compose logs minio-init` 是否 `Exited (0)`;失败时再手动 `mc mb .../lkm` 补一次(见上文「MinIO 首次初始化」)。
 
 - **上传返回 403 SignatureDoesNotMatch**:boto3 对 MinIO 默认生成 SigV2 签名,MinIO 不认 → 需在 s3.py 预签名 client 显式 `signature_version="s3v4"` + `addressing_style="path"` + 给 region。且预签名 URL 的 host 必须与浏览器实际访问的 host 一致(`LKM_S3_PUBLIC_ENDPOINT_URL`)。
 
 - **上传经 APISIX 后 400 Bad Request**(而直连 MinIO 正常)**:MinIO 路由的 Host 必须落为公网站点(SigV4 预签名按公网 host 签)(`deploy/apisix/apisix.yaml` 的 `minio` 路由用 `pass_host: rewrite` + `upstream.upstream_host`;用插件 `proxy-rewrite.host` 会被 pass_host 以 nil 覆盖 → 空 Host → MinIO 400)。
 
 - **MinIO 建议经 APISIX 转发而非开公网 9000**:compose 里 minio 保持仅内网,由 APISIX `/lkm/` 路径转发;安全组只需放行 80/443。
+
+- **后台看不到「机器人」分组（或 iframe 提示无权限）**：该管理员缺 `admin.bot_panel` 能力点。
+  它默认只授予复合角色 `admin:super_admin`（bot 票据换的是面板会话＝Bot 控制面），
+  不是「是 admin 就有」。需要时在 `role_permissions` 里给对应复合角色补一行（`enabled=true`），
+  再用 `/api/v1/admin/auth/me` 确认 `permissions` 里出现该值；换票成功与拒绝都会写 `audit_logs`
+  （`admin_bot_panel_ticket_issued` / `admin_bot_panel_access_denied`）。
 
 - **后台登录后操作报「需要 MFA」**:登录不再强制 2FA(对齐 GitHub),仅后台危险操作(板块审核等)要求 2FA;通过后信任 1 小时。首次需在后台完成 2FA 设置。
