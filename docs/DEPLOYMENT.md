@@ -525,10 +525,11 @@ docker compose restart signoz-otel-collector   # 注册后立即重连，否则�
 
 ## 三·十一、LKM Bot 社区机器人(可选,`--profile bot`)
 
-`LKM-bot/` 是 AstrBot 的 fork，提供 IM 平台接入与机器人面板。**默认不随主栈启动**——面板是大镜像
-（含 nodejs/ffmpeg）。面板挂在**社群域的子路径 `/bot/`**（不再是独立子域名），并由社区后台
-「机器人」菜单以同源 iframe 内嵌；它自带的 `/api/v1/*` 与社区站同前缀，靠网关 `proxy-rewrite`
-**剥掉 `/bot` 前缀**隔离（剥掉后面板进程仍以根路径服务，社区站 backend 路由不受影响）。
+`LKM-bot/` 是 AstrBot 的 fork，提供 IM 平台接入与机器人后端 API；**管理面板 UI 已迁到官网仓库**
+（`LKM-official-website/bot-panel/`，构建产物由 Astro 静态托管在 `/bot/`）。bot 只提供
+`/bot/api/*`（SSO、插件页面 HTML、WebSocket 与全部 v1 端点），网关按前缀拆分：静态 UI 走前端
+容器，API 剥掉 `/bot` 前缀后转发给 lkmbot（社区站 backend 路由不受影响）。bot 镜像不再包含
+Node 前端构建，体积与构建时间都随之下降。
 
 ```sh
 # 1) .env：配面板初始密码（留空则面板自生成随机密码并打到日志）
@@ -550,6 +551,22 @@ SMOKE_BOT=1 sh deploy/apisix/smoke.sh 127.0.0.1
 
 回退：`docker compose --profile bot down`（bot 数据在宿主机目录里，不受 `-v` 影响）。
 
+**原生概览页（BFF，可选）**：社区后台「机器人 → 概览」已改为原生页面，数据由 backend 以
+API Key 读取面板 OpenAPI v1，浏览器不再直连 `/bot/`。两项都要配齐才生效，任一留空则页面
+显示「未接入」并引导到完整面板（iframe 与 SSO 换票链路不受影响）：
+
+```sh
+# LKM_BOT_API_BASE_URL=http://lkmbot:6185/api/v1
+# LKM_BOT_ADMIN_API_KEY=<面板「设置 → OpenAPI」创建的 Key，需 system/provider/plugin 读取 scope>
+```
+
+八个机器人页面现已全部原生：概览、日志为完整原生视图；平台/模型/插件/知识库/配置为原生
+列表 + 启停/编辑，编辑动作在弹窗里加载面板原页面（每次向 `/admin/bot/sso-ticket` 换新票，
+一次性票据不复用），因此保存、2FA、动态表单等行为与面板一致。任一页面在
+`LKM_BOT_API_BASE_URL`/`LKM_BOT_ADMIN_API_KEY` 未配置或 bot 不可达时整页回退同源 iframe
+完整面板，功能不缺失。K8s 部署时 `LKM_BOT_ADMIN_API_KEY` 放进 `lkm-secrets`，
+`LKM_BOT_API_BASE_URL` 在 `lkm-config`（默认空）。
+
 **子路径前缀是单一来源**：面板涉及三处前缀，全部由 `.env` 的 `LKM_BOT_BASE_PATH`（默认 `/bot`）
 派生，改这一处即全量跟随，不要再分别改：
 
@@ -557,14 +574,12 @@ SMOKE_BOT=1 sh deploy/apisix/smoke.sh 127.0.0.1
 | --- | --- | --- |
 | 网关路由 `uri` 与剥前缀正则 | 无尾斜杠 | `render.sh` 展开 `__BOT_BASE_PATH__`（compose 传 `APISIX_BOT_BASE_PATH`；k8s 取 `lkm-gateway-config/LKM_BOT_BASE_PATH`）|
 | 面板运行期 `ASTRBOT_DASHBOARD_BASE_PATH` | 无尾斜杠 | compose 展开同一变量；k8s 的 lkmbot 部署读 `lkm-gateway-config/LKM_BOT_BASE_PATH` 同一个键 |
-| 前端构建期 `VITE_BASE_PATH` | **带尾斜杠** | compose `build.args` 展开同一变量 |
+| 面板构建期 `VITE_BASE_PATH` | **带尾斜杠** | 前端仓库 `bot-panel/` 构建时由 Dockerfile 固定为 `/bot/` |
 
-**首次构建**：面板前端 `dist` **由镜像内构建**（多阶段 Dockerfile），因此构建机需要能访问
-npm registry。`LKM-bot/Dockerfile` 的 `ARG VITE_BASE_PATH` 默认值是 `/`（上游语义：镜像与部署
-位置无关），**挂子路径的部署必须显式传参** —— compose 已从 `LKM_BOT_BASE_PATH` 传入，故
-`docker compose --profile bot build lkmbot` 构建出的 dist 带正确 base；直接 `docker build`
-不带参数得到的是根 base 包，挂到子路径下静态资源会 404。构建用 `pnpm build:subpath`
-（跳过 `vue-tsc`，类型检查在开发侧做）。
+**首次构建**：面板 `dist` 由**前端镜像**构建（`LKM-official-website/Dockerfile` 的 `bot-panel`
+阶段，产物 `/public/bot` 由 Astro 托管），构建机需要能访问 npm registry；lkmbot 镜像不再构建
+前端。本地全量构建用 `pnpm run build`（先 `build:bot-panel` 再 `build:web`）；只改官网页面时
+可用 `pnpm run build:web` 复用已生成的面板产物。
 
 **systemd 单元不参与本部署**：`deploy/systemd/lkmbot.service` 是 LKM-bot standalone（系统包
 管理器 / AUR，见 `LKM-bot/docs/*/deploy/astrbot/sys-pm.md`）安装路径的 `systemd --user` 单元，

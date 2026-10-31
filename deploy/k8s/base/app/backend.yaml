@@ -56,6 +56,9 @@ spec:
           envFrom:
             - configMapRef: { name: lkm-config }
             - configMapRef: { name: lkm-config-analytics }
+            # lkm-secrets 需同时包含后台「机器人」原生页（BFF）的服务密钥
+            # LKM_BOT_ADMIN_API_KEY（LKM-bot「设置 → OpenAPI」创建，带 system/provider/plugin
+            # 读取 scope）；未提供时原生概览降级为「未接入」，不影响 iframe 面板。
             - secretRef: { name: lkm-secrets }
           volumeMounts:
             - name: data

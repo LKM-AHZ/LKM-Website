@@ -78,6 +78,9 @@ data:
   # 站内检索（B2）：默认 pg（零外部依赖）。启用 infra/search.yaml 的引擎时改这里的
   # LKM_SEARCH_ENGINE 并把对应 StatefulSet 副本数改 1（引擎不可用时读路径回落 PG）。
   LKM_SEARCH_ENGINE: "pg"
+  # 后台「机器人」原生页（BFF）：backend 以 API Key 读 LKM-bot OpenAPI v1。
+  # 留空 = 原生概览降级为「未接入」，iframe 面板与换票链路不受影响。
+  LKM_BOT_API_BASE_URL: ""
   LKM_SEARCH_MEILI_URL: http://meilisearch:7700
   LKM_SEARCH_OPENSEARCH_URL: http://opensearch:9200
   LKM_PREFECT_ENABLED: "false"

@@ -8,7 +8,7 @@
 #                                 k8s=CoreDNS ClusterIP（kind 与多数集群为 10.96.0.10）
 #   APISIX_UPSTREAM_SUFFIX     —— upstream 服务名后缀：compose 留空，k8s 为
 #                                 `.lkm.svc.cluster.local`（CoreDNS 不补 search domain）
-#   LKM_BOT_BASE_PATH          —— bot 面板子路径前缀：网关与 lkmbot 面板**共用同一个键**
+#   LKM_BOT_BASE_PATH          —— bot 面板子路径前缀：网关、前端面板构建期 base 与 lkmbot 面板**共用同一个键**
 #                                 （compose 侧同名变量由 .env 下发）
 # 域名与上限两处与 lkm-config 共享同一来源，避免「网关改了后端没改」。
 apiVersion: v1

@@ -113,6 +113,10 @@ Pipeline 的上下文、调度器和阶段基类位于 `astrbot/core/pipeline/`�
 前端构建期通过 `VITE_BASE_PATH` 决定面板挂在根路径还是子路径；API/WS/EventSource/iframe
 路径由 `src/api/base.ts` 与拦截器统一补前缀。
 
+> 面板源码已迁到前端仓库 `LKM-official-website/bot-panel/`（构建产物由 Astro 静态托管在
+> `/bot/`）。本仓库只保留面板 API：`/bot/api/*` 由网关剥前缀后转发到 lkmbot，静态 UI 走前端
+> 容器；bot 镜像不再构建前端。
+
 ## 7. LKM 定制层
 
 `astrbot/lkm/` 只放本 fork 相对上游新增的社区集成代码：

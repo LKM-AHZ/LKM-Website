@@ -342,7 +342,7 @@ routes:
 
   # ── LKM Bot 面板（社群域下的子路径，profile=bot 可选组件）──
   # 子路径前缀由 __BOT_BASE_PATH__ 占位展开（默认 /bot，来源 LKM_BOT_BASE_PATH；
-  # 与 lkmbot 的构建期 VITE_BASE_PATH / 运行期 ASTRBOT_DASHBOARD_BASE_PATH 同源）。
+  # 与前端面板构建期 base / lkmbot 运行期 ASTRBOT_DASHBOARD_BASE_PATH 同源）。
   # 挂在同域子路径（而非独立子域）：面板自带 API 与社群站同为绝对路径 /api/v1/*，同 host 下
   # 若按原样转发会与 backend 路由正面冲突。解法是**剥前缀**——浏览器请求 <前缀>/api/v1/... →
   # 本处 proxy-rewrite 去掉前缀 → 面板进程仍以根路径服务其静态资源与 API，backend 的
@@ -382,7 +382,26 @@ routes:
     priority: 106
     plugins:
       proxy-rewrite:
-        uri: /
+        uri: __BOT_BASE_PATH__/index.html
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "astro__UPSTREAM_SUFFIX__:4321"
+      pass_host: pass
+
+  # 面板 API（/bot/api/*）仍由 lkmbot 提供：SSO、插件页面 HTML、WebSocket 与所有 v1 端点。
+  # 静态 UI 已迁到官网仓库（bot-panel/ → /bot/），故这里只把 API 前缀剥掉转给 lkmbot。
+  # priority 140 低于 bot-auth-login(150)，登录限流仍然先命中。
+  - id: bot-api
+    uri: __BOT_BASE_PATH__/api/*
+    hosts: [__COMMUNITY_HOSTS__]
+    priority: 140
+    enable_websocket: true
+    plugins:
+      client-control:
+        max_body_size: __BOT_MAX_BODY_SIZE__
+      proxy-rewrite:
+        regex_uri: ["^__BOT_BASE_PATH__/(.*)", "/$1"]
     upstream:
       type: roundrobin
       discovery_type: dns
@@ -401,16 +420,11 @@ routes:
     uri: __BOT_BASE_PATH__/*
     hosts: [__COMMUNITY_HOSTS__]
     priority: 105
-    enable_websocket: true
-    plugins:
-      client-control:
-        max_body_size: __BOT_MAX_BODY_SIZE__
-      proxy-rewrite:
-        regex_uri: ["^__BOT_BASE_PATH__/(.*)", "/$1"]
+    # 面板静态资源由 Astro 提供（源码在官网仓库 bot-panel/），路径原样转发（/bot/*）
     upstream:
       type: roundrobin
       discovery_type: dns
-      service_name: "lkmbot__UPSTREAM_SUFFIX__:6185"
+      service_name: "astro__UPSTREAM_SUFFIX__:4321"
       pass_host: pass
 
 # __SSL_SECTION__
