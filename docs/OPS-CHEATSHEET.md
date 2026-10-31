@@ -250,7 +250,7 @@ docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
 | admin 登录后文件上传/危险操作被拒 | 见「管理员」节(需 2FA / 走 https) | 后台走 `https://<IP>`;危险操作需先验 2FA |
 | `https://<社群域>/bot/` 502/503 | lkmbot 未起(可选组件,主栈 up 不含它) | `docker compose --profile bot up -d lkmbot` |
 | `https://<社群域>/bot/` 404(被前台接走) | `/bot` 路由未加载(proxy-rewrite 写法非法会让整条路由被 APISIX 丢弃) | `docker compose logs apisix \| grep -i schema`;`docker compose exec apisix-render grep -n bot /out/apisix.yaml` 确认三条路由在产物里,再 `docker compose restart apisix` |
-| 面板白屏/资源 404,Network 里 JS 打到 `/assets/...` | 面板 dist 是**根 base** 的:要么被「WebUI 在线更新」覆盖,要么**旧部署遗留的 `LKM-bot/data/dist`**(旧版会从上游下载)在优先级上盖过镜像内置 dist | 删掉遗留产物 `sudo rm -rf LKM-bot/data/dist` 后重启 `lkmbot`;不要再在面板里点在线更新。内置 dist 由镜像构建(带 `/bot` base),版本与 Core 一致时不会触发下载 |
+| 面板白屏/资源 404,Network 里 JS 打到 `/assets/...` | 面板由官网镜像构建并带 `/bot` base;旧部署遗留的 `LKM-bot/data/dist`(根 base)会被 bot 当静态兜底,直连 6185 时盖过官网路由 | 删掉遗留产物 `sudo rm -rf LKM-bot/data/dist` 后重启 `lkmbot`;面板升级只走重建官网镜像,bot 内已无在线更新 |
 | 打开 `/admin/bot/*` 停在面板登录页 | SSO 未生效(未配 RS256 公钥 / auth 不可达 / 票据被重放) | 确认 `deploy/jwt/keys/jwt-public.pem` 存在且已挂进 lkmbot(compose 卷);看 `docker compose logs lkmbot \| grep -i sso`;不修也不影响使用——手动登录一次即可 |
 | 同上,且日志里是 `InvalidIssuerError`/`InvalidAudienceError`/`type` 校验失败 | 签发侧 auth 与消费侧 lkmbot 读到的 `LKM_BOT_SSO_AUDIENCE`/`LKM_BOT_SSO_ISSUER`/`LKM_BOT_SSO_TYPE`/`LKM_BOT_SSO_ACCOUNT_LEVEL` 不一致(四项由**同一处**下发,只有手工改过一侧才会发生) | `docker compose config \| grep LKM_BOT_SSO` 看两个服务是否同值;不要单独改某一侧,改 compose 的 `x-bot-sso-env` 锚点(或 k8s 的 `lkm-config-botsso`)。`LKM_BOT_SSO_TTL_SECONDS` 例外:只有 auth 有它 |
 | bot 面板上传大文件被 413 | 网关 `LKM_BOT_MAX_UPLOAD_BYTES` 被改小(独立于社群站的 100MB) | 恢复默认 `550000000` 并 `docker compose up -d apisix-render apisix` |

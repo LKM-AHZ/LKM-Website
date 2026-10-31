@@ -610,9 +610,11 @@ audience 的签发方；不符或缺失一律 302 回面板登录页（fail-safe
 **数据目录**：`./LKM-bot/data`（宿主机 bind，非命名卷）。必须 bind 的原因见下条沙箱共享目录；
 副作用是该目录归 root 所有，非 root 运维删除需 sudo。
 
-**⚠️ 不要在面板里用「WebUI 在线更新」**：该功能会下载上游 registry 的 dist（**根 base**）覆盖
-`data/dist`，而它的优先级高于镜像内置的 dist —— 一旦覆盖，`/bot/` 下的静态资源与 API 前缀全部
-失配（面板白屏）。升级面板请走**重建镜像**（`docker compose --profile bot build lkmbot`）。
+**面板升级只走重建镜像**：面板前端已迁入官网仓库并由 Astro 在 `/bot/` 提供，bot 镜像不再
+内置 dist，也不再提供「WebUI 在线更新」。若历史部署残留 `LKM-bot/data/dist`，bot 仍会把它当
+静态兜底（只影响直连 6185 的请求），建议删除以免混淆：
+`sudo rm -rf LKM-bot/data/dist`。升级面板请重建官网镜像
+（`docker compose build astro`，面板随官网镜像构建）。
 
 **⚠️ 面板里的平台回调地址要带 `/bot` 前缀**：`callback_api_base`（面板「配置」里）用于给外部
 IM 平台回调用，需填 `https://lkm-ahz.ltd/bot`，否则回调会打到社区站 backend（`/api/v1/webhooks/...`

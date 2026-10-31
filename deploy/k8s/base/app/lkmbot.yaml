@@ -64,9 +64,9 @@ spec:
             - name: ASTRBOT_ROOT
               value: /LKMBot
             # 必须 0.0.0.0：绑回环会让面板的「默认密码免校验」判定成立，且网关打 Pod IP 连不上
-            - name: DASHBOARD_HOST
+            - name: ASTRBOT_DASHBOARD_HOST
               value: 0.0.0.0
-            - name: DASHBOARD_PORT
+            - name: ASTRBOT_DASHBOARD_PORT
               value: "6185"
             # 面板挂在社群域子路径（默认 /bot，网关剥前缀后转发到本 Pod）：后端据此收窄 cookie
             # Path 与 302 Location。**从 lkm-gateway-config 取与网关路由同一个键**（单一来源，

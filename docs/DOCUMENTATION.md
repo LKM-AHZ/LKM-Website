@@ -53,7 +53,7 @@
 |---|---|---|
 | 页面、社区交互、编辑器 | `LKM-official-website/src/pages/` → `features/` → `lib/api/` | 前端子仓库；[结构说明](../LKM-official-website/README2.md#架构) |
 | API、认证、异步任务 | `LKM-service/main.py` → `boot/backend.py` → `app/`、`auth/`、`core/` | 后端子仓库；[结构说明](../LKM-service/README.md#项目结构) |
-| Bot 消息、管理面板、社区 SSO | `LKM-bot/main.py` → `astrbot/core/initial_loader.py`；WebUI 在 `dashboard/` | Bot 子仓库；[开发导航](../LKM-bot/README.md#代码结构与开发入口) |
+| Bot 消息、管理面板、社区 SSO | `LKM-bot/main.py` → `astrbot/core/initial_loader.py`；WebUI 在社区站 `bot-panel/` | Bot 子仓库；[开发导航](../LKM-bot/README.md#代码结构与开发入口) |
 | VS Code 命令、账号、Git 同步 | `LKM-on-VSCode/src/extension.ts` | 扩展子仓库；[结构说明](../LKM-on-VSCode/README.md#代码结构) |
 | 统一启动、网关、容器、跨项目契约 | `dev.sh` / `dev.ps1`、`docker-compose.yml`、`deploy/`、`scripts/` | 根仓库；本目录保存跨项目架构、开发和部署文档 |
 

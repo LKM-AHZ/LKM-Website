@@ -26,11 +26,12 @@ main.py
        └─ AstrBotDashboard
             ├─ FastAPI ASGI API
             ├─ Hypercorn
-            └─ dashboard/dist 静态面板
+            └─ 可选静态面板兜底（data/dist；面板本体由社区站 /bot/ 提供）
 ```
 
 - 默认 HTTP 服务端口为 `6185`（`astrbot/core/config/default.py` 的 `dashboard.port`）。
-- 管理面板代码在 `dashboard/`，生产构建产物复制到 `astrbot/dashboard/dist`。
+- 管理面板前端在社区站仓库 `LKM-official-website/bot-panel/`，由 Astro 在 `/bot/` 提供；
+  bot 侧只保留面板 API，以及显式目录 / `data/dist` 的静态托管兜底。
 - 启动命令为 `uv run main.py`；容器镜像暴露 `6185`，入口同为 `python main.py`。
 
 ## 3. 消息处理流水线
@@ -65,7 +66,7 @@ Pipeline 的上下文、调度器和阶段基类位于 `astrbot/core/pipeline/`�
 | `astrbot/core/computer/`       | 本地文件/终端/沙箱访问与权限控制                             |
 | `astrbot/core/config/`         | 配置模型、默认值、配置 profile 与迁移                        |
 | `astrbot/builtin_stars/`       | 内置命令与群聊上下文插件                                     |
-| `astrbot/api/`                 | 对插件开发者暴露的稳定 API 面                                |
+| `astrbot/api/`                 | 对插件暴露的 API（logger、AstrBotConfig、ToolSet、事件/消息组件）；旧 `astrbot.api.all` / `star` / `platform` / `provider` 导入路径已移除 |
 
 ## 5. 平台、Provider 与插件
 
@@ -96,7 +97,7 @@ Pipeline 的上下文、调度器和阶段基类位于 `astrbot/core/pipeline/`�
 
 ### 6.2 前端
 
-`dashboard/` 是基于 Vuetify 的 Vue 3 SPA：
+`LKM-official-website/bot-panel/` 是基于 Vuetify 的 Vue 3 SPA（面板前端已迁出 bot 仓库）：
 
 | 路由组         | 功能                                    |
 | -------------- | --------------------------------------- |
@@ -110,7 +111,7 @@ Pipeline 的上下文、调度器和阶段基类位于 `astrbot/core/pipeline/`�
 | `/data/*`      | 统计、会话、控制台、Trace               |
 | `/chat`        | 独立聊天与调试面板                      |
 
-前端构建期通过 `VITE_BASE_PATH` 决定面板挂在根路径还是子路径；API/WS/EventSource/iframe
+前端构建期通过 `VITE_BASE_PATH` 决定面板挂在根路径还是子路径（生产固定 `/bot/`）；API/WS/EventSource/iframe
 路径由 `src/api/base.ts` 与拦截器统一补前缀。
 
 > 面板源码已迁到前端仓库 `LKM-official-website/bot-panel/`（构建产物由 Astro 静态托管在
@@ -161,7 +162,7 @@ uv run pytest
 
 目录归属和生成产物规则见 [Bot 开发入口](../LKM-bot/README.md#代码结构与开发入口)。
 API 路由在 `astrbot/dashboard/api/` 装配，前端客户端由 `openspec/openapi-v1.yaml` 生成到
-`dashboard/src/api/generated/`；修改规格和路由后须同步生成客户端。
+`bot-panel/src/api/generated/`；修改规格和路由后须同步生成客户端。
 
 ## 10. 维护边界
 
