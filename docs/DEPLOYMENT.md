@@ -573,7 +573,7 @@ API Key 读取面板 OpenAPI v1，浏览器不再直连 `/bot/`。两项都要�
 | 消费点 | 形态 | 来源 |
 | --- | --- | --- |
 | 网关路由 `uri` 与剥前缀正则 | 无尾斜杠 | `render.sh` 展开 `__BOT_BASE_PATH__`（compose 传 `APISIX_BOT_BASE_PATH`；k8s 取 `lkm-gateway-config/LKM_BOT_BASE_PATH`）|
-| 面板运行期 `ASTRBOT_DASHBOARD_BASE_PATH` | 无尾斜杠 | compose 展开同一变量；k8s 的 lkmbot 部署读 `lkm-gateway-config/LKM_BOT_BASE_PATH` 同一个键 |
+| 面板运行期 `BOT_DASHBOARD_BASE_PATH` | 无尾斜杠 | compose 展开同一变量；k8s 的 lkmbot 部署读 `lkm-gateway-config/LKM_BOT_BASE_PATH` 同一个键 |
 | 面板构建期 `VITE_BASE_PATH` | **带尾斜杠** | 前端仓库 `bot-panel/` 构建时由 Dockerfile 固定为 `/bot/` |
 
 **首次构建**：面板 `dist` 由**前端镜像**构建（`LKM-official-website/Dockerfile` 的 `bot-panel`
@@ -582,7 +582,7 @@ API Key 读取面板 OpenAPI v1，浏览器不再直连 `/bot/`。两项都要�
 可用 `pnpm run build:web` 复用已生成的面板产物。
 
 **systemd 单元不参与本部署**：`deploy/systemd/lkmbot.service` 是 LKM-bot standalone（系统包
-管理器 / AUR，见 `LKM-bot/docs/*/deploy/astrbot/sys-pm.md`）安装路径的 `systemd --user` 单元，
+管理器 / AUR，见 `LKM-bot/docs/*/deploy/bot/sys-pm.md`）安装路径的 `systemd --user` 单元，
 本站用 compose / k8s，**不使用**它（从 `LKM-bot/scripts/` 迁到此处归档，以免看起来像本项目的
 部署面）。
 

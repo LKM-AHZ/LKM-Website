@@ -61,17 +61,17 @@ spec:
             - name: TZ
               value: Asia/Shanghai
             # 显式固定 data 路径（默认取 cwd，入口一改就漂移）
-            - name: ASTRBOT_ROOT
+            - name: BOT_ROOT
               value: /LKMBot
             # 必须 0.0.0.0：绑回环会让面板的「默认密码免校验」判定成立，且网关打 Pod IP 连不上
-            - name: ASTRBOT_DASHBOARD_HOST
+            - name: BOT_DASHBOARD_HOST
               value: 0.0.0.0
-            - name: ASTRBOT_DASHBOARD_PORT
+            - name: BOT_DASHBOARD_PORT
               value: "6185"
             # 面板挂在社群域子路径（默认 /bot，网关剥前缀后转发到本 Pod）：后端据此收窄 cookie
             # Path 与 302 Location。**从 lkm-gateway-config 取与网关路由同一个键**（单一来源，
             # 不再各自硬编码）；前端构建期 base 由 compose 构建镜像时传参，也必须同值。
-            - name: ASTRBOT_DASHBOARD_BASE_PATH
+            - name: BOT_DASHBOARD_BASE_PATH
               valueFrom:
                 configMapKeyRef: { name: lkm-gateway-config, key: LKM_BOT_BASE_PATH }
             # 社区后台 SSO 的验签公钥（与网关同源，只挂载该文件）。读不到 → 面板回落自带
@@ -97,7 +97,7 @@ spec:
             # 对象存储密钥一并灌进 bot 进程，见 app-config.yaml 的「谁真的用」原则）。
             # optional=true：未在 .env 配该项时 Secret 里没有这个键，Pod 仍应正常起
             # （面板自生成随机密码并打到日志）。
-            - name: ASTRBOT_DASHBOARD_INITIAL_PASSWORD
+            - name: BOT_DASHBOARD_INITIAL_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: lkm-secrets

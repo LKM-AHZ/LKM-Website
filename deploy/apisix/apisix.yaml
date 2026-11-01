@@ -342,7 +342,7 @@ routes:
 
   # ── LKM Bot 面板（社群域下的子路径，profile=bot 可选组件）──
   # 子路径前缀由 __BOT_BASE_PATH__ 占位展开（默认 /bot，来源 LKM_BOT_BASE_PATH；
-  # 与前端面板构建期 base / lkmbot 运行期 ASTRBOT_DASHBOARD_BASE_PATH 同源）。
+  # 与前端面板构建期 base / lkmbot 运行期 BOT_DASHBOARD_BASE_PATH 同源）。
   # 挂在同域子路径（而非独立子域）：面板自带 API 与社群站同为绝对路径 /api/v1/*，同 host 下
   # 若按原样转发会与 backend 路由正面冲突。解法是**剥前缀**——浏览器请求 <前缀>/api/v1/... →
   # 本处 proxy-rewrite 去掉前缀 → 面板进程仍以根路径服务其静态资源与 API，backend 的
@@ -351,7 +351,7 @@ routes:
   #    查路由是否生效（见 DEPLOYMENT「LKM Bot」一节的验证步骤）。
   # 登录写面限流「网关那一半」，分工同社群站 auth-login：这里按 remote_addr 粗粒度削峰
   # （policy=local 各实例独立计数，把洪水挡在应用前）；面板另有应用内令牌桶
-  # （astrbot/dashboard/server.py）。不挂 cors：同源面板用不到，且 cors 插件在
+  # （bot/dashboard/server.py）。不挂 cors：同源面板用不到，且 cors 插件在
   # allow_credential=true 下禁 `*`，多挂一处就多一处「整条路由校验失败不加载」的面。
   - id: bot-auth-login
     uri: __BOT_BASE_PATH__/api/v1/auth/login*

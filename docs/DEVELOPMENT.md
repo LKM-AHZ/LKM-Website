@@ -30,7 +30,7 @@ LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / 
 ├── .gitignore                # 忽略 .env、记忆目录等敏感/本地文件
 ├── LKM-official-website/     # 动态前端(Astro SSR + Vue/React islands)
 ├── LKM-service/              # 后端(FastAPI,REST /api/v1 + GraphQL)
-├── LKM-bot/                  # 机器人(astrbot)
+├── LKM-bot/                  # 机器人(bot)
 └── LKM-on-VSCode/            # 博客同步 VS Code 扩展
 ```
 

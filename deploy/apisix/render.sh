@@ -54,7 +54,7 @@ MAX_BODY_SIZE="${APISIX_MAX_BODY_SIZE:-104857600}"
 BOT_MAX_BODY_SIZE="${APISIX_BOT_MAX_BODY_SIZE:-550000000}"
 # bot 面板子路径前缀：路由 uri 与 proxy-rewrite 剥前缀正则都由它展开（占位 __BOT_BASE_PATH__）。
 # compose 侧来源 .env 的 LKM_BOT_BASE_PATH（k8s 侧放 lkm-gateway-config），与面板自身的
-# ASTRBOT_DASHBOARD_BASE_PATH / 构建期 VITE_BASE_PATH 同一变量——三面必须同值，否则
+# BOT_DASHBOARD_BASE_PATH / 构建期 VITE_BASE_PATH 同一变量——三面必须同值，否则
 # 路由匹配不到面板。**不带尾斜杠**（正则里紧跟 `/(.*)`，带斜杠会多出一级）。
 BOT_BASE_PATH="${APISIX_BOT_BASE_PATH:-/bot}"
 # RS256 网关验签（批 5）：公钥 PEM 文件路径（未配置/文件不存在 → 网关不做 JWT 校验）。
