@@ -66,7 +66,7 @@ Pipeline 的上下文、调度器和阶段基类位于 `bot/core/pipeline/`；�
 | `bot/core/computer/`       | 本地文件/终端/沙箱访问与权限控制                             |
 | `bot/core/config/`         | 配置模型、默认值、配置 profile 与迁移                        |
 | `bot/builtin_stars/`       | 内置命令与群聊上下文插件                                     |
-| `bot/api/`                 | 对插件暴露的 API（logger、BotConfig、ToolSet、事件/消息组件）；旧 `astrbot.api.all` / `star` / `platform` / `provider` 导入路径已移除 |
+| `bot/api/`                 | 对插件暴露的 API（logger、BotConfig、ToolSet、事件/消息组件、后端服务客户端 `get_backend_client`）；旧 `astrbot.api.all` / `star` / `platform` / `provider` 导入路径已移除 |
 
 ## 5. 平台、Provider 与插件
 
@@ -129,8 +129,44 @@ Pipeline 的上下文、调度器和阶段基类位于 `bot/core/pipeline/`；�
   - 校验 `jti` 一次性，失败统一 302 回面板登录页；
   - 公钥只读，票据 60 秒过期，响应带 `no-store` / `no-referrer`；
   - 当前 `jti` 表在进程内存，**默认假设面板单副本**；扩多副本前必须改为共享存储。
+- **后端服务通道**：`backend_client.py` 是 bot → LKM-service 的唯一出口（`LKM_SERVICE_BASE_URL`
+  + `LKM_INTERNAL_TOKEN`），负责媒体上传/重签/删除与文件库只读；`bot/core/media_storage.py`
+  决定每条媒体是走后端还是回落本地 token 服务（开关是面板配置 `media_storage_mode`），调用点只有一处
+  （`components.py` 的 `register_to_file_service` 与 `result_decorate/stage.py` 的 TTS/T2I）。
+- **账号统一**：`account_auth.py` 在面板配置 `dashboard.auth_mode` 为 `both`/`backend` 时把面板登录的
+  账号密码转给 AUTH 内部端点校验（`/auth/internal/verify-password`），只接受
+  `account_level=admin`；面板会话仍由 bot 自己签发，`backend` 模式下 AUTH 不可用即失败。
 
-## 8. 数据与配置
+### 7.1 媒体与文件的双向链路
+
+| 方向 | bot 侧 | 后端侧 | 关键约束 |
+| --- | --- | --- | --- |
+| 写（bot 产出媒体） | `backend_client.upload_media()` | `POST /api/v1/internal/files` → 内容寻址入 `storage`，登记 `bot_media_objects` | 内部面fail-closed；同内容按 SHA3-256 去重并计引用数 |
+| 读（发给 IM 平台） | 直接把返回的 `url` 塞进消息组件 | `GET /api/v1/media/{id}?exp=&sig=` | 无鉴权但带过期 HMAC 签名；签名密钥由内部令牌派生，令牌轮换即失效 |
+| 读（社区文件库） | `backend_client.list_library_files()` / `get_library_file_content()` | `GET /api/v1/internal/files/library*` | 只返回 `status=approved` 的条目，待审/拒绝内容不外泄 |
+
+为什么不复用后端的 `library_files`：那张表的核心语义是「社区文件库条目」（人类上传者、版本链、
+审阅状态机、公开可见性），bot 媒体四者皆无。独立表让两套清理策略互不污染，仅共享底层
+`storage` 后端。
+
+## 8. 外部依赖边界
+
+bot 与面板默认**不向项目方或上游作者的域名发任何请求**。以下是与外部的全部接触面，便于审计：
+
+| 场景 | 是否外联 | 目标 |
+| --- | --- | --- |
+| 使用统计 | **否** | 指标只写入本机 SQLite（`Metric.upload` 不再上报；上游的 `tickstats.soulter.top` 已移除） |
+| 检查更新 | 用户点击时 | `api.github.com/repos/Alma1314/LKM-bot/releases`（GitHub REST，自带 User-Agent） |
+| 下载更新包 | 用户点击时 | 该 release 的 `zipball_url`（GitHub）；旧的托管包 registry 已移除 |
+| 插件市场 | 打开市场时 | GitHub 上的公开插件登记仓库；可在面板换成自定义市场源 |
+| 文转图（remote） | **必须自行配置** | 无内置服务；未配置 `t2i_endpoint` 时直接报错，`local` 策略不发请求 |
+| `/help` 公告 | **否** | 不再拉取上游公告 |
+| 模型提供商 / IM 平台 / 搜索 / TTS | 用户配置后 | 对应厂商 API（业务必需） |
+| 沙箱镜像 | 启用 boxlite 时 | `BOT_BOXLITE_IMAGE`，未设置时沿用上游 `soulter/shipyard-ship` |
+
+面板侧的资源同样自托管：字体（`src/assets/fonts`，随产物打包）、提供商图标（`@lobehub/icons-static-svg` 构建期打包）、语音检测运行时（构建期从 `node_modules` 复制到 `public/vendor/vad`）。构建产物中不再出现 `cdn.jsdelivr.net` / `fonts.googleapis.com` 的实际请求。
+
+## 9. 数据与配置
 
 - 运行期数据目录默认由 `bot/core/utils/bot_path.py` 解析，包含：
   - `data_v4.db`：主 SQLite 数据库；
@@ -140,7 +176,7 @@ Pipeline 的上下文、调度器和阶段基类位于 `bot/core/pipeline/`；�
 - 生产环境应使用持久卷挂载数据目录；容器镜像内的 `data/` 仅用于开发/样例。
 - 配置可通过 Dashboard、`data/cmd_config.json` 或环境变量覆盖；敏感值不应提交到仓库。
 
-## 9. 开发与验证
+## 10. 开发与验证
 
 ```bash
 # Core
@@ -164,7 +200,7 @@ uv run pytest
 API 路由在 `bot/dashboard/api/` 装配，前端客户端由 `openspec/openapi-v1.yaml` 生成到
 `bot-panel/src/api/generated/`；修改规格和路由后须同步生成客户端。
 
-## 10. 维护边界
+## 11. 维护边界
 
 - `bot/` 大部分是上游 AstrBot 代码，LKM 定制集中在 `bot/lkm/`；合并上游时优先减少
   对上游文件的本地修改。

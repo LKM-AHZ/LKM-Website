@@ -158,6 +158,10 @@ stringData:
   # bot 面板初始密码（可选组件）。**不 require**：未配就不出这个键，bot 的
   # secretKeyRef 是 optional=true → Pod 照常起，面板自生成随机密码打到日志。
   LKM_BOT_DASHBOARD_PASSWORD: "$(get_dq LKM_BOT_DASHBOARD_PASSWORD)"
+  # bot → backend 服务身份（媒体入库 / 读文件库）。**不 require**：未配就不出键，
+  # backend 与 lkmbot 的 secretKeyRef 都是 optional → 内部文件面关闭、媒体回落本地。
+  # 与 LKM_BOT_ADMIN_API_KEY（后端→bot 方向）是两把独立密钥，勿互相复用。
+  LKM_BOT_INTERNAL_TOKEN: "$(get_dq LKM_BOT_INTERNAL_TOKEN)"
   # SigNoz UI 自身会话签名密钥（非应用 JWT）。独立键，勿再借用应用密钥。
   LKM_SIGNOZ_JWT_SECRET: "$(get_dq_opt LKM_SIGNOZ_JWT_SECRET change-me-signoz-ui)"
 $(jwt_public_block)

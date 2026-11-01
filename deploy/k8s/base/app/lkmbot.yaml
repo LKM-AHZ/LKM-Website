@@ -103,6 +103,32 @@ spec:
                   name: lkm-secrets
                   key: LKM_BOT_DASHBOARD_PASSWORD
                   optional: true
+            # ── bot → backend 服务通道（媒体入库 + 读文件库）──
+            # 后端根地址（同命名空间内网名）；媒体改存后端对象存储。
+            - name: LKM_SERVICE_BASE_URL
+              value: http://backend:8000
+            # 发给 IM 平台的媒体 URL 的公共 origin：取站点公网地址（必须能从公网拉取，
+            # 否则签名 URL 指向集群内网名，QQ/Telegram 拉不到图）。单一来源 = lkm-config。
+            - name: LKM_SERVICE_PUBLIC_ORIGIN
+              valueFrom:
+                configMapKeyRef: { name: lkm-config, key: LKM_ORIGIN }
+            # AUTH 进程地址（容器内网名固定）
+            - name: LKM_AUTH_BASE_URL
+              value: http://auth:8001
+            # 两把服务令牌都**只按 key 取**，且 optional：未配置时对应能力自动关闭
+            # （内部文件面 401 / 社区账号登录不可用），Pod 仍应正常启动。
+            - name: LKM_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: lkm-secrets
+                  key: LKM_BOT_INTERNAL_TOKEN
+                  optional: true
+            - name: LKM_AUTH_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: lkm-secrets
+                  key: LKM_AUTH_HTTP_TOKEN
+                  optional: true
           volumeMounts:
             - name: data
               mountPath: /LKMBot/data

@@ -567,6 +567,39 @@ API Key 读取面板 OpenAPI v1，浏览器不再直连 `/bot/`。两项都要�
 完整面板，功能不缺失。K8s 部署时 `LKM_BOT_ADMIN_API_KEY` 放进 `lkm-secrets`，
 `LKM_BOT_API_BASE_URL` 在 `lkm-config`（默认空）。
 
+**bot → backend 服务通道（媒体 + 文件库，可选但推荐）**：与上面方向相反——这次是 bot 以服务
+身份调后端。配齐后 bot 产出的媒体（TTS 音频、T2I 图片、聊天附件）改存后端对象存储
+（Local/S3 同一套，容器重建不丢、多副本共享），并能只读社区文件库中**已审阅通过**的条目。
+
+```sh
+# .env：两端填同一把（≥32 位随机串；弱令牌 / 占位符会让后端启动校验告警）
+# LKM_BOT_INTERNAL_TOKEN=<强随机>
+```
+
+compose 里 bot 侧的地址是固定的容器内网名（`http://backend:8000` / `http://auth:8001`），
+媒体公网 origin 复用站点域名变量 `LKM_ORIGIN`，都不需要额外配置。
+
+- 未配 `LKM_BOT_INTERNAL_TOKEN` → 后端 `/api/v1/internal/*` 全部 401（该面关闭，**不会**退化成
+  公开可写存储桶）；bot 侧自动回落原来的本地 token 服务，消息照常发得出去。
+- 媒体链接是**带过期签名**的公开地址（默认 900s），IM 平台无需携带任何凭据即可拉取；
+  签名密钥由同一把内部令牌派生，故令牌轮换会让旧链接立即失效。
+- `LKM_ORIGIN` 未配置时媒体 URL 回落到 `LKM_SERVICE_BASE_URL`（集群内网名），只在单机
+  开发场景正确。
+- 行为开关在**面板配置**里，不在环境变量：`media_storage_mode`（`auto`/`local`/`backend`）。
+- 存量文件不迁移：bot 本地已有的媒体仍由旧 token 端点提供（行为未变），新产生的媒体才入库。
+
+**面板身份统一（可选）**：面板登录可改为校验社区账号，不再维护第二套密码。开关是面板配置
+`dashboard.auth_mode`：`local`（默认，仅面板密码）、`both`（面板密码或社区管理员账号）、
+`backend`（仅社区管理员账号，AUTH 不可用时**失败而非降级**）。委托校验走 AUTH 的内部端点，
+需要 `LKM_AUTH_HTTP_TOKEN`（compose 已作为 `LKM_AUTH_INTERNAL_TOKEN` 注给 bot）。只有 `account_level=admin` 的社区账号能进面板——面板是控制面
+（可改平台配置、装插件、看日志），没有只读角色可授予其他账号。
+
+**面板静态资源全部自托管**：字体（Outfit / Noto Sans，SIL OFL，随源码打包）、提供商图标
+（`@lobehub/icons-static-svg`，构建期打包）、语音检测运行时（构建期从 `node_modules` 复制到
+`public/vendor/vad`，已 gitignore）都不再请求第三方 CDN，也不需要额外配置。构建日志里不应再
+出现 `cdn.jsdelivr.net` / `fonts.googleapis.com` 的实际请求（`@monaco-editor/loader` 里保留的
+CDN 默认值只是死代码：面板始终在 `setupMonaco` 里注入本地打包的 monaco 实例）。
+
 **子路径前缀是单一来源**：面板涉及三处前缀，全部由 `.env` 的 `LKM_BOT_BASE_PATH`（默认 `/bot`）
 派生，改这一处即全量跟随，不要再分别改：
 

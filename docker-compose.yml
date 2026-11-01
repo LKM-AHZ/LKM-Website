@@ -182,6 +182,17 @@ services:
       LKM_BOT_SSO_PUBLIC_KEY_FILE: /etc/lkm/jwt/jwt-public.pem
       # 首启面板初始密码；留空则面板自生成随机密码并打到日志
       BOT_DASHBOARD_INITIAL_PASSWORD: ${LKM_BOT_DASHBOARD_PASSWORD:-}
+      # ── bot → backend 服务通道（媒体入库 + 读文件库）──
+      # 后端根地址（容器内网名固定，不需要配置）；媒体改存后端对象存储（Local/S3 同一套）。
+      LKM_SERVICE_BASE_URL: http://backend:8000
+      # 与 backend 的 LKM_BOT_INTERNAL_TOKEN 同一把；留空 = 通道关闭，媒体自动回落本地 token 服务
+      LKM_INTERNAL_TOKEN: ${LKM_BOT_INTERNAL_TOKEN:-}
+      # 发给 IM 平台的媒体 URL 的公共 origin：复用站点域名变量（公共 URL 必须从公网可拉取）
+      LKM_SERVICE_PUBLIC_ORIGIN: ${LKM_ORIGIN:-}
+      # ── 面板身份统一：登录代验社区账号 ──
+      # AUTH 进程地址（容器内网名固定）+ 与 backend 同一把内部令牌
+      LKM_AUTH_BASE_URL: http://auth:8001
+      LKM_AUTH_INTERNAL_TOKEN: ${LKM_AUTH_HTTP_TOKEN:-}
     # 上游 compose 原有的加固项（根 compose 其余服务都没有，属有益偏离，已登记）
     security_opt:
       - no-new-privileges:true
@@ -745,6 +756,9 @@ services:
       # Key 需要 system/provider/plugin 等读取 scope；容器内地址通常是 http://lkmbot:6185/api/v1。
       LKM_BOT_API_BASE_URL: ${LKM_BOT_API_BASE_URL:-}
       LKM_BOT_ADMIN_API_KEY: ${LKM_BOT_ADMIN_API_KEY:-}
+      # bot → backend 服务身份（反方向，与上面两行不共用密钥）：LKM-bot 上传媒体、读文件库时
+      # 带这把 Bearer。留空 = /api/v1/internal/* 全部 401（该面关闭，不会退化成公开可写存储）。
+      LKM_BOT_INTERNAL_TOKEN: ${LKM_BOT_INTERNAL_TOKEN:-}
       LKM_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-lkmadmin}
       LKM_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?生产需设置 MINIO_ROOT_PASSWORD}
       # LKM_FILES_STORE_DIR 仅作迁移脚本参考；运行时对象存于 MinIO（本地路径可保留供迁移读取）
