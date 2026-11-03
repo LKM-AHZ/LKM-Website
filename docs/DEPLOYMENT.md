@@ -882,7 +882,7 @@ CI 的 integration job 已按这两个后端做 matrix，两边都绿才算兼�
 
 两点部署注意:
 
-- **hypertable 的每个唯一索引必须含分区列** → 这三张表的主键是 `(created_at, id)`(`points_ledger` 的幂等键唯一约束也并入了 `created_at`,约束名不变)。业务库由单条基线 `0001_uuid_baseline` 直接把 `points_ledger` 建成 hypertable 形态（主键/幂等约束已含分区列；连续聚合 `points_daily` 由**应用启动时**装配——它在事务块内建不了，连 DO 块的隐式事务都不行，故刻意不放进迁移）。TimescaleDB 不支持把 hypertable 原地转回普通表；基线的 `downgrade` 会删除业务表，不能用来保留数据回退。
+- **hypertable 的每个唯一索引必须含分区列** → 这三张表的主键是 `(created_at, id)`(`points_ledger` 的幂等键唯一约束也并入了 `created_at`,约束名不变)。业务库由单条基线 `0001_initial` 直接把 `points_ledger` 建成 hypertable 形态（主键/幂等约束已含分区列；连续聚合 `points_daily` 由**应用启动时**装配——它在事务块内建不了，连 DO 块的隐式事务都不行，故刻意不放进迁移）。TimescaleDB 不支持把 hypertable 原地转回普通表；基线的 `downgrade` 会删除业务表，不能用来保留数据回退。
 - 引擎不可用时(如误用普通 PG 镜像或手工安装的主机 PG)**不会导致启动失败**:`init_db` 会告警并降级为**普通表**——主键多一列 `created_at` 无副作用,outbox 投递语义与积分幂等(由 `reward` 的按用户行锁 + 预检承担,唯一约束只是兜底)均不变,只是失去分区裁剪/压缩,且**连续聚合视图不会被创建**(`/admin/points-report` 据此返 503,而非返回空列表冒充「无数据」)。
 
 auth 库的 `audit_logs` 由 `0001_auth_baseline` 按 `(created_at, id)` 复合主键建表，并尝试装配为 hypertable。可在两个库分别用 `SELECT extname FROM pg_extension WHERE extname = 'timescaledb'`、`SELECT hypertable_name FROM timescaledb_information.hypertables` 验证装配。
@@ -970,7 +970,7 @@ COMPOSE_PROJECT_NAME=lkm-drill docker compose down -v
 ### schema 变更纪律(迁移链与大表)
 
 后端有**两条独立迁移链**,各自单头线性。业务库与 auth 库各只有
-**一条基线** revision(`0001_uuid_baseline` / `0001_auth_baseline`),后续变更再按 `NNNN_语义名`
+**一条自包含基线** revision(`0001_initial` / `0001_auth_baseline`),后续变更再按 `NNNN_语义名`
 追加单头增量,与蓝图 §3.2 的「每个迁移一件事、可回滚」一致:
 
 | 链 | 目录 | 配置文件 | 覆盖 |
