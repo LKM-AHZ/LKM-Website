@@ -19,7 +19,7 @@
 
 ## 一、仓库结构与文档约定
 
-LKM 网站由四个独立子项目组成(根仓库仅做编排,包含文档与 dev 脚本):
+LKM 网站由三个独立子项目组成(根仓库仅做编排,包含文档与 dev 脚本):
 
 ```
 LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / dev 脚本 / 文档)
@@ -31,7 +31,6 @@ LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / 
 ├── LKM-official-website/     # 动态前端(Astro SSR + Vue/React islands)
 ├── LKM-service/              # 后端(FastAPI,REST /api/v1 + GraphQL)
 ├── LKM-bot/                  # 机器人(bot)
-└── LKM-on-VSCode/            # 博客同步 VS Code 扩展
 ```
 
 > 子项目彼此独立,各自有 `.git`。根仓库只放编排、部署资产与跨项目文档。
@@ -42,7 +41,7 @@ LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / 
 ## 二、环境要求
 
 - **Git**:管理根编排仓库及三个独立子项目仓库。
-- **Node.js 24+ + pnpm 11**:Astro 前端项目与 VS Code 扩展(用 pnpm,勿用 npm)。
+- **Node.js 24+ + pnpm 11**:Astro 前端项目(用 pnpm,勿用 npm)。
 - **Python 3.13 + uv**:后端依赖与运行。
 - **PostgreSQL**:后端必需；先启动数据库，并创建 `lkm` 数据库。连接参数见
   `LKM-service/.env.example`，未配置时默认连接 `localhost:5432/lkm`，用户 `postgres`。
@@ -136,7 +135,6 @@ pnpm dev
 | LKM-service | 测试 | `uv run pytest -q`（需要 PostgreSQL） |
 | 官网 | 构建 + 产物检查 | `PUBLIC_SITE_URL=https://lkm-ci.example pnpm run build` 后跑 `check:seo` / `check:links` / `check:budget` |
 | LKM-bot | 类型 / 格式 / 测试 | `uv run ty check .`、`uv run ruff format --check .`、`uv run pytest` |
-| LKM-on-VSCode | 编译 + 单测 | `pnpm run compile && pnpm test` |
 
 几点约定：
 
@@ -297,7 +295,7 @@ node scripts/generate-icons.mjs
 
 这里是**当前实际生效**的约定,尽量保持最小、不臆造规范:
 
-- **多仓库独立 git**:动态前端、后端和扩展各自独立提交;根仓库只负责编排与文档。不要在子项目里提交与该项目无关的根级文件。
+- **多仓库独立 git**:动态前端、后端和机器人面板各自独立提交;根仓库只负责编排与文档。不要在子项目里提交与该项目无关的根级文件。
 - **根仓库提交**:托管 docker-compose.yml、dev 脚本、.gitignore、本教程与 DEPLOYMENT.md
 - **中文注释**:代码注释如非必要一律用中文;与团队沟通用中文。
 - **文档目录**:面向运维的 `DEPLOYMENT.md`、面向开发的 `DEVELOPMENT.md`。
@@ -305,22 +303,7 @@ node scripts/generate-icons.mjs
 
 ---
 
-## 七、VS Code 扩展
-
-VS Code 扩展的开发和验证：
-
-```sh
-cd LKM-on-VSCode
-pnpm install
-pnpm run compile
-pnpm test
-```
-
-完整说明见该子项目的 README。
-
----
-
-## 八、常见问题
+## 七、常见问题
 
 - **前端页面不显示后端数据**:检查 `LKM-official-website/.env` 是否设了 `API_URL=http://127.0.0.1:8000`,设完重启 `pnpm dev`。
 - **后端启动报密钥相关错误**:确认 JWT/TOTP/PEPPER 三密钥已提供(非默认占位)。PowerShell

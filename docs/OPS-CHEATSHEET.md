@@ -14,7 +14,7 @@
 | 事项 | 命令 |
 |---|---|
 | SSH 登录 | `ssh ubuntu@<公网IP>`(密码见部署信息) |
-| 项目根目录 | `~/LKM-Website`(含 `docker-compose.yml` 与四个子仓库,其中 bot 仅 `--profile bot` 用到) |
+| 项目根目录 | `~/LKM-Website`(含 `docker-compose.yml` 与三个子仓库,其中 bot 仅 `--profile bot` 用到) |
 | 容器日志 | 见下方「日志」小节 |
 
 > 提示:服务器对密码 SSH 有 fail2ban 限速,短时间多次失败会封禁来源 IP 一段时间;

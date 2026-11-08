@@ -1,6 +1,6 @@
 # LKM Website 全栈项目
 
-LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 SSR 网站、FastAPI 后端、社区机器人面板和 VS Code 博客扩展组成，根目录负责统一启动、容器编排和跨项目文档。纯静态官网（`lkm-ahz.icu`）已迁出为独立仓库并部署在独立服务器上，不在本编排内（见 [LKM-official-static/DEPLOYMENT.md](https://github.com/LKM-AHZ/LKM-official-static/blob/main/DEPLOYMENT.md)）。
+LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 SSR 网站、FastAPI 后端和社区机器人面板组成，根目录负责统一启动、容器编排和跨项目文档。纯静态官网（`lkm-ahz.icu`）已迁出为独立仓库并部署在独立服务器上，不在本编排内（见 [LKM-official-static/DEPLOYMENT.md](https://github.com/LKM-AHZ/LKM-official-static/blob/main/DEPLOYMENT.md)）。
 
 ## 项目组成
 
@@ -9,7 +9,6 @@ LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 S
 | `LKM-official-website/` | Astro 7、Vue 3、React、Tailwind CSS 4            |                         `4321` | 社区与动态官网，SSR 运行                    |
 | `LKM-service/`          | FastAPI、SQLAlchemy、PostgreSQL、Pulsar/RabbitMQ |                `8000` / `8001` | 业务 API、AUTH 服务及后台 worker            |
 | `LKM-bot/`              | Python、AstrBot fork                             | `6185`（仅经网关 `bot.` 子域） | 社区机器人面板，可选组件（`--profile bot`） |
-| `LKM-on-VSCode/`        | TypeScript、VS Code Extension API                |                              — | 博客仓库克隆、编辑与同步                    |
 | `deploy/`               | APISIX、Kustomize、可观测性配置                  |                   `80` / `443` | Compose/Kubernetes 部署资产                 |
 
 各子目录是独立 Git 仓库；根仓库只管理编排、部署资产和跨项目文档。提交前请在实际修改的仓库中分别检查 `git status`。
@@ -31,7 +30,6 @@ git submodule status
 | [docs/后端架构与现状.md](./docs/后端架构与现状.md)             | 后端服务拓扑、数据模型、认证、消息链路与模块边界 |
 | [docs/前端架构与现状.md](./docs/前端架构与现状.md)             | 前端 SSR、页面域、数据访问、认证与构建链路       |
 | [docs/Bot平台架构与现状.md](./docs/Bot平台架构与现状.md)       | Bot 核心、消息流水线、插件生态与管理面板         |
-| [docs/VSCode扩展架构与现状.md](./docs/VSCode扩展架构与现状.md) | Blog 系列 Clone/Pull/Push 与多账号同步扩展       |
 | [docs/社区需求与开发规划.md](./docs/社区需求与开发规划.md)     | 一期业务现状、差距、优先级与验收口径             |
 | [DEVELOPMENT.md](./docs/DEVELOPMENT.md)                             | 本地开发、环境变量与常用命令                     |
 | [DEPLOYMENT.md](./docs/DEPLOYMENT.md)                               | Compose/Kubernetes 部署、网关、证书与运维        |
@@ -111,10 +109,6 @@ uv run ruff check
 # 社区机器人面板（可选组件，默认不随主栈起）
 cd ../LKM-bot
 python -m pytest
-
-# VS Code 扩展
-cd ../LKM-on-VSCode
-pnpm run compile && pnpm test
 ```
 
 ## 文档

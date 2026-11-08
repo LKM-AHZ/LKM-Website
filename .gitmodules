@@ -7,6 +7,3 @@
 [submodule "LKM-official-website"]
 	path = LKM-official-website
 	url = https://github.com/LKM-AHZ/LKM-official-website.git
-[submodule "LKM-on-VSCode"]
-	path = LKM-on-VSCode
-	url = https://github.com/LKM-AHZ/LKM-on-VSCode.git
