@@ -30,6 +30,11 @@ spec:
         - name: worker
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
+          # 没有 limits 时一个泄漏的消费者/转换任务可以吃掉整个节点，再把同节点的
+          # PG/网关一起拖下水。requests 保证调度，limits 保证爆炸半径。
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 1, memory: 1Gi }
           command: ['python', '-m', 'boot.workers.default']
           envFrom:
             - configMapRef: { name: lkm-config }
@@ -73,6 +78,11 @@ spec:
         - name: worker-send
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
+          # 没有 limits 时一个泄漏的消费者/转换任务可以吃掉整个节点，再把同节点的
+          # PG/网关一起拖下水。requests 保证调度，limits 保证爆炸半径。
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 1, memory: 1Gi }
           command: ['python', '-m', 'boot.workers.send']
           envFrom:
             - configMapRef: { name: lkm-config }
@@ -106,6 +116,11 @@ spec:
         - name: worker-notify
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
+          # 没有 limits 时一个泄漏的消费者/转换任务可以吃掉整个节点，再把同节点的
+          # PG/网关一起拖下水。requests 保证调度，limits 保证爆炸半径。
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 1, memory: 1Gi }
           command: ['python', '-m', 'boot.workers.notify']
           envFrom:
             - configMapRef: { name: lkm-config }
@@ -139,6 +154,11 @@ spec:
         - name: worker-notification
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
+          # 没有 limits 时一个泄漏的消费者/转换任务可以吃掉整个节点，再把同节点的
+          # PG/网关一起拖下水。requests 保证调度，limits 保证爆炸半径。
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 1, memory: 1Gi }
           command: ['python', '-m', 'boot.workers.notification']
           envFrom:
             - configMapRef: { name: lkm-config }
@@ -173,6 +193,11 @@ spec:
         - name: worker-content-index
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
+          # 没有 limits 时一个泄漏的消费者/转换任务可以吃掉整个节点，再把同节点的
+          # PG/网关一起拖下水。requests 保证调度，limits 保证爆炸半径。
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 1, memory: 1Gi }
           command: ['python', '-m', 'boot.workers.content_index']
           envFrom:
             - configMapRef: { name: lkm-config }
@@ -206,6 +231,11 @@ spec:
         - name: worker-dlq
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
+          # 没有 limits 时一个泄漏的消费者/转换任务可以吃掉整个节点，再把同节点的
+          # PG/网关一起拖下水。requests 保证调度，limits 保证爆炸半径。
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 1, memory: 1Gi }
           command: ['python', '-m', 'boot.workers.dlq']
           envFrom:
             - configMapRef: { name: lkm-config }
@@ -241,6 +271,11 @@ spec:
         - name: worker-outbox
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
+          # 没有 limits 时一个泄漏的消费者/转换任务可以吃掉整个节点，再把同节点的
+          # PG/网关一起拖下水。requests 保证调度，limits 保证爆炸半径。
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 1, memory: 1Gi }
           command: ['python', '-m', 'boot.workers.outbox']
           envFrom:
             - configMapRef: { name: lkm-config }
@@ -276,6 +311,11 @@ spec:
         - name: worker-points-reward
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
+          # 没有 limits 时一个泄漏的消费者/转换任务可以吃掉整个节点，再把同节点的
+          # PG/网关一起拖下水。requests 保证调度，limits 保证爆炸半径。
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 1, memory: 1Gi }
           command: ['python', '-m', 'boot.workers.points_reward']
           envFrom:
             - configMapRef: { name: lkm-config }
@@ -315,6 +355,11 @@ spec:
         - name: worker-points-stats
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
+          # 没有 limits 时一个泄漏的消费者/转换任务可以吃掉整个节点，再把同节点的
+          # PG/网关一起拖下水。requests 保证调度，limits 保证爆炸半径。
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 1, memory: 1Gi }
           command: ['python', '-m', 'boot.workers.points_stats']
           envFrom:
             - configMapRef: { name: lkm-config }
@@ -354,6 +399,11 @@ spec:
         - name: worker-points-tasks
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
+          # 没有 limits 时一个泄漏的消费者/转换任务可以吃掉整个节点，再把同节点的
+          # PG/网关一起拖下水。requests 保证调度，limits 保证爆炸半径。
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 1, memory: 1Gi }
           command: ['python', '-m', 'boot.workers.points_tasks']
           envFrom:
             - configMapRef: { name: lkm-config }

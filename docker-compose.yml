@@ -12,6 +12,14 @@ x-otel-env: &otel-env
 # 单一来源落在这里：默认值只写一次，两个服务经 YAML 锚点注入**同名**变量。
 # 锚点内是**两侧都消费**的四个值；TTL 只签发侧消费，故不进锚点、单独挂在 auth 服务上。
 # account_level 同时是铸票门禁（改它=改谁能免登），type/account_level 两侧必须同值。
+# 后台 worker 的统一资源上限：它们与 backend 共镜像，但只跑消费/批处理，给更小的额度。
+# 单机 compose 没有编排层隔离，不设上限时一个泄漏的消费者就能把宿主吃满、连带 PG 挂掉。
+# 刻意写成字面值而非常规 env 旋钮：compose 引用的每个 LKM_* 都必须能追溯到 Settings 字段
+# 或 .env.example（tests/deploy/test_env_contract.py 强制），只为调限额新增环境变量不划算。
+x-worker-limits: &worker-limits
+  mem_limit: 1g
+  cpus: 1.0
+
 x-bot-sso-env: &bot-sso-env
   LKM_BOT_SSO_AUDIENCE: ${LKM_BOT_SSO_AUDIENCE:-lkm:bot}
   LKM_BOT_SSO_ISSUER: ${LKM_BOT_SSO_ISSUER:-lkm-auth}
@@ -717,6 +725,10 @@ services:
       LKM_FILES_SENSITIVE_TERMS: ${LKM_FILES_SENSITIVE_TERMS:-}
       LKM_FILES_BACKUP_DIR: /backup/files
       LKM_FILES_ARCHIVE_DIR: /archive/files
+      # schema 权威开关：默认 false → ORM `create_all` + 加性补列（新库零维护）。
+      # 置 true → 启动期 `alembic upgrade head`（既有库必须先 `alembic stamp head`，
+      # 否则会重复建表）。两条通道的一致性由 CI 的 `scripts/check_schema_drift.py` 守护。
+      LKM_USE_ALEMBIC: ${LKM_USE_ALEMBIC:-false}
       LKM_DB_HOST: postgres
       LKM_DB_PORT: 5432
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
@@ -810,6 +822,10 @@ services:
       # RSA 公钥（只读）：单体只验签，故只挂公钥。
       - ./deploy/jwt/keys:/etc/lkm/jwt:ro
     restart: ${LKM_RESTART_POLICY:-no}
+    # 单机部署没有编排层隔离：一个喂爆内存的进程会连带 PG / 网关一起挂。限额按
+    # 「单 worker + 一次 LibreOffice 转换」估算（转换子进程另有 RLIMIT 兜底）。
+    mem_limit: 2g
+    cpus: 2.0
     healthcheck:
       # 打 /liveness（零外部依赖）：进程存活即心跳 OK。依赖是否就绪由 /readiness 表达
       # （未就绪返 503），避免 DB/Redis/Pulsar/AUTH 任一抖动就把容器判死重启。
@@ -864,6 +880,8 @@ services:
       LKM_DB_NAME: ${POSTGRES_DB:-lkm}
       LKM_DB_USER: ${POSTGRES_USER:-lkm}
       LKM_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
+      # 与 backend 同源：两条迁移链（业务 / auth）共用一个开关，避免只迁一半。
+      LKM_USE_ALEMBIC: ${LKM_USE_ALEMBIC:-false}
       # auth 域专属自足 DB → 独立 auth 库（真拆库：统一 PG），由首启 initdb 建出、
       # owner=同 POSTGRES_USER，auth_session 直连 lkm_auth；与上面 LKM_DB_*(=biz lkm)解耦。
       LKM_AUTH_DB_HOST: postgres
@@ -896,6 +914,9 @@ services:
       # 私钥 + 公钥（只读）：仅 auth 侧挂私钥，其余容器只挂同一目录里的公钥。
       - ./deploy/jwt/keys:/etc/lkm/jwt:ro
     restart: ${LKM_RESTART_POLICY:-no}
+    # 与 backend 同理：auth 也跑 FastAPI，需要同样的单机兜底限额。
+    mem_limit: 1g
+    cpus: 1.0
     healthcheck:
       test:
         [
@@ -913,6 +934,7 @@ services:
 
   worker-send:
     image: lkm-service:latest
+    <<: *worker-limits
     command: ['python', '-m', 'boot.workers.send']
     depends_on:
       redis:
@@ -939,6 +961,7 @@ services:
 
   worker:
     image: lkm-service:latest
+    <<: *worker-limits
     command: ['python', '-m', 'boot.workers.default']
     depends_on:
       redis:
@@ -1007,6 +1030,7 @@ services:
   # 「三订阅」而实际 topic 上挂 4 个，排查消息堆积时按注释数会漏掉一个消费方）。
   worker-points-reward:
     image: lkm-service:latest
+    <<: *worker-limits
     command: ['python', '-m', 'boot.workers.points_reward']
     depends_on:
       redis:
@@ -1036,6 +1060,7 @@ services:
 
   worker-points-stats:
     image: lkm-service:latest
+    <<: *worker-limits
     command: ['python', '-m', 'boot.workers.points_stats']
     depends_on:
       redis:
@@ -1065,6 +1090,7 @@ services:
 
   worker-points-tasks:
     image: lkm-service:latest
+    <<: *worker-limits
     command: ['python', '-m', 'boot.workers.points_tasks']
     depends_on:
       redis:
@@ -1094,6 +1120,7 @@ services:
 
   worker-notify:
     image: lkm-service:latest
+    <<: *worker-limits
     command: ['python', '-m', 'boot.workers.notify']
     depends_on:
       postgres:
@@ -1141,6 +1168,7 @@ services:
   # 需 auth 读缝（触发者展示名），与 backend 同款配置。
   worker-notification:
     image: lkm-service:latest
+    <<: *worker-limits
     command: ['python', '-m', 'boot.workers.notification']
     depends_on:
       postgres:
@@ -1174,6 +1202,7 @@ services:
   # 故本服务随默认栈常驻、不需要 profile。
   worker-content-index:
     image: lkm-service:latest
+    <<: *worker-limits
     command: ['python', '-m', 'boot.workers.content_index']
     depends_on:
       postgres:
@@ -1211,6 +1240,7 @@ services:
 
   worker-dlq:
     image: lkm-service:latest
+    <<: *worker-limits
     command: ['python', '-m', 'boot.workers.dlq']
     depends_on:
       postgres:
@@ -1236,6 +1266,7 @@ services:
   # core.messaging.publish 发布到 Pulsar。需 DB（读 outbox）+ Redis（租约）+ Pulsar。
   worker-outbox:
     image: lkm-service:latest
+    <<: *worker-limits
     command: ['python', '-m', 'boot.workers.outbox']
     depends_on:
       postgres:

@@ -50,6 +50,11 @@ spec:
         - name: backend
           image: lkm-service:latest
           imagePullPolicy: IfNotPresent
+          # 没有 limits 时一个泄漏的消费者/转换任务可以吃掉整个节点，再把同节点的
+          # PG/网关一起拖下水。requests 保证调度，limits 保证爆炸半径。
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: 2, memory: 2Gi }
           ports:
             - name: http
               containerPort: 8000

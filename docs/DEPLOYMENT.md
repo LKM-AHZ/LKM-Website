@@ -900,7 +900,7 @@ docker compose exec postgres psql -U lkm -d lkm
 \d users     -- 查看某张表结构
 ```
 
-手动执行迁移(一般不需要,后端启动已自动执行):
+手动执行迁移(一般不需要:启动时按 `LKM_USE_ALEMBIC` 决定走 create_all 还是 `upgrade head`):
 
 ```sh
 docker compose exec backend alembic upgrade head
@@ -979,6 +979,10 @@ COMPOSE_PROJECT_NAME=lkm-drill docker compose down -v
 | auth 库 | `LKM-service/alembic_auth/versions/` | `alembic.auth.ini` | auth 自有 19 张表 |
 
 **默认通道仍是 `LKM_USE_ALEMBIC=false`(create_all)**,迁移链是生产后备;两者不混用。
+
+两条通道必须给出**同一结构**：CI 的 `scripts/check_schema_drift.py` 在空库上跑两条迁移链再跑
+`alembic check`，任何「迁移链 ↔ ORM metadata」差异都会让 `test` job 变红（本地同样可跑，需可连 PG）。
+**既有库**切到迁移链前必须先 `alembic stamp head`（结构已由 create_all 建出），否则 `upgrade` 会重复建表。
 
 在 `LKM-service/` 对空的业务库运行 `alembic upgrade head`，对空的 auth 库运行 `alembic -c alembic.auth.ini upgrade head`，由各自的 `0001` 基线建表。
 
