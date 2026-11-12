@@ -18,7 +18,7 @@ metadata:
   labels:
     app.kubernetes.io/part-of: lkm
 data:
-  APISIX_COMMUNITY_DOMAINS: lkm-ahz.ltd
+  APISIX_COMMUNITY_DOMAINS: localhost
   # bot 面板请求体上限。**放在这里而不是 lkm-config**：它只有网关消费（bot 应用侧的 512MB
   # 是代码常量、不读环境变量），放进 lkm-config 会被 envFrom 无差别灌进 backend/auth/worker。
   # 与社群站的 LKM_MAX_UPLOAD_BYTES 刻意不同值：bot 单文件 512MB，社群站 100MB。

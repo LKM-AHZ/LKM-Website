@@ -17,14 +17,14 @@
 #
 # 生产换正式证书：用 cert-manager（推荐）或把 certbot 产物按同样的键名重新导入：
 #   kubectl -n lkm create secret generic lkm-tls \
-#     --from-file=lkm-ahz.ltd_fullchain.pem=/etc/letsencrypt/live/lkm-ahz.ltd/fullchain.pem \
-#     --from-file=lkm-ahz.ltd_privkey.pem=/etc/letsencrypt/live/lkm-ahz.ltd/privkey.pem \
+#     --from-file=community.example_fullchain.pem=/etc/letsencrypt/live/community.example/fullchain.pem \
+#     --from-file=community.example_privkey.pem=/etc/letsencrypt/live/community.example/privkey.pem \
 #     --dry-run=client -o yaml | kubectl apply -f -
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 NS="${NAMESPACE:-lkm}"
-DOMAINS="${DOMAINS:-lkm-ahz.ltd}"
+DOMAINS="${DOMAINS:-${APISIX_COMMUNITY_DOMAINS:-localhost}}"
 DAYS="${DAYS:-30}"
 
 # NS 会被直接内插进 YAML：含换行/冒号的值能改写清单、甚至往 Secret 里塞额外字段
@@ -54,7 +54,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 {
     printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: lkm-tls\n  namespace: %s\n  labels:\n    app.kubernetes.io/part-of: lkm\ntype: Opaque\nstringData:\n' "$NS"
-    # 关 glob：DOMAINS 里的 `*.lkm-ahz.ltd` 这类通配域否则会被当前目录的同名文件展开
+    # 关 glob：DOMAINS 里的 `*.community.example` 这类通配域否则会被当前目录的同名文件展开
     set -f
     for d in $DOMAINS; do
         case "$d" in

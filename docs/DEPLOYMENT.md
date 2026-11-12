@@ -1,5 +1,9 @@
 # LKM 网站部署教程
 
+> 正式域名尚未确定。本文 `.example` 地址均为占位示例；Compose 默认仅配置本地回环与容器服务名。
+> 上线前请显式配置网关域名、允许的 Host、WebAuthn 身份、OAuth 回调及存储公网地址。
+> Kubernetes 生产 overlay 还需同步替换 `gateway-tls.yaml` 的证书键和路径。
+
 本文档说明如何把 LKM 网站(前端 Astro + 后端 FastAPI)通过 APISIX 统一入口部署到生产主机。
 
 > 本文档用于**首次部署、升级和回滚**。已部署环境的日常命令见
@@ -128,7 +132,7 @@ StatefulSet 取代 Pulsar。切换已有集群时也需先排空旧订阅，停�
 
 后端 REST 前缀为 `/api/vN`，GraphQL 使用 `/graphql/vN`（当前为 `/graphql/v1`）。APISIX 用 Docker 内嵌 DNS(`dns_resolver: ['127.0.0.11']` + `discovery_type: dns`)在运行时动态解析 `backend`/`astro`,不依赖启动期 DNS。
 
-> 纯静态官网(`lkm-ahz.icu`)已迁出本编排:它是独立仓库、部署在独立服务器上(自备 nginx + certbot),
+> 纯静态官网(`static.example`)已迁出本编排:它是独立仓库、部署在独立服务器上(自备 nginx + certbot),
 > 不再经本栈的 APISIX 分流。部署方式见 [LKM-official-static/DEPLOYMENT.md](https://github.com/LKM-AHZ/LKM-official-static/blob/main/DEPLOYMENT.md)。
 
 ## 前置条件
@@ -194,8 +198,8 @@ POSTGRES_DB=lkm
 
 # 域名与上传上限(**单一来源**:网关与后端都从这里派生)。
 # 换域名只改这一行:render.sh 据此展开 APISIX 的 hosts / CORS 来源 / MinIO Host 改写 / 证书 SNI。
-# LKM_COMMUNITY_DOMAINS=lkm-ahz.ltd      # 社群站(/api、/graphql、认证面、MinIO 预签名 host)
-# (bot 面板并入社群域子路径 /bot/,无独立域名配置项;官网 lkm-ahz.icu 已迁至独立服务器,不在此列)
+# LKM_COMMUNITY_DOMAINS=community.example      # 社群站(/api、/graphql、认证面、MinIO 预签名 host)
+# (bot 面板并入社群域子路径 /bot/,无独立域名配置项;官网 static.example 已迁至独立服务器,不在此列)
 # bot 面板的子路径前缀(**单一来源**,默认 /bot):网关路由 uri/剥前缀正则、面板运行期 base
 #   与前端构建期 base 三面都由它派生(改了这一处即全量跟随,细节见「LKM Bot」一节)。
 # LKM_BOT_BASE_PATH=/bot
@@ -207,7 +211,7 @@ POSTGRES_DB=lkm
 # 公网 Host 白名单(M6.1;compose 已给生产默认值,一般无需改动)。
 # 必须含内网服务名与回环(backend,auth,localhost,127.0.0.1),
 #   否则容器 healthcheck 直连 127.0.0.1 会被判 400 → 容器长期 unhealthy。
-# LKM_ALLOWED_HOSTS=lkm-ahz.ltd,www.lkm-ahz.ltd,backend,auth,localhost,127.0.0.1
+# LKM_ALLOWED_HOSTS=community.example,www.community.example,backend,auth,localhost,127.0.0.1
 #
 # 注:**没有** LKM_CORS_ORIGINS。生产不挂应用层 CORS —— backend/auth 无对外端口,流量必经
 # APISIX,网关的 cors 插件是唯一权威(来源由上面的域名变量展开)。应用层 CORSMiddleware 只在
@@ -224,7 +228,7 @@ MINIO_ROOT_PASSWORD=<强随机密码>
 # S3 预签名直传/下载的公网地址(浏览器直连 MinIO 用)。
 # 默认走站点公网地址经 APISIX /lkm/ 转发(MinIO 不打公网端口),一般无需改动。
 # 若 MinIO 暴露了另外的公网端口,改成对应的地址即可。
-# LKM_S3_PUBLIC_ENDPOINT_URL=https://lkm-ahz.ltd
+# LKM_S3_PUBLIC_ENDPOINT_URL=https://community.example
 
 # 可选:GitHub OAuth 登录(不启用可留空)
 LKM_GITHUB_CLIENT_ID=
@@ -249,7 +253,7 @@ openssl rand -hex 48
 ```
 
 > 若启用 GitHub OAuth,需在 GitHub App 后台把回调地址设为
-> `https://lkm-ahz.ltd/api/v1/auth/oauth/github/callback`（若更换域名，OAuth 平台配置也必须同步）。
+> `https://community.example/api/v1/auth/oauth/github/callback`（若更换域名，OAuth 平台配置也必须同步）。
 
 ## 三、构建并启动
 
@@ -546,7 +550,7 @@ SMOKE_BOT=1 sh deploy/apisix/smoke.sh 127.0.0.1
 访问方式（二选一，同一个面板）：
 
 - **社区后台 →「机器人」菜单**（推荐）：管理员已登录后台即免登进入（SSO）。
-- 直接开 `https://lkm-ahz.ltd/bot/`：无后台会话时落到面板自带登录页（账号/密码见首启日志或
+- 直接开 `https://community.example/bot/`：无后台会话时落到面板自带登录页（账号/密码见首启日志或
   上面的 `.env`）。
 
 回退：`docker compose --profile bot down`（bot 数据在宿主机目录里，不受 `-v` 影响）。
@@ -650,11 +654,11 @@ audience 的签发方；不符或缺失一律 302 回面板登录页（fail-safe
 （`docker compose build astro`，面板随官网镜像构建）。
 
 **⚠️ 面板里的平台回调地址要带 `/bot` 前缀**：`callback_api_base`（面板「配置」里）用于给外部
-IM 平台回调用，需填 `https://lkm-ahz.ltd/bot`，否则回调会打到社区站 backend（`/api/v1/webhooks/...`
+IM 平台回调用，需填 `https://community.example/bot`，否则回调会打到社区站 backend（`/api/v1/webhooks/...`
 同前缀）。
 
 **升级注意**：`/bot` 路由不新增证书域，故不再需要单独首签子域证书——`render.sh` 的证书域集合
-只剩社群域一个（旧部署里残留的 `bot.lkm-ahz.ltd` 证书目录可删；官网域已迁出独立部署，不在本栈内）。
+只剩社群域一个（旧部署里残留的 `bot.community.example` 证书目录可删；官网域已迁出独立部署，不在本栈内）。
 
 **代码沙箱（shipyard，同一 profile）**：
 
@@ -711,7 +715,7 @@ LKM_FRONTEND_CALLBACK: http://<公网IP>/login/success
 
 ```sh
 docker compose run --rm --entrypoint certbot certbot certonly --webroot \
-  -w /var/www/certbot -d lkm-ahz.ltd
+  -w /var/www/certbot -d community.example
 
 # 触发 apisix-render 立即重渲染（把新证书内联进 ssls 段），APISIX 监测到文件变化自动 reload
 docker compose restart apisix-render
@@ -724,29 +728,29 @@ docker compose restart apisix-render
 
 ```sh
 # 首页
-curl -I https://lkm-ahz.ltd/
+curl -I https://community.example/
 
 # HTTP 应 301 到 HTTPS
-curl -I http://lkm-ahz.ltd/
+curl -I http://community.example/
 
 # 后端健康检查
-curl https://lkm-ahz.ltd/api/v1/health
+curl https://community.example/api/v1/health
 # 期望: {"code":0,"msg":"OK","data":{"status":"ok"}}
 
 # GraphQL(示例查询)
-curl -X POST https://lkm-ahz.ltd/graphql/v1 \
+curl -X POST https://community.example/graphql/v1 \
   -H 'Content-Type: application/json' \
   -d '{"query":"{ __typename }"}'
 
 # 静态资源缓存头(应含 Cache-Control: public, immutable)
-curl -I https://lkm-ahz.ltd/_astro/<某资源路径>
+curl -I https://community.example/_astro/<某资源路径>
 
 # 成员头像(头像已对象存储化,key 形如 avatars/<uid>/v<ms>.webp,经 /avatar/{user_id} 读取)
-curl -I https://lkm-ahz.ltd/api/v1/avatar/<user_id>
+curl -I https://community.example/api/v1/avatar/<user_id>
 # 期望: 200(头像由后端从 S3 流式返回)
 
 # 证书链与有效期
-openssl s_client -connect lkm-ahz.ltd:443 </dev/null 2>/dev/null | openssl x509 -noout -dates
+openssl s_client -connect community.example:443 </dev/null 2>/dev/null | openssl x509 -noout -dates
 ```
 
 ## 六、证书续期(自动)
@@ -1186,4 +1190,4 @@ cd LKM-service
   再用 `/api/v1/admin/auth/me` 确认 `permissions` 里出现该值；换票成功与拒绝都会写 `audit_logs`
   （`admin_bot_panel_ticket_issued` / `admin_bot_panel_access_denied`）。
 
-- **后台登录后操作报「需要 MFA」**:登录不再强制 2FA(对齐 GitHub),仅后台危险操作(板块审核等)要求 2FA;通过后信任 1 小时。首次需在后台完成 2FA 设置。
+- **后台登录后操作报「需要 MFA」**:普通登录免 2FA(产品策略),仅后台危险操作(板块审核等)要求 2FA;通过后信任 1 小时。首次需在后台完成 2FA 设置。

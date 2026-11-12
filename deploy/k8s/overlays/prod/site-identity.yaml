@@ -10,12 +10,12 @@ kind: ConfigMap
 metadata:
   name: lkm-config
 data:
-  LKM_RP_ID: lkm-ahz.ltd
-  LKM_ORIGIN: https://lkm-ahz.ltd
-  LKM_GITHUB_REDIRECT_URI: https://lkm-ahz.ltd/api/v1/auth/oauth/github/callback
-  LKM_FRONTEND_CALLBACK: https://lkm-ahz.ltd/login/success
+  LKM_RP_ID: community.example
+  LKM_ORIGIN: https://community.example
+  LKM_GITHUB_REDIRECT_URI: https://community.example/api/v1/auth/oauth/github/callback
+  LKM_FRONTEND_CALLBACK: https://community.example/login/success
   # 预签名 host 必须等于 APISIX MinIO 路由改写后的 Host（即社群裸域）
-  LKM_S3_PUBLIC_ENDPOINT_URL: https://lkm-ahz.ltd
+  LKM_S3_PUBLIC_ENDPOINT_URL: https://community.example
   # 公网域名 + 回环 + 集群内服务名。**回环必须保留**：exec 探针从容器内打
   # 127.0.0.1，漏了会被 TrustedHost 判 400 → 探针长期失败（M6.2 的探针反成故障源）。
-  LKM_ALLOWED_HOSTS: lkm-ahz.ltd,www.lkm-ahz.ltd,127.0.0.1,localhost,backend,auth
+  LKM_ALLOWED_HOSTS: community.example,www.community.example,127.0.0.1,localhost,backend,auth

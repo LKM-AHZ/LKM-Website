@@ -18,5 +18,6 @@ resources:
 
 patches:
   - path: gateway-domains.yaml
+  - path: gateway-tls.yaml
   - path: site-identity.yaml
   - path: patch-apisix-service.yaml

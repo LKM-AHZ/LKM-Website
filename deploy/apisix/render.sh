@@ -27,7 +27,7 @@
 set -e
 
 # 社区域名（承载 /api、/graphql、前台与后台认证面；官网域已迁至独立服务器，不在此处）
-COMMUNITY="${APISIX_COMMUNITY_DOMAINS:-lkm-ahz.ltd}"
+COMMUNITY="${APISIX_COMMUNITY_DOMAINS:-localhost}"
 # 多域名的分隔符规整：下游（hosts_of / origins_of / ssl_block 的 `for d in …`，以及取首个裸域的
 # `${COMMUNITY%% *}`）**一律按空格切词**，而 .env 里紧邻的 LKM_ALLOWED_HOSTS 是逗号分隔 ——
 # 照那边写法填 `a.com,b.com` 会被当成**一个**域名：hosts 渲染成 `a.com,b.com`，路由静默匹配

@@ -38,6 +38,16 @@ LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / 
 
 ---
 
+## 服务地址配置
+
+项目未确定正式域名。运行默认值仅使用回环地址；文档和生产 overlay 中的 `.example` 地址是待替换示例。
+
+- 桌面端 LKM 服务默认 `http://127.0.0.1:8000`，可在设置中修改，或构建时传 `--dart-define=LKM_SERVER_URL=<服务地址>`；保留的 Solar 后端使用独立的 `NETWORK_SERVER_URL` 构建参数或其设置项。两套地址分别保存。分享链接、账户二维码及网页跳转跟随当前 LKM 服务的 origin，严格匹配协议、主机和端口，不推断别名。
+- Android HTTPS 应用链接的主机是打包参数 `LKM_APP_LINK_HOST`（Gradle property 或环境变量，默认 `localhost`）；部署时应与 `LKM_SERVER_URL` 的主机保持一致。更改应用链接主机需要重新打包；自定义 `lkm://` 协议仍可使用。
+- 官网后端由 `API_URL` 注入，站点地址由 `PUBLIC_SITE_URL` 注入；未配置站点地址时不生成域名相关 sitemap。开发环境需开放额外主机时配置 `DEV_ALLOWED_HOSTS`。
+- Compose 网关域名由 `LKM_COMMUNITY_DOMAINS` 注入，默认 `localhost`；公网部署同时设置 `LKM_ALLOWED_HOSTS`、`LKM_RP_ID`、`LKM_ORIGIN`、OAuth 回调和对象存储公网地址，详见 [DEPLOYMENT.md](./DEPLOYMENT.md)。Bot 面板沿用配置的同源 `/bot/` 路径。
+- Kubernetes base/kind 使用本地配置。生产部署需同时替换 `overlays/prod/gateway-domains.yaml`、`site-identity.yaml` 和 `gateway-tls.yaml` 中的示例，保证域名、证书 Secret 键及挂载路径一致；证书脚本通过 `DOMAINS` 或 `APISIX_COMMUNITY_DOMAINS` 接收域名。
+
 ## 二、环境要求
 
 - **Git**:管理根编排仓库及三个独立子项目仓库。

@@ -9,7 +9,7 @@ kind: ConfigMap
 metadata:
   name: lkm-gateway-config
 data:
-  APISIX_COMMUNITY_DOMAINS: lkm-ahz.ltd
+  APISIX_COMMUNITY_DOMAINS: community.example
   # bot 面板在社群域子路径 /bot/ 下，无独立域名条目；官网域已迁至独立服务器，同样不在本集群。
   # 上限仍独立（bot 单文件 512MB）。
   APISIX_BOT_MAX_BODY_SIZE: "550000000"

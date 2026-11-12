@@ -39,7 +39,7 @@ services:
     entrypoint: ['sh', '/src/render.sh']
     environment:
       # 网关配置的**单一来源**：路由 hosts 与 CORS 来源由域名变量展开，请求体上限与后端LKM_MAX_UPLOAD_BYTES 取同一个 env。
-      APISIX_COMMUNITY_DOMAINS: ${LKM_COMMUNITY_DOMAINS:-lkm-ahz.ltd}
+      APISIX_COMMUNITY_DOMAINS: ${LKM_COMMUNITY_DOMAINS:-localhost}
       # 注：bot 面板已并入社群域的子路径 /bot/（不再有独立子域），故无 APISIX_BOT_DOMAINS。
       APISIX_MAX_BODY_SIZE: ${LKM_MAX_UPLOAD_BYTES:-104857600}
       # bot 面板请求体上限：与上面那个**独立**（bot 单文件 512MB > 社群站 100MB）
@@ -718,7 +718,7 @@ services:
       # 必须列入，否则容器 healthcheck 直连 127.0.0.1 会被 TrustedHost 判 400 → 长期 unhealthy。
       # CORS 不在此下发：生产不挂应用层 CORS，唯一权威是 APISIX 的 cors 插件
       # （deploy/apisix/apisix.yaml），来源白名单在 render.sh 里由域名变量展开。
-      LKM_ALLOWED_HOSTS: ${LKM_ALLOWED_HOSTS:-lkm-ahz.ltd,www.lkm-ahz.ltd,backend,auth,localhost,127.0.0.1}
+      LKM_ALLOWED_HOSTS: ${LKM_ALLOWED_HOSTS:-backend,auth,localhost,127.0.0.1}
       # 单文件上传上限：与网关 APISIX 的 max_body_size 同源（apisix-render 读同一个 env）
       LKM_MAX_UPLOAD_BYTES: ${LKM_MAX_UPLOAD_BYTES:-104857600}
       LKM_FILES_CLAMAV_ADDRESS: ${LKM_FILES_CLAMAV_ADDRESS:-clamav:3310}
@@ -752,7 +752,7 @@ services:
       LKM_STORAGE_BACKEND: s3
       LKM_S3_ENDPOINT_URL: http://minio:9000
       # 预签名直传/下载对浏览器暴露地址：MinIO 经 APISIX /lkm/ 转发，host 用站点公网地址
-      LKM_S3_PUBLIC_ENDPOINT_URL: ${LKM_S3_PUBLIC_ENDPOINT_URL:-http://124.220.55.235}
+      LKM_S3_PUBLIC_ENDPOINT_URL: ${LKM_S3_PUBLIC_ENDPOINT_URL:-http://localhost}
       LKM_S3_BUCKET: ${LKM_S3_BUCKET:-lkm}
       LKM_S3_PREFIX: ${LKM_S3_PREFIX:-files}
       # 检索：默认 pg（零外部依赖）；置 meilisearch/opensearch 并起 --profile search 后生效，
@@ -788,10 +788,10 @@ services:
       # 指向旧地址则静默失效（表现为「点了没反应」，日志里未必有错误）。
       # 曾为字面量硬编码，`cp .env.example .env` 后换域名不生效；契约测试
       # tests/deploy/test_site_identity_config.py 禁止再写回字面量。
-      LKM_RP_ID: ${LKM_RP_ID:-124.220.55.235}
-      LKM_ORIGIN: ${LKM_ORIGIN:-http://124.220.55.235}
-      LKM_GITHUB_REDIRECT_URI: ${LKM_GITHUB_REDIRECT_URI:-http://124.220.55.235/api/v1/auth/oauth/github/callback}
-      LKM_FRONTEND_CALLBACK: ${LKM_FRONTEND_CALLBACK:-http://124.220.55.235/login/success}
+      LKM_RP_ID: ${LKM_RP_ID:-localhost}
+      LKM_ORIGIN: ${LKM_ORIGIN:-http://localhost}
+      LKM_GITHUB_REDIRECT_URI: ${LKM_GITHUB_REDIRECT_URI:-http://localhost/api/v1/auth/oauth/github/callback}
+      LKM_FRONTEND_CALLBACK: ${LKM_FRONTEND_CALLBACK:-http://localhost/login/success}
       # 链路追踪：默认关；起 otel profile 并指 ENDPOINT 才生效
       LKM_OTEL_ENABLED: ${LKM_OTEL_ENABLED:-false}
       LKM_OTEL_EXPORTER_OTLP_ENDPOINT: ${LKM_OTEL_EXPORTER_OTLP_ENDPOINT:-}
@@ -870,7 +870,7 @@ services:
       LKM_BOT_SSO_TTL_SECONDS: ${LKM_BOT_SSO_TTL_SECONDS:-60}
       # 公网 Host 白名单：与 backend 同值；auth 亦承载对外认证面。
       # CORS 同 backend：生产唯一权威是 APISIX，不在此下发。
-      LKM_ALLOWED_HOSTS: ${LKM_ALLOWED_HOSTS:-lkm-ahz.ltd,www.lkm-ahz.ltd,backend,auth,localhost,127.0.0.1}
+      LKM_ALLOWED_HOSTS: ${LKM_ALLOWED_HOSTS:-backend,auth,localhost,127.0.0.1}
       LKM_REDIS_URL: redis://redis:6379/0
       LKM_MESSAGE_BUS: ${LKM_MESSAGE_BUS:-rabbitmq}
       LKM_RABBITMQ_URL: ${LKM_RABBITMQ_URL:?须设置 LKM_RABBITMQ_URL（amqp://用户:密码@rabbitmq:5672/，密码需 URL 编码）}
@@ -892,7 +892,7 @@ services:
       # AUTH 进程须持有同一内部缝 token 以校验 backend 的 Bearer（router_read/router_authz
       # 的 _require_internal_token）；不设 URL 避免本进程 snapshot 自打自的回路。
       LKM_AUTH_HTTP_TOKEN: ${LKM_AUTH_HTTP_TOKEN:?生产需设置 LKM_AUTH_HTTP_TOKEN}
-      LKM_RP_ID: ${LKM_RP_ID:-124.220.55.235}
+      LKM_RP_ID: ${LKM_RP_ID:-localhost}
       # 链路追踪：auth 进程独立 service.name 后缀 -auth
       LKM_OTEL_ENABLED: ${LKM_OTEL_ENABLED:-false}
       LKM_OTEL_EXPORTER_OTLP_ENDPOINT: ${LKM_OTEL_EXPORTER_OTLP_ENDPOINT:-}

@@ -18,7 +18,7 @@
 #       显式放行，此时日志会标注「非验收」。
 #
 # 前置（真实服务，建议 dev/预发）：
-#   export LKM_COMMUNITY_DOMAINS=lkm-ahz.ltd   # 或显式 export BASE_URL=https://<域名>
+#   export LKM_COMMUNITY_DOMAINS=community.example   # 或显式 export BASE_URL=https://<域名>
 #   export DEMO_USER=demo DEMO_PASSWORD=...            # normal 账号（或走路径 1）
 #   export DEMO_ADMIN=admin DEMO_ADMIN_PASSWORD=...    # 管理员
 #   # 可选：第二个普通账号，给帖子评论以产生通知

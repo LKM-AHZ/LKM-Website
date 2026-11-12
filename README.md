@@ -1,6 +1,6 @@
 # LKM Website 全栈项目
 
-LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 SSR 网站、FastAPI 后端和社区机器人面板组成，根目录负责统一启动、容器编排和跨项目文档。纯静态官网（`lkm-ahz.icu`）已迁出为独立仓库并部署在独立服务器上，不在本编排内（见 [LKM-official-static/DEPLOYMENT.md](https://github.com/LKM-AHZ/LKM-official-static/blob/main/DEPLOYMENT.md)）。
+LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 SSR 网站、FastAPI 后端和社区机器人面板组成，根目录负责统一启动、容器编排和跨项目文档。纯静态官网（`static.example`）已迁出为独立仓库并部署在独立服务器上，不在本编排内（见 [LKM-official-static/DEPLOYMENT.md](https://github.com/LKM-AHZ/LKM-official-static/blob/main/DEPLOYMENT.md)）。
 
 ## 项目组成
 

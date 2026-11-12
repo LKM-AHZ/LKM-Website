@@ -1,5 +1,5 @@
 # kind 验收用的站点身份：统一到社群域名（与 APISIX 路由的 hosts 一致），
-# 本机用 `curl -k --resolve lkm-ahz.ltd:30443:127.0.0.1 https://lkm-ahz.ltd:30443/...`
+# 本机用 `curl -k --resolve localhost:30443:127.0.0.1 https://localhost:30443/...`
 # 访问，SNI/Host 都正确。
 #
 # 这些是「后端自己的身份」类配置（不由网关键名变量派生，见 docs/DEPLOYMENT.md）：
@@ -10,10 +10,10 @@ kind: ConfigMap
 metadata:
   name: lkm-config
 data:
-  LKM_RP_ID: lkm-ahz.ltd
-  LKM_ORIGIN: https://lkm-ahz.ltd
-  LKM_GITHUB_REDIRECT_URI: https://lkm-ahz.ltd/api/v1/auth/oauth/github/callback
-  LKM_FRONTEND_CALLBACK: https://lkm-ahz.ltd/login/success
-  LKM_S3_PUBLIC_ENDPOINT_URL: https://lkm-ahz.ltd
+  LKM_RP_ID: localhost
+  LKM_ORIGIN: https://localhost
+  LKM_GITHUB_REDIRECT_URI: https://localhost/api/v1/auth/oauth/github/callback
+  LKM_FRONTEND_CALLBACK: https://localhost/login/success
+  LKM_S3_PUBLIC_ENDPOINT_URL: https://localhost
   # 域名 + 回环 + 集群内服务名：前两者给探针与 --resolve 验收，后两者给容器间互调
-  LKM_ALLOWED_HOSTS: lkm-ahz.ltd,www.lkm-ahz.ltd,127.0.0.1,localhost,backend,auth
+  LKM_ALLOWED_HOSTS: localhost,www.localhost,127.0.0.1,backend,auth

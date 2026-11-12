@@ -1,0 +1,19 @@
+# 与 gateway-domains.yaml 使用相同的部署域名，并匹配 lkm-tls 的证书键。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apisix
+spec:
+  template:
+    spec:
+      volumes:
+        - name: certs
+          projected:
+            sources:
+              - secret:
+                  name: lkm-tls
+                  items:
+                    - key: community.example_fullchain.pem
+                      path: community.example/fullchain.pem
+                    - key: community.example_privkey.pem
+                      path: community.example/privkey.pem

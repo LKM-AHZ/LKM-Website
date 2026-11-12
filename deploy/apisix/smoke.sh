@@ -1,8 +1,8 @@
 #!/bin/sh
 # APISIX 网关冒烟 + 运行时验收（M5 7.2.4）。在网关已启动的宿主机上跑：
 #   sh deploy/apisix/smoke.sh [BASE_HOST] [COMMUNITY_DOMAIN]
-# 默认 BASE_HOST=127.0.0.1（本机映射 80/443），域名 lkm-ahz.ltd。
-# 官网域（lkm-ahz.icu）已迁至独立服务器、不经本网关，不在本脚本覆盖范围。
+# 默认 BASE_HOST=127.0.0.1（本机映射 80/443）；域名取配置中的首项，未配置时为 localhost。
+# 官网域（static.example）已迁至独立服务器、不经本网关，不在本脚本覆盖范围。
 # bot 面板已并入社群域子路径 /bot/（无独立子域名），其检查见 SMOKE_BOT。
 #
 # 连接方式（与旧脚本的关键差异，均为真机验收暴露的必要修正）：
@@ -29,7 +29,8 @@
 set -u
 
 HOST="${1:-127.0.0.1}"
-COMMUNITY="${2:-lkm-ahz.ltd}"
+COMMUNITY="${2:-${LKM_COMMUNITY_DOMAINS:-localhost}}"
+COMMUNITY="$(printf '%s\n' "$COMMUNITY" | tr ',' ' ' | awk '{for(i=1;i<=NF;i++){print $i;exit}}')"
 # 网关端口。默认 80/443（compose 直接映射）；k8s 下网关是 NodePort，
 # 用 SMOKE_HTTP_PORT/SMOKE_HTTPS_PORT 指到映射后的宿主端口（如 8080/8443）。
 # ⚠️ 非默认端口时 URL 必须显式带端口——`--resolve` 只改解析目标，不会改默认端口。
@@ -170,7 +171,7 @@ done
 check "login gateway rate-limit 429" test "$got429" = "1"
 
 # ── 5) MinIO 路由：未签名 GET /lkm/ 应到达对象存储并回 403 + x-amz-request-id ──
-#    （Host 被改写为 lkm-ahz.ltd，S3 XML 响应即证明路由与 host rewrite 生效）
+#    （Host 被改写为 community.example，S3 XML 响应即证明路由与 host rewrite 生效）
 hdr=$(cc -D - -o /dev/null "https://$COMMUNITY$SP/lkm/" | tr -d '\r')
 code=$(printf '%s' "$hdr" | awk 'NR==1{print $2}')
 check "minio route 403 (reached object store)" test "$code" = "403"

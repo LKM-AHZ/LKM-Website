@@ -8,11 +8,11 @@ metadata:
   name: lkm-config
 data:
   LKM_ENV: production
-  # 公网 Host 白名单（M6.1）。**内网服务名与回环必须列入**：kubelet 的
+  # 公网 Host 白名单。**内网服务名与回环必须列入**：kubelet 的
   # httpGet 探针直连 Pod IP（Host 为 Pod IP，非 127.0.0.1），exec 探针走回环；
   # 两者都被 TrustedHost 校验，漏配即 400 → 探针长期失败（M6.2 的探针分级反成故障源）。
   # 域名部分在 overlay 覆盖。
-  LKM_ALLOWED_HOSTS: lkm-ahz.ltd,www.lkm-ahz.ltd,backend,auth,localhost,127.0.0.1
+  LKM_ALLOWED_HOSTS: backend,auth,localhost,127.0.0.1
   LKM_MAX_UPLOAD_BYTES: "104857600"
   # 同命名空间内直接用 Service 短名（CoreDNS 解析 <svc>.<ns>.svc.cluster.local）
   LKM_DB_HOST: postgres
@@ -32,12 +32,12 @@ data:
   LKM_S3_BUCKET: lkm
   LKM_S3_PREFIX: files
   # 预签名 URL 对浏览器暴露的地址，须与 APISIX 侧 MinIO 路由改写的 Host 一致
-  LKM_S3_PUBLIC_ENDPOINT_URL: http://124.220.55.235
+  LKM_S3_PUBLIC_ENDPOINT_URL: http://localhost
   # 应用自身身份（不由网关键名变量派生，换域名时需单独改）
-  LKM_RP_ID: "124.220.55.235"
-  LKM_ORIGIN: http://124.220.55.235
-  LKM_GITHUB_REDIRECT_URI: http://124.220.55.235/api/v1/auth/oauth/github/callback
-  LKM_FRONTEND_CALLBACK: http://124.220.55.235/login/success
+  LKM_RP_ID: "localhost"
+  LKM_ORIGIN: http://localhost
+  LKM_GITHUB_REDIRECT_URI: http://localhost/api/v1/auth/oauth/github/callback
+  LKM_FRONTEND_CALLBACK: http://localhost/login/success
   LKM_GITHUB_CLIENT_ID: ""
   LKM_OTEL_ENABLED: "false"
   LKM_OTEL_EXPORTER_OTLP_ENDPOINT: ""

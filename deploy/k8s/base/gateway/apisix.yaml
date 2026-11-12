@@ -200,12 +200,12 @@ spec:
                   name: lkm-tls
                   optional: true
                   items:
-                    - key: lkm-ahz.ltd_fullchain.pem
-                      path: lkm-ahz.ltd/fullchain.pem
-                    - key: lkm-ahz.ltd_privkey.pem
-                      path: lkm-ahz.ltd/privkey.pem
+                    - key: localhost_fullchain.pem
+                      path: localhost/fullchain.pem
+                    - key: localhost_privkey.pem
+                      path: localhost/privkey.pem
                     # 注：bot 面板已并入社群域子路径 /bot/（不走独立子域证书）；
-                    # 官网域 lkm-ahz.icu 已迁至独立服务器，其证书不在此集群内。
+                    # 官网域 static.example 已迁至独立服务器，其证书不在此集群内。
 ---
 # 微型 ACME http-01 responder（非网关角色）：仅服务 certbot webroot 的挑战文件。
 # 保留原因与 compose 一致——APISIX 不服务静态文件，http-01 需要一个静态 responder。
