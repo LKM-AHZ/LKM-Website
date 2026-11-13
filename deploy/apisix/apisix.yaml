@@ -73,7 +73,7 @@ routes:
       # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
       # 生产**只此一处**（应用层不再挂 CORS，见 core/middleware.py），来源由域名变量展开。
       # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
-      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
+      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 请求无法匹配路由，
       # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
       cors:
         allow_origins: "__COMMUNITY_ORIGINS__"
@@ -105,7 +105,7 @@ routes:
       # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
       # 生产**只此一处**（应用层不再挂 CORS，见 core/middleware.py），来源由域名变量展开。
       # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
-      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
+      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 请求无法匹配路由，
       # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
       cors:
         allow_origins: "__COMMUNITY_ORIGINS__"
@@ -132,7 +132,7 @@ routes:
       # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
       # 生产**只此一处**（应用层不再挂 CORS，见 core/middleware.py），来源由域名变量展开。
       # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
-      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
+      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 请求无法匹配路由，
       # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
       cors:
         allow_origins: "__COMMUNITY_ORIGINS__"
@@ -172,7 +172,7 @@ routes:
       # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
       # 生产**只此一处**（应用层不再挂 CORS，见 core/middleware.py），来源由域名变量展开。
       # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
-      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
+      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 请求无法匹配路由，
       # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
       cors:
         allow_origins: "__COMMUNITY_ORIGINS__"
@@ -199,7 +199,7 @@ routes:
       # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
       # 生产**只此一处**（应用层不再挂 CORS，见 core/middleware.py），来源由域名变量展开。
       # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
-      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
+      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 请求无法匹配路由，
       # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
       cors:
         allow_origins: "__COMMUNITY_ORIGINS__"
@@ -228,7 +228,7 @@ routes:
       # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
       # 生产**只此一处**（应用层不再挂 CORS，见 core/middleware.py），来源由域名变量展开。
       # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
-      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
+      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 请求无法匹配路由，
       # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
       cors:
         allow_origins: "__COMMUNITY_ORIGINS__"
@@ -257,7 +257,7 @@ routes:
       # CORS 白名单（M6.1）：显式来源，禁 `{}` 兜底（默认等价 `*`，等于对全网开放）。
       # 生产**只此一处**（应用层不再挂 CORS，见 core/middleware.py），来源由域名变量展开。
       # **四个字段都不得用 `*`**：APISIX cors 插件在 allow_credential=true 时禁止 `*`，
-      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 静默退化为经 astro 转发，
+      # 违反会让**整条路由校验失败不加载**（启动日志报错 → 请求无法匹配路由，
       # 限流/WS upgrade/CORS 全失效）。头列表按前端实际发送显式列出。
       cors:
         allow_origins: "__COMMUNITY_ORIGINS__"
@@ -270,22 +270,6 @@ routes:
       type: roundrobin
       discovery_type: dns
       service_name: "backend__UPSTREAM_SUFFIX__:8000"
-      pass_host: pass
-
-  # ── 指纹静态资源 → astro，长缓存 ──
-  - id: astro-assets
-    uri: /_astro/*
-    hosts: [__COMMUNITY_HOSTS__]
-    priority: 100
-    plugins:
-      response-rewrite:
-        headers:
-          set:
-            Cache-Control: "public, max-age=31536000, immutable"
-    upstream:
-      type: roundrobin
-      discovery_type: dns
-      service_name: "astro__UPSTREAM_SUFFIX__:4321"
       pass_host: pass
 
   # ── 成员头像 → backend，长缓存 ──
@@ -329,17 +313,6 @@ routes:
       pass_host: rewrite
       upstream_host: __COMMUNITY_DOMAIN__
 
-  # ── 其余 → 前端 SSR ──
-  - id: community-catchall
-    uri: /*
-    hosts: [__COMMUNITY_HOSTS__]
-    priority: 10
-    upstream:
-      type: roundrobin
-      discovery_type: dns
-      service_name: "astro__UPSTREAM_SUFFIX__:4321"
-      pass_host: pass
-
   # ── LKM Bot 面板（社群域下的子路径，profile=bot 可选组件）──
   # 子路径前缀由 __BOT_BASE_PATH__ 占位展开（默认 /bot，来源 LKM_BOT_BASE_PATH；
   # 与前端面板构建期 base / lkmbot 运行期 BOT_DASHBOARD_BASE_PATH 同源）。
@@ -382,15 +355,15 @@ routes:
     priority: 106
     plugins:
       proxy-rewrite:
-        uri: __BOT_BASE_PATH__/index.html
+        uri: /
     upstream:
       type: roundrobin
       discovery_type: dns
-      service_name: "astro__UPSTREAM_SUFFIX__:4321"
+      service_name: "lkmbot__UPSTREAM_SUFFIX__:6185"
       pass_host: pass
 
   # 面板 API（/bot/api/*）仍由 lkmbot 提供：SSO、插件页面 HTML、WebSocket 与所有 v1 端点。
-  # 静态 UI 已迁到官网仓库（bot-panel/ → /bot/），故这里只把 API 前缀剥掉转给 lkmbot。
+  # UI 和 API 均由独立 bot 镜像提供；这里剥掉面板前缀。
   # priority 140 低于 bot-auth-login(150)，登录限流仍然先命中。
   - id: bot-api
     uri: __BOT_BASE_PATH__/api/*
@@ -409,8 +382,7 @@ routes:
       pass_host: pass
 
   # 面板其余流量（含面板 WebSocket）→ lkmbot:6185。
-  # priority 105 远高于 community-catchall(10)，且与 /api/*(110+)、/graphql/*(107)、
-  # /_astro/*(100)、minio 等无 uri 重叠——否则面板请求会被 Astro 接走。
+  # 面板前缀与 /api/*、/graphql/*、MinIO 路由无重叠。
   # 必须 enable_websocket：面板实时通道（/api/v1/live-chat/ws、/unified-chat/ws、
   # /api/v1/chat/ws）都落在本 catchall，不开 upgrade 会被 APISIX 剥掉 Upgrade/Connection 头。
   # body 上限刻意用 **独立** 的 __BOT_MAX_BODY_SIZE__（compose 来源 .env 的
@@ -420,11 +392,15 @@ routes:
     uri: __BOT_BASE_PATH__/*
     hosts: [__COMMUNITY_HOSTS__]
     priority: 105
-    # 面板静态资源由 Astro 提供（源码在官网仓库 bot-panel/），路径原样转发（/bot/*）
+    enable_websocket: true
+    plugins:
+      proxy-rewrite:
+        regex_uri: ["^__BOT_BASE_PATH__/(.*)", "/$1"]
+    # 面板资源与 SPA 入口由 bot 进程服务。
     upstream:
       type: roundrobin
       discovery_type: dns
-      service_name: "astro__UPSTREAM_SUFFIX__:4321"
+      service_name: "lkmbot__UPSTREAM_SUFFIX__:6185"
       pass_host: pass
 
 # __SSL_SECTION__

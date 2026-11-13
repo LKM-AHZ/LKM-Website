@@ -11,7 +11,7 @@
 
 - `kubectl` 与集群版本兼容；客户端支持 Kustomize。
 - 本地验收安装 kind，且宿主机 `80/443` 未被其他服务占用。
-- 已构建并让集群可拉取 `lkm-service`、`lkm-official-website` 镜像；
+- 已构建并让集群可拉取 `lkm-service` 镜像；
   启用 bot 时还需要 `lkm-bot`（`docker compose --profile bot build lkmbot`）。
 - 本地开发可从根目录 `.env` 生成 Secret；生产可按根级部署说明用 Infisical CLI 注入同名环境变量。
 - 生产集群已准备 StorageClass、负载均衡、DNS、正式证书和备份方案。
@@ -26,7 +26,7 @@ deploy/k8s/
 │   ├── kustomization.yaml     # 用 configMapGenerator 直接引用仓库既有部署资产
 │   ├── app-config.yaml        # 非敏感配置（三张表：公共 / AUTH 库 / 分析+编排）
 │   ├── infra/                 # postgres redis pulsar minio clickhouse vector otel prefect
-│   ├── app/                   # backend auth workers(×10) frontend(astro) lkmbot(可选,replicas 0)
+│   ├── app/                   # backend auth workers(×10) lkmbot(可选,replicas 0)
 │   └── gateway/               # apisix(+render init/sidecar) acme-webroot 网关配置
 └── overlays/
     ├── kind/                  # 本地单节点验收（NodePort + 站点身份）

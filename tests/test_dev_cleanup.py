@@ -23,25 +23,17 @@ def listening(port):
 
 
 def run_case(mode, temp, stop_signal=signal.SIGTERM):
-    front_port, back_port = free_port(), free_port()
-    while back_port == front_port:
-        back_port = free_port()
-    expected = {
-        "front": [front_port],
-        "back": [back_port],
-        "all": [front_port, back_port],
-    }[mode]
+    back_port = free_port()
+    expected = [back_port]
     pid_file = temp / f"{mode}.pids"
     pid_file.write_text("")
     log_file = temp / f"{mode}.log"
     env = os.environ | {
         "PATH": f"{temp / 'bin'}:{os.environ['PATH']}",
-        "FRONT_PORT": str(front_port),
         "BACKEND_PORT": str(back_port),
         "DEV_TEST_SERVER": str(temp / "server.py"),
         "DEV_TEST_PIDS": str(pid_file),
     }
-    env.pop("ASTRO_DEV_BACKGROUND", None)
     with log_file.open("w") as log:
         proc = subprocess.Popen(
             [str(ROOT / "dev.sh"), mode],
@@ -79,24 +71,15 @@ def main():
         temp = Path(directory)
         bin_dir = temp / "bin"
         bin_dir.mkdir()
-        stub = bin_dir / "pnpm"
+        stub = bin_dir / "uv"
         stub.write_text(
             "#!/usr/bin/env bash\n"
             'if [[ "$1" == install || "$1" == sync || "$2" == python ]]; then exit 0; fi\n'
-            'if [[ "$2" == dev && -z "${ASTRO_DEV_BACKGROUND:-}" ]]; then\n'
-            "  python3 -c 'import os, subprocess, sys; "
-            'p = subprocess.Popen([sys.executable, os.environ["DEV_TEST_SERVER"], '
-            "sys.argv[1]], start_new_session=True); "
-            'open(os.environ["DEV_TEST_PIDS"], "a").write(str(p.pid) + "\\n")\' '
-            '"${@: -1}"\n'
-            "  exit 0\n"
-            "fi\n"
             'python3 "$DEV_TEST_SERVER" "${@: -1}" &\n'
             'echo "$!" >> "$DEV_TEST_PIDS"\n'
             'wait "$!"\n'
         )
         stub.chmod(0o755)
-        (bin_dir / "uv").symlink_to(stub)
         (temp / "server.py").write_text(
             "import signal, socket, sys, time\n"
             "sock = socket.socket()\n"
@@ -111,7 +94,7 @@ def main():
             "    connection, _ = sock.accept()\n"
             "    connection.close()\n"
         )
-        for mode in ("front", "back", "all"):
+        for mode in ("back", "all"):
             run_case(mode, temp)
             print(f"{mode}: child ports released before dev.sh exits")
         run_case("all", temp, signal.SIGINT)

@@ -54,7 +54,11 @@ def _tracked_markdown() -> list[Path]:
                 for part in p.relative_to(REPO_ROOT).parts
             )
         )
-    return [REPO_ROOT / p for p in out.decode().split("\0") if p]
+    return [
+        REPO_ROOT / p
+        for p in out.decode().split("\0")
+        if p and (REPO_ROOT / p).is_file()
+    ]
 
 
 def _target_path(source: Path, raw_target: str) -> Path | None:

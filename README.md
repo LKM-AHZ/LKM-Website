@@ -1,14 +1,14 @@
-# LKM Website 全栈项目
+# LKM 项目编排
 
-LKM（理科迷）网站的本地开发与部署编排仓库。项目由社区 SSR 网站、FastAPI 后端和社区机器人面板组成，根目录负责统一启动、容器编排和跨项目文档。纯静态官网（`static.example`）已迁出为独立仓库并部署在独立服务器上，不在本编排内（见 [LKM-official-static/DEPLOYMENT.md](https://github.com/LKM-AHZ/LKM-official-static/blob/main/DEPLOYMENT.md)）。
+LKM（理科迷）的本地开发与部署编排仓库，包含 Flutter 桌面客户端、FastAPI 后端和社区机器人。根目录负责容器编排、后端启动脚本和跨项目文档。
 
 ## 项目组成
 
 | 目录                    | 技术栈                                           |                       默认端口 | 用途                                        |
 | ----------------------- | ------------------------------------------------ | -----------------------------: | ------------------------------------------- |
-| `LKM-official-website/` | Astro 7、Vue 3、React、Tailwind CSS 4            |                         `4321` | 社区与动态官网，SSR 运行                    |
+| `LKM-desktop/` | Flutter、Dart、Vue/WebF | — | 桌面客户端与内置 StarHope |
 | `LKM-service/`          | FastAPI、SQLAlchemy、PostgreSQL、Pulsar/RabbitMQ |                `8000` / `8001` | 业务 API、AUTH 服务及后台 worker            |
-| `LKM-bot/`              | Python、AstrBot fork                             | `6185`（仅经网关 `bot.` 子域） | 社区机器人面板，可选组件（`--profile bot`） |
+| `LKM-bot/`              | Python、AstrBot fork                             | `6185`（仅经网关 `/bot/`） | 社区机器人面板，可选组件（`--profile bot`） |
 | `deploy/`               | APISIX、Kustomize、可观测性配置                  |                   `80` / `443` | Compose/Kubernetes 部署资产                 |
 
 各子目录是独立 Git 仓库；根仓库只管理编排、部署资产和跨项目文档。提交前请在实际修改的仓库中分别检查 `git status`。
@@ -28,7 +28,6 @@ git submodule status
 | -------------------------------------------------------------- | ------------------------------------------------ |
 | [docs/README.md](./docs/README.md)                             | 跨项目文档索引、阅读路径与维护约定               |
 | [docs/后端架构与现状.md](./docs/后端架构与现状.md)             | 后端服务拓扑、数据模型、认证、消息链路与模块边界 |
-| [docs/前端架构与现状.md](./docs/前端架构与现状.md)             | 前端 SSR、页面域、数据访问、认证与构建链路       |
 | [docs/Bot平台架构与现状.md](./docs/Bot平台架构与现状.md)       | Bot 核心、消息流水线、插件生态与管理面板         |
 | [docs/社区需求与开发规划.md](./docs/社区需求与开发规划.md)     | 一期业务现状、差距、优先级与验收口径             |
 | [DEVELOPMENT.md](./docs/DEVELOPMENT.md)                             | 本地开发、环境变量与常用命令                     |
@@ -38,7 +37,7 @@ git submodule status
 
 ### 环境要求
 
-- Node.js `>=24`、pnpm `11`
+- Flutter/Dart（版本与命令见 `LKM-desktop/README.md`）；Bot 面板使用 Node.js 24+ 和其声明的 pnpm 版本
 - Python `>=3.13`、[uv](https://docs.astral.sh/uv/)
 - PostgreSQL（后端必需；先启动并创建 `lkm` 数据库，连接参数见 `LKM-service/.env.example`）
 - Git
@@ -47,37 +46,21 @@ git submodule status
 ### 本地开发
 
 ```sh
-# Linux / macOS / Git Bash：安装依赖并启动动态前端和后端
+# Linux / macOS：安装依赖并启动后端
 ./dev.sh
+./dev.sh --no-run  # 仅安装后端依赖
 
-# 只安装依赖
-./dev.sh --no-run
-./dev.sh back --no-run
-
-# 只启动一个服务
-./dev.sh front
-./dev.sh back
+# 桌面客户端
+cd LKM-desktop
+flutter pub get
+flutter run
 ```
 
-Windows 及装了 `pwsh` 的 Linux/macOS 使用同一份 `dev.ps1`，参数与 Bash 版一致：
+Windows 使用 `.\dev.ps1`，安装了 pwsh 的 Linux/macOS 使用 `pwsh ./dev.ps1`；
+`--no-run` 仅安装后端依赖。脚本兼容 `back` / `all` 参数，均只操作后端。
 
-```powershell
-.\dev.ps1                # Windows PowerShell：全部服务
-.\dev.ps1 front          # 仅前端（front / back / --no-run 同 Bash 版）
-pwsh ./dev.ps1 front     # Linux / macOS
-```
-
-Windows 上若执行策略不允许运行脚本：
-`powershell -NoProfile -ExecutionPolicy Bypass -File .\dev.ps1 front`。
-
-启动后常用地址：
-
-| 服务       | 地址                          |
-| ---------- | ----------------------------- |
-| 动态前端   | `http://127.0.0.1:4321`       |
-| 后端 API   | `http://127.0.0.1:8000`       |
-| Swagger UI | `http://127.0.0.1:8000/docs`  |
-| ReDoc      | `http://127.0.0.1:8000/redoc` |
+后端 API 地址为 `http://127.0.0.1:8000`，Swagger UI 为 `http://127.0.0.1:8000/docs`。
+桌面客户端在设置中配置服务地址。
 
 完整步骤、环境变量和排错见 [DEVELOPMENT.md](./docs/DEVELOPMENT.md)。
 
@@ -96,9 +79,9 @@ docker compose ps
 ## 常用验证
 
 ```sh
-# 动态前端
-cd LKM-official-website
-pnpm check && pnpm test && pnpm build
+# 桌面客户端
+cd LKM-desktop
+flutter analyze && flutter test
 
 # 后端
 cd ../LKM-service

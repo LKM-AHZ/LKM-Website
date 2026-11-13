@@ -4,7 +4,7 @@
 
 This root repository owns local orchestration, `docker-compose.yml`, deployment assets in `deploy/`, and cross-project documentation. The application directories are independent Git submodules:
 
-- `LKM-official-website/`: Astro SSR frontend; application code in `src/`, static files in `public/`, and browser tests in `tests/e2e/`.
+- `LKM-desktop/`: Flutter desktop client; application code in `lib/`, tests in `test/`, and the embedded StarHope module in `webf/`.
 - `LKM-service/`: FastAPI backend; business modules in `app/`, authentication in `auth/`, shared code in `core/`, migrations in `alembic/` and `alembic_auth/`, and tests in `tests/`.
 - `LKM-bot/`: Python bot in `astrbot/`, dashboard in `dashboard/`, and tests in `tests/`.
 
@@ -12,18 +12,18 @@ Make code changes and commits in the owning submodule. Check its own `AGENTS.md`
 
 ## Build, Test, and Development Commands
 
-Run `git submodule update --init --recursive` after cloning. From the root, `./dev.sh` (Linux/macOS) or `./dev.ps1` (Windows PowerShell 5.1+, and pwsh on any OS) installs dependencies and starts the frontend and backend; adding `--no-run` only installs them. `docker compose config` validates the full stack configuration before deployment.
+Run `git submodule update --init --recursive` after cloning. From the root, `./dev.sh` (Linux/macOS) or `./dev.ps1` (Windows PowerShell 5.1+, and pwsh on any OS) installs dependencies and starts the backend; adding `--no-run` only installs them. `docker compose config` validates the full stack configuration before deployment.
 
 Run checks from the relevant submodule:
 
-- Frontend: `pnpm check && pnpm test && pnpm build`.
+- Desktop: `flutter analyze && flutter test`; run the `webf/` package checks when changing StarHope.
 - Backend: `uv run pytest && uv run ty check && uv run ruff check && uv run python scripts/check_raw_sql.py`.
 - Bot: `python -m pytest`.
 - Root contracts/docs: `cd LKM-service && uv run pytest tests/deploy -q`, `python3 scripts/check_doc_links.py`, `python3 scripts/check_submodule_pointers.py`.
 
 ## Coding Style & Testing Guidelines
 
-Use four spaces and `snake_case` for Python; backend Ruff uses an 88-character line limit. The frontend uses two spaces, ESLint, and Prettier. Follow existing TypeScript naming patterns (`camelCase` functions, `PascalCase` components). Name Python tests `test_*.py`; frontend browser tests use `*.spec.ts`. Add focused regression tests for behavior changes. Backend `pytest` excludes `integration` tests by default; database tests require PostgreSQL. No repository-wide coverage threshold is documented.
+Use four spaces and `snake_case` for Python; backend Ruff uses an 88-character line limit. Dart uses the repository formatter and existing naming patterns. The Bot dashboard uses its existing TypeScript conventions. Name Python tests `test_*.py` and Dart tests `*_test.dart`. Add focused regression tests for behavior changes. Backend `pytest` excludes `integration` tests by default; database tests require PostgreSQL. No repository-wide coverage threshold is documented.
 
 ## Commit & Pull Request Guidelines
 

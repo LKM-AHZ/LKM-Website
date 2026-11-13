@@ -26,12 +26,12 @@ main.py
        └─ BotDashboard
             ├─ FastAPI ASGI API
             ├─ Hypercorn
-            └─ 可选静态面板兜底（data/dist；面板本体由社区站 /bot/ 提供）
+            └─ 内置静态面板（bot/dashboard/dist；data/dist 可显式覆盖）
 ```
 
 - 默认 HTTP 服务端口为 `6185`（`bot/core/config/default.py` 的 `dashboard.port`）。
-- 管理面板前端在社区站仓库 `LKM-official-website/bot-panel/`，由 Astro 在 `/bot/` 提供；
-  bot 侧只保留面板 API，以及显式目录 / `data/dist` 的静态托管兜底。
+- 管理面板前端在 `LKM-bot/dashboard/` 独立构建，由 bot 服务 `bot/dashboard/dist/`；
+  `--webui-dir` / `data/dist` 保留为显式覆盖，网关将 `/bot/` 的 UI/API 均转发到 bot。
 - 启动命令为 `uv run main.py`；容器镜像暴露 `6185`，入口同为 `python main.py`。
 
 ## 3. 消息处理流水线
@@ -97,7 +97,7 @@ Pipeline 的上下文、调度器和阶段基类位于 `bot/core/pipeline/`；�
 
 ### 6.2 前端
 
-`LKM-official-website/bot-panel/` 是基于 Vuetify 的 Vue 3 SPA（面板前端已迁出 bot 仓库）：
+`LKM-bot/dashboard/` 是基于 Vuetify 的 Vue 3 SPA，源码和构建均由 bot 仓库维护：
 
 | 路由组         | 功能                                    |
 | -------------- | --------------------------------------- |
@@ -111,12 +111,11 @@ Pipeline 的上下文、调度器和阶段基类位于 `bot/core/pipeline/`；�
 | `/data/*`      | 统计、会话、控制台、Trace               |
 | `/chat`        | 独立聊天与调试面板                      |
 
-前端构建期通过 `VITE_BASE_PATH` 决定面板挂在根路径还是子路径（生产固定 `/bot/`）；API/WS/EventSource/iframe
+前端构建期通过 `VITE_BASE_PATH` 决定面板挂在根路径还是子路径（LKM 默认 `/bot/`，由部署参数统一注入）；API/WS/EventSource/iframe
 路径由 `src/api/base.ts` 与拦截器统一补前缀。
 
-> 面板源码已迁到前端仓库 `LKM-official-website/bot-panel/`（构建产物由 Astro 静态托管在
-> `/bot/`）。本仓库只保留面板 API：`/bot/api/*` 由网关剥前缀后转发到 lkmbot，静态 UI 走前端
-> 容器；bot 镜像不再构建前端。
+> 面板由 bot 镜像的独立 Node 构建阶段生成，内置在 Python 运行镜像中；网关剥前缀后将
+> 静态 UI 与 API 都送给 lkmbot:6185。桌面、API 与 Bot 面板各自独立构建。
 
 ## 7. LKM 定制层
 

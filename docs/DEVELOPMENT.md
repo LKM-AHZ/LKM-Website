@@ -1,6 +1,6 @@
-# LKM 网站开发教程
+# LKM 项目开发教程
 
-本文档说明如何在本地开发 LKM 网站(前端 Astro + 后端 FastAPI),以及团队协作约定。
+本文档说明如何在本地开发 LKM 桌面客户端、FastAPI 后端与 Bot,以及团队协作约定。
 与 `DEPLOYMENT.md`(生产部署)分工:**本文件讲本地开发**,另一份讲线上部署。
 
 > 文档入口与权威边界见 [DOCUMENTATION.md](./DOCUMENTATION.md)。本文命令均从根目录
@@ -19,16 +19,16 @@
 
 ## 一、仓库结构与文档约定
 
-LKM 网站由三个独立子项目组成(根仓库仅做编排,包含文档与 dev 脚本):
+LKM 由三个独立子项目组成(根仓库仅做编排,包含文档与 dev 脚本):
 
 ```
 LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / dev 脚本 / 文档)
 ├── docs/                     # 架构、部署、运维与开发文档(本文件即 docs/DEVELOPMENT.md)
-├── docker-compose.yml        # 生产编排(apisix/astro/postgres/redis/minio/backend/worker 等)
+├── docker-compose.yml        # 生产编排(apisix/postgres/redis/minio/backend/worker 等)
 ├── dev.ps1                   # 本地一键启动脚本(Windows PowerShell 与 pwsh 通用)
 ├── dev.sh                    # 本地一键启动脚本(Linux / macOS,参数与 dev.ps1 一致)
 ├── .gitignore                # 忽略 .env、记忆目录等敏感/本地文件
-├── LKM-official-website/     # 动态前端(Astro SSR + Vue/React islands)
+├── LKM-desktop/              # Flutter 桌面客户端与 Vue/WebF StarHope
 ├── LKM-service/              # 后端(FastAPI,REST /api/v1 + GraphQL)
 ├── LKM-bot/                  # 机器人(bot)
 ```
@@ -44,14 +44,14 @@ LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / 
 
 - 桌面端 LKM 服务默认 `http://127.0.0.1:8000`，可在设置中修改，或构建时传 `--dart-define=LKM_SERVER_URL=<服务地址>`；保留的 Solar 后端使用独立的 `NETWORK_SERVER_URL` 构建参数或其设置项。两套地址分别保存。分享链接、账户二维码及网页跳转跟随当前 LKM 服务的 origin，严格匹配协议、主机和端口，不推断别名。
 - Android HTTPS 应用链接的主机是打包参数 `LKM_APP_LINK_HOST`（Gradle property 或环境变量，默认 `localhost`）；部署时应与 `LKM_SERVER_URL` 的主机保持一致。更改应用链接主机需要重新打包；自定义 `lkm://` 协议仍可使用。
-- 官网后端由 `API_URL` 注入，站点地址由 `PUBLIC_SITE_URL` 注入；未配置站点地址时不生成域名相关 sitemap。开发环境需开放额外主机时配置 `DEV_ALLOWED_HOSTS`。
 - Compose 网关域名由 `LKM_COMMUNITY_DOMAINS` 注入，默认 `localhost`；公网部署同时设置 `LKM_ALLOWED_HOSTS`、`LKM_RP_ID`、`LKM_ORIGIN`、OAuth 回调和对象存储公网地址，详见 [DEPLOYMENT.md](./DEPLOYMENT.md)。Bot 面板沿用配置的同源 `/bot/` 路径。
 - Kubernetes base/kind 使用本地配置。生产部署需同时替换 `overlays/prod/gateway-domains.yaml`、`site-identity.yaml` 和 `gateway-tls.yaml` 中的示例，保证域名、证书 Secret 键及挂载路径一致；证书脚本通过 `DOMAINS` 或 `APISIX_COMMUNITY_DOMAINS` 接收域名。
 
 ## 二、环境要求
 
 - **Git**:管理根编排仓库及三个独立子项目仓库。
-- **Node.js 24+ + pnpm 11**:Astro 前端项目(用 pnpm,勿用 npm)。
+- **Flutter/Dart**：桌面客户端，版本与平台工具见 `LKM-desktop/README.md`。
+- **Node.js 24+ + pnpm**：Bot 面板及桌面 WebF 模块，使用各自 package.json 声明的版本与锁文件。
 - **Python 3.13 + uv**:后端依赖与运行。
 - **PostgreSQL**:后端必需；先启动数据库，并创建 `lkm` 数据库。连接参数见
   `LKM-service/.env.example`，未配置时默认连接 `localhost:5432/lkm`，用户 `postgres`。
@@ -64,43 +64,17 @@ LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / 
 
 ### 方式一:一键脚本(推荐)
 
-根目录提供统一启动脚本，可安装依赖并并发启动动态前端和后端：
+根目录脚本安装依赖并启动后端：
 
-```powershell
-# Windows(PowerShell 5.1 或 7),参数与 bash 版一致
-.\dev.ps1            # 两个服务一起(单窗口实时交错日志,Ctrl+C 全部停止)
-.\dev.ps1 front      # 仅前端
-.\dev.ps1 back       # 仅后端
-.\dev.ps1 --no-run   # 仅安装全部依赖
-.\dev.ps1 back --no-run # 仅安装后端依赖
-
-# 执行策略受限时用完整命令
-powershell -NoProfile -ExecutionPolicy Bypass -File .\dev.ps1 front
-
-# Linux / macOS 装了 pwsh 时可用同一份脚本: pwsh ./dev.ps1 front
-
-# bash
-./dev.sh           # 两个服务一起
-./dev.sh front     # 仅前端
-./dev.sh back      # 仅后端
-./dev.sh --no-run  # 仅装依赖不启动
-./dev.sh back --no-run # 仅安装后端依赖
+```sh
+./dev.sh
+./dev.sh --no-run  # 仅安装后端依赖
 ```
 
-脚本自动完成的事:
-
-1. 为前端项目执行 `pnpm install`，为后端执行 `uv sync`。
-2. PowerShell 脚本在启动后端时会为缺失的 JWT/TOTP/验证码密钥生成进程级开发值；
-   Bash 脚本不会生成密钥，应通过后端 `.env` 或环境变量提供。
-3. 默认并发启动动态前端和后端。
-
-两套脚本均可通过 `FRONT_PORT` 和 `BACKEND_PORT` 环境变量覆盖默认端口；只会检查当前模式需要的工具和端口。未知参数会直接报错。
-Linux 上 `dev.sh` 与 `dev.ps1` 都会默认让前端使用轮询监视文件，避免系统 inotify 配额耗尽时
-Vite 报 `ENOSPC: System limit for number of file watchers reached`。轮询会增加少量 CPU
-开销；若系统已提高限额，可用 `CHOKIDAR_USEPOLLING=false` 覆盖，例如
-`CHOKIDAR_USEPOLLING=false ./dev.sh`。
-直接进入前端仓库运行 `pnpm dev` 时，可先设置 `CHOKIDAR_USEPOLLING=1`。
-启动后端前会使用其实际配置测试 PostgreSQL 连接，并初始化业务库和认证库的 schema；数据库未就绪时脚本会直接指出目标地址，避免后端持续打印连接异常。`--no-run` 和仅前端模式不会检查数据库。
+Windows 使用 `.\dev.ps1`，安装了 pwsh 的 Linux/macOS 使用 `pwsh ./dev.ps1`。
+两者保留 `back` / `all` 参数，均只操作后端；端口通过 `BACKEND_PORT` 覆盖，默认 `8000`。
+PowerShell 在缺少开发密钥时生成开发用值；Bash 需在后端 `.env` 或环境变量中提供密钥。
+启动前会检查 PostgreSQL 连接并初始化业务库和认证库的 schema；`--no-run` 不检查数据库。
 
 Linux/macOS 若尚未配置数据库，可先运行 `./scripts/start_dev_db.sh`，在 Git 忽略的 `.dev/`
 中创建并启动独立的 PostgreSQL，生成凭据，写入后端 `.env`，同时创建 `lkm` 和 `lkm_auth`
@@ -113,23 +87,20 @@ Linux/macOS 若尚未配置数据库，可先运行 `./scripts/start_dev_db.sh`�
 在 `LKM-service/.env` 设置相应的 `LKM_DB_*`。AUTH 服务若单独运行，还需要 `lkm_auth` 库和
 `LKM_AUTH_DB_*` 配置。生产 `docker-compose.yml` 需要完整生产环境变量，不能直接替代本地数据库准备步骤。
 
-### 方式二:手动分窗启动
+### 方式二:手动启动
 
 ```sh
-# 终端 1 —— 后端
+# 后端（终端 1）
 cd LKM-service
 uv run uvicorn main:app --reload --port 8000
 
-# 终端 2 —— 前端
-cd LKM-official-website
-cp .env.example .env      # 首次;设置 API_URL=http://127.0.0.1:8000
-pnpm dev
+# 桌面客户端（终端 2，从根目录开始）
+cd LKM-desktop
+flutter pub get
+flutter run
 ```
 
-本地使用 **PostgreSQL**(连接参数见 `LKM-service/.env.example`);默认端口:动态前端
-`4321`、后端 `8000`。
-
----
+本地后端使用 PostgreSQL，配置见 `LKM-service/.env.example`。
 
 ### 方式三:CI 门禁与本地等价命令
 
@@ -143,13 +114,10 @@ pnpm dev
 | 根仓库 | compose 插值 | `docker compose config --quiet`（先按 `.env.example` 导出必填变量） |
 | LKM-service | lint / 格式 / 边界 / 类型 | `uv run ruff check app auth core boot tests scripts`、`uv run ruff format --check …`、`uv run lint-imports`、`uv run ty check app auth core boot scripts` |
 | LKM-service | 测试 | `uv run pytest -q`（需要 PostgreSQL） |
-| 官网 | 构建 + 产物检查 | `PUBLIC_SITE_URL=https://lkm-ci.example pnpm run build` 后跑 `check:seo` / `check:links` / `check:budget` |
 | LKM-bot | 类型 / 格式 / 测试 | `uv run ty check .`、`uv run ruff format --check .`、`uv run pytest` |
 
 几点约定：
 
-- 官网的 sitemap 只在设置了 `PUBLIC_SITE_URL` 时才生成，所以 CI 用 RFC 2606 保留的
-  `.example` 域名做「生产形态构建」；不设这个变量时 `check:seo` 会因为缺 sitemap 直接失败。
 - `contracts` 只读根仓库的 compose / deploy 资产，**不需要数据库**——本地没起 PostgreSQL 也能跑。
 - 子模块指针改动的正确顺序是：先让对应子仓库的 CI 变绿并 push，再更新根仓库指针；
   `submodule-pointers` 会检查指针 commit 的 check-runs，红的会被拦下。
@@ -262,63 +230,29 @@ uv run python scripts/check_raw_sql.py # 裸 SQL 门禁:业务查询必须走 OR
 
 ---
 
-## 五、前端开发(LKM-official-website)
+## 五、桌面与 Bot 面板开发
 
-### 配置
+桌面客户端在 `LKM-desktop/` 开发，复用同仓库的编辑器与原生 UI。StarHope 源码位于
+`webf/`，其构建资源随桌面客户端打包。Bot 面板位于 `LKM-bot/dashboard/`，使用自己的
+锁文件，构建到 `bot/dashboard/dist/` 并由 bot 进程服务。
 
-首次复制 `.env.example` 为 `.env`,按需设置:
-
-```sh
-API_URL=                # 指向后端:本地 http://127.0.0.1:8000;留空则不请求后端
-PUBLIC_SITE_URL=        # 站点对外 URL(可选;留空不绑定域名,使用相对 URL 且不生成 sitemap)
-PUBLIC_BASE_PATH=       # 子路径部署(可选,默认 /)
-```
-
-### 常用命令
-
-```sh
-pnpm dev               # 开发服务器(端口 4321)
-pnpm dev:clean         # 清 vite 缓存后重启(遇 dev 异常时用)
-pnpm check             # astro check + eslint + prettier 全量校验
-pnpm typecheck         # 仅 astro check
-pnpm lint              # 仅 eslint
-pnpm test              # vitest 单元测试
-pnpm test:security     # 安全相关测试
-pnpm test:auth         # auth 模块测试
-pnpm build             # 生产构建(含图标生成 + 静态资源压缩)
-```
-
-### 图标
-
-项目用 `astro-icon` + Iconify,新增/修改 `.astro` 里引用的图标后需重新生成白名单,
-否则 dev 会报 `Unable to locate icon`:
-
-```sh
-node scripts/generate-icons.mjs
-```
-
-(`pnpm build` 的构建流程已自动包含此步骤。)
-
----
+具体开发与构建命令以各子仓库 README 和 package.json 为准。
 
 ## 六、协作约定(轻量)
 
 这里是**当前实际生效**的约定,尽量保持最小、不臆造规范:
 
-- **多仓库独立 git**:动态前端、后端和机器人面板各自独立提交;根仓库只负责编排与文档。不要在子项目里提交与该项目无关的根级文件。
+- **多仓库独立 git**:桌面客户端、后端和机器人面板各自独立提交;根仓库只负责编排与文档。不要在子项目里提交与该项目无关的根级文件。
 - **根仓库提交**:托管 docker-compose.yml、dev 脚本、.gitignore、本教程与 DEPLOYMENT.md
 - **中文注释**:代码注释如非必要一律用中文;与团队沟通用中文。
 - **文档目录**:面向运维的 `DEPLOYMENT.md`、面向开发的 `DEVELOPMENT.md`。
-- **测试验收**:后端改完跑 `uv run pytest` + `uv run ty check` + `uv run ruff check` + `uv run python scripts/check_raw_sql.py` ，前端需要`pnpm run fix` + `pnpm run check` + `pnpm run build`,0error通过后再谈提交。
+- **测试验收**:后端改完跑 `uv run pytest` + `uv run ty check` + `uv run ruff check` + `uv run python scripts/check_raw_sql.py` ；桌面改动运行 `flutter analyze` 和 `flutter test`，面板改动运行对应 package.json 中的检查与构建。
 
 ---
 
 ## 七、常见问题
 
-- **前端页面不显示后端数据**:检查 `LKM-official-website/.env` 是否设了 `API_URL=http://127.0.0.1:8000`,设完重启 `pnpm dev`。
 - **后端启动报密钥相关错误**:确认 JWT/TOTP/PEPPER 三密钥已提供(非默认占位)。PowerShell
   dev 脚本会生成进程级开发值；Bash dev 脚本和手动启动不会生成，需自行设置。
-- **dev 报 `Unable to locate icon`**:新增图标后没跑 `node scripts/generate-icons.mjs`。
-- **前端 dev 异常/卡死**:用 `pnpm dev:clean` 清 vite 缓存后重启。
 - **集成测试 skipped**:`uv run pytest -m integration` 需要先设置 `LKM_REDIS_URL` 并启动 Redis。
 - **数据库是全新的**:后端启动时(`lifespan` 的 `init_db`)默认用 `Base.metadata.create_all()` 自动建缺失表（开发免维护增量迁移；新增表只改 `models.py` 即可，无需手动初始化）;生产/有历史数据的库需显式设 `LKM_USE_ALEMBIC=true` 走 Alembic 增量迁移,手动管理时用 `uv run alembic upgrade head`。

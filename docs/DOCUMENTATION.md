@@ -6,12 +6,12 @@
 
 | 需求 | 首选文档 | 补充文档 |
 |---|---|---|
+| 桌面客户端开发 | [LKM-desktop/README.md](../LKM-desktop/README.md) | `lib/`、`test/`、`webf/` |
 | 第一次了解项目 | [根 README.md](../README.md) | [文档索引](./README.md)、各子项目 README |
-| 本地启动和开发 | [DEVELOPMENT.md](./DEVELOPMENT.md) | 动态前端的 [GETTING_STARTED.md](../LKM-official-website/GETTING_STARTED.md) |
+| 本地启动和开发 | [DEVELOPMENT.md](./DEVELOPMENT.md) | 各子项目 README |
 | 单机生产部署 | [DEPLOYMENT.md](./DEPLOYMENT.md) | [OPS-CHEATSHEET.md](./OPS-CHEATSHEET.md) |
 | Kubernetes 部署 | [deploy/k8s/README.md](../deploy/k8s/README.md) | `deploy/k8s/` 清单 |
 | 后端接口和测试 | [LKM-service/README.md](../LKM-service/README.md) | 运行时 `/docs`、`/redoc` |
-| 动态前端开发 | [LKM-official-website/README.md](../LKM-official-website/README.md) | `CODING_STANDARDS.md`、`AGENTS.md` |
 | 社区机器人（LKM Bot） | [DEPLOYMENT.md](./DEPLOYMENT.md) 的「LKM Bot」一节 | [LKM-bot/README.md](../LKM-bot/README.md)（发行版与开发入口） |
 | 理解后端目标架构 | [后端架构与现状.md](./后端架构与现状.md) | [社区需求与开发规划.md](./社区需求与开发规划.md) |
 
@@ -27,7 +27,7 @@
 
 ### 子项目文档
 
-- 动态前端：`README.md` 是新手教程，`README2.md` 讲当前架构与命令，`GETTING_STARTED.md` 补充开发环境，`CODING_STANDARDS.md` 定义门禁，`AGENTS.md` 记录代码代理约束。
+- 桌面客户端：`LKM-desktop/README.md` 说明 Flutter 开发；StarHope 的源码、锁文件、测试和内置资源均在同仓库的 `webf/` 中。
 - 后端：`README.md` 讲服务边界、运行、迁移与验证；接口字段以运行时 OpenAPI 为准。
 - 社区机器人：上游 AstrBot 文档在 `LKM-bot/docs/`（平台接入、provider 配置等）；**部署**以
   `docs/DEPLOYMENT.md` 为准——bot 自带的 `compose.yml`/`k8s/` 示例已删除，收编进根编排，上游文档
@@ -35,23 +35,21 @@
 
 ### 规划文档
 
-`docs/` 下的架构与规划文档（`后端架构与现状.md`、`前端架构与现状.md`、`社区需求与开发规划.md` 等）
-是架构决策和实施历史，不替代当前部署手册。标记“已完成”的条目仍可能保留背景说明；判断当前实现必须回到源码和可执行配置。
+架构与规划文档记录决策和实施历史，不替代当前部署手册。标记“已完成”的条目仍可能保留背景说明；判断当前实现必须回到源码和可执行配置。
 
 ### 不作为操作手册的 Markdown
 
-- `LKM-official-website/LICENSE.md` 是许可证原文，只随许可证变更而更新。
 - `LKM-service/app/modules/content/articles/markdown-test.md` 是 Markdown 渲染测试夹具，不是面向用户或运维人员的说明文档。
 
 ## 代码导航与修改归属
 
-目录与入口核对日期：2026-11-08。三个应用目录均是 `.gitmodules` 声明的独立 Git 子模块。
+目录与入口核对日期：2026-11-13。三个应用目录均是 `.gitmodules` 声明的独立 Git 子模块。
 
 | 修改内容 | 从哪里进入 | 代码与文档归属 |
 |---|---|---|
-| 页面、社区交互、编辑器 | `LKM-official-website/src/pages/` → `features/` → `lib/api/` | 前端子仓库；[结构说明](../LKM-official-website/README2.md#架构) |
+| 桌面页面、社区交互、编辑器、StarHope | `LKM-desktop/lib/`、`LKM-desktop/webf/` | 桌面子仓库；[README](../LKM-desktop/README.md) |
 | API、认证、异步任务 | `LKM-service/main.py` → `boot/backend.py` → `app/`、`auth/`、`core/` | 后端子仓库；[结构说明](../LKM-service/README.md#项目结构) |
-| Bot 消息、管理面板、社区 SSO | `LKM-bot/main.py` → `bot/core/initial_loader.py`；WebUI 在社区站 `bot-panel/` | Bot 子仓库；[开发导航](../LKM-bot/README.md#代码结构与开发入口) |
+| Bot 消息、管理面板、社区 SSO | `LKM-bot/main.py` → `bot/core/initial_loader.py`；WebUI 在 `LKM-bot/dashboard/` | Bot 子仓库；[开发导航](../LKM-bot/README.md#代码结构与开发入口) |
 | 统一启动、网关、容器、跨项目契约 | `dev.sh` / `dev.ps1`、`docker-compose.yml`、`deploy/`、`scripts/` | 根仓库；本目录保存跨项目架构、开发和部署文档 |
 
 应用行为变更的测试与注释放在所属子仓库；跨服务路由、环境变量或协议变化还需同步根仓库文档和
@@ -67,7 +65,7 @@
 1. 命令必须可从文档注明的工作目录直接执行。
 2. 环境变量只记录名称、用途和示例，不写真实密钥。
 3. 新增服务、端口、worker 或部署 profile 时，同步更新根 README、对应部署文档和运维速查。
-4. 修改前端脚本或后端测试门禁时，同步更新对应子项目 README。
+4. 修改子项目脚本或测试门禁时，同步更新对应子项目 README。
 5. 架构计划与当前实现分开写，使用“当前”“计划”“已废弃”明确状态。
 6. 不在多个文档复制大段易变配置；详细配置以 `.env.example` 和可执行清单为单一来源。
 
@@ -79,13 +77,7 @@
 # 在根仓库检查工程文档的相对文件链接（不递归检查子模块）
 python3 scripts/check_doc_links.py
 
-# 以下检查前端构建产物中的站内 URL；与 Markdown 文件链接检查用途不同
-cd LKM-official-website
-pnpm run build
-pnpm run check:links
-
 # 核对 Compose 配置可解析
-cd ..
 docker compose config --quiet
 ```
 

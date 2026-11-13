@@ -27,5 +27,3 @@ deploy/alertmanager/rendered/
 
 # 运维备份产物
 backups/
-# Added by code-review-graph
-.code-review-graph/

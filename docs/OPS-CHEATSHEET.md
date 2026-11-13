@@ -43,7 +43,7 @@ $COMPOSE --profile bot up -d --build    # 起面板(含 shipyard 沙箱)
 $COMPOSE --profile bot down             # 收掉;bot 数据在宿主机目录,不受 -v 影响
 $COMPOSE --profile bot logs -f lkmbot
 
-# 健康检查(后端依赖 DB+Redis;astro 依赖后端就绪后才由 APISIX 拉起)
+# 健康检查（后端依赖 DB + Redis）
 curl http://127.0.0.1/api/v1/health
 # 期望 {"code":0,"msg":"OK","data":{"status":"ok","db":{"status":"up"},"redis":{"status":"up"}}}
 # 探针分级(M6.2):/api/v1/liveness 零外部依赖(进程心跳);/api/v1/readiness 复合四项(未就绪 503)
@@ -56,7 +56,6 @@ curl http://127.0.0.1/api/v1/health
 | 子仓库 | 镜像 | 需重启的容器 |
 |---|---|---|
 | `LKM-service` | `lkm-service:latest` | `backend` `auth` + 10 个 `worker*` + `prefect-server` `prefect-worker`(14 个共用同一镜像) |
-| `LKM-official-website` | `lkm-official-website:latest` | `astro` |
 | `LKM-bot` | `lkm-bot:latest` | `lkmbot`(`--profile bot`) |
 
 根仓自身的改动(`docker-compose.yml`、`deploy/apisix/*.yaml`)不构建镜像,只需重渲染 + 重启对应服务。
@@ -75,7 +74,7 @@ git -C LKM-service log -1 --format="%h %ci"
 ls -l --time-style=long-iso ~/LKM-Website/LKM-service/app/modules/content/graphql.py
 
 # 两端都跟镜像构建时间比
-sudo docker images --format "{{.Repository}}:{{.Tag}}|{{.CreatedAt}}" | grep -E "lkm-service|lkm-official-website"
+sudo docker images --format "{{.Repository}}:{{.Tag}}|{{.CreatedAt}}" | grep -E "lkm-service|lkm-bot"
 ```
 镜像构建时间**早于**源码时间就要重建。
 
@@ -104,18 +103,14 @@ RUN sed -i 's#http://deb.debian.org#https://mirrors.cloud.tencent.com#g' /etc/ap
 
 ```sh
 sudo docker tag lkm-service:latest        lkm-service:pre-<旧提交>          # 回滚点
-sudo docker tag lkm-official-website:latest lkm-official-website:pre-<旧提交>
 
 sudo $COMPOSE build backend     # 后端:镜像名是 lkm-service,服务名才叫 backend
-sudo $COMPOSE build astro       # 前端
 ```
-> 改后端源码只需构建**一次**镜像,14 个容器共用。前端构建约 5~8 分钟,其中 `apk add tini`
-> 单步就要 3~4 分钟(apk 源慢,不是卡死)。
+> 改后端源码只需构建**一次**镜像，API 与各 worker 共用。
 
 **⑤ 重启。**
 
 ```sh
-sudo $COMPOSE up -d astro                                  # 前端
 
 sudo $COMPOSE up -d backend auth                           # 后端先起 API 层,等 health 变 healthy
 sudo $COMPOSE up -d worker worker-send worker-notify worker-notification \

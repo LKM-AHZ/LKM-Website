@@ -4,6 +4,6 @@
 [submodule "LKM-service"]
 	path = LKM-service
 	url = https://github.com/LKM-AHZ/LKM-service.git
-[submodule "LKM-official-website"]
-	path = LKM-official-website
-	url = https://github.com/LKM-AHZ/LKM-official-website.git
+[submodule "LKM-desktop"]
+	path = LKM-desktop
+	url = https://github.com/LKM-AHZ/LKM-desktop.git

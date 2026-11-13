@@ -87,8 +87,6 @@ services:
     depends_on:
       apisix-render:
         condition: service_healthy
-      astro:
-        condition: service_healthy
       backend:
         condition: service_healthy
     ports:
@@ -128,48 +126,19 @@ services:
     networks:
       - lkm
 
-  astro:
-    build:
-      context: ./LKM-official-website
-      dockerfile: Dockerfile
-      target: runner
-    image: lkm-official-website:latest
-    environment:
-      NODE_ENV: production
-      HOST: 0.0.0.0
-      PORT: 4321
-      API_URL: http://backend:8000
-      AI_ALLOWED_HOSTS: ${AI_ALLOWED_HOSTS:-api.openai.com}
-      # 站点对外 URL 为可选参数：本项目默认不绑定域名。
-      # 留空时前端使用相对 canonical/OG URL，并跳过 sitemap 生成；
-      # 有稳定域名时再在 .env 中设置 PUBLIC_SITE_URL。
-      PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-}
-    restart: ${LKM_RESTART_POLICY:-no}
-    healthcheck:
-      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:4321/robots.txt']
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
-    logging:
-      driver: json-file
-      options:
-        max-size: '10m'
-        max-file: '3'
-    networks:
-      - lkm
-
   # ── LKM Bot 社区机器人面板（AstrBot fork，profile=bot 可选组件）──
   # 启用：docker compose --profile bot up -d --build
   # 对外只经网关的**社群域子路径** /bot/：`/bot/api/*` 由网关剥前缀转发到这里（SSO、插件页面、
-  # WebSocket 与全部 v1 端点）；面板静态 UI 由前端容器提供（源码在 LKM-official-website/bot-panel/），
-  # 因此本镜像不再构建前端。**刻意不发布 6185**：管理员面不该多一个绕过网关的入口。
+  # WebSocket 与全部 v1 端点）；面板 UI 由 LKM-bot/dashboard 独立构建并由 bot 进程服务。
+  # **刻意不发布 6185**：管理员面不该多一个绕过网关的入口。
   # 6199（OneBot v11 / NapCat WebSocket）同样不发布，接法见 docs/DEPLOYMENT.md「LKM Bot」一节。
   lkmbot:
     profiles: ['bot']
     build:
       context: ./LKM-bot
       dockerfile: Dockerfile
+      args:
+        BOT_BASE_PATH: ${LKM_BOT_BASE_PATH:-/bot}
     image: lkm-bot:latest
     environment:
       # SSO 票据协议值（audience/issuer/type/account_level）：与签发侧 auth 同源（见文件头

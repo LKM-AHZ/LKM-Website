@@ -240,7 +240,7 @@ esac
 # （可选组件，默认不起）→ 用 SMOKE_BOT=1 显式开启，否则上游 service_name=lkmbot:6185 解析不到，
 # APISIX 回 503 会把冒烟判红。
 # 两条都测：无尾斜杠的前缀由 bot-panel-root 精确路由兜住，带尾斜杠的走 bot-panel catchall——
-# 「proxy-rewrite 写法非法 → 整条路由不加载」这类回归会表现为 404（被 Astro 接走）而非 200。
+# 「proxy-rewrite 写法非法 → 整条路由不加载」这类回归会表现为 404（没有匹配路由）而非 200。
 if [ "${SMOKE_BOT:-0}" = "1" ]; then
     for bot_path in "$BOT_BASE_PATH" "$BOT_BASE_PATH/"; do
         # 未登录访问面板：登录页 200，或重定向到登录页 302/307

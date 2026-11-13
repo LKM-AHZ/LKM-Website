@@ -1,10 +1,10 @@
-# LKM 网站部署教程
+# LKM 服务部署教程
 
 > 正式域名尚未确定。本文 `.example` 地址均为占位示例；Compose 默认仅配置本地回环与容器服务名。
 > 上线前请显式配置网关域名、允许的 Host、WebAuthn 身份、OAuth 回调及存储公网地址。
 > Kubernetes 生产 overlay 还需同步替换 `gateway-tls.yaml` 的证书键和路径。
 
-本文档说明如何把 LKM 网站(前端 Astro + 后端 FastAPI)通过 APISIX 统一入口部署到生产主机。
+本文档说明如何把 LKM 的 FastAPI 后端与 Bot 面板通过 APISIX 统一入口部署到生产主机。
 
 > 本文档用于**首次部署、升级和回滚**。已部署环境的日常命令见
 > [OPS-CHEATSHEET.md](./OPS-CHEATSHEET.md)，文档职责见 [DOCUMENTATION.md](./DOCUMENTATION.md)。
@@ -18,7 +18,7 @@
   只拒绝空值，占位值由后端在生产校验里 fail-fast（`core/config.py` 的 `_no_insecure_secrets_outside_dev`：
   命中 `change-me`/`changeme`/`your-`/`placeholder` 直接拒启动）。模板里默认写的是 `change-me`，
   照抄即启动失败——这是刻意的，别为了让它起来而填个占位值。
-- **`LKM_RESTART_POLICY=unless-stopped`**：编排里 25 处默认是 `${LKM_RESTART_POLICY:-no}`，
+- **`LKM_RESTART_POLICY=unless-stopped`**：编排的重启策略默认是 `${LKM_RESTART_POLICY:-no}`，
   不显式设置则主机重启后所有容器不自愈。
 - **`LKM_MAX_UPLOAD_BYTES` 按目标值显式写清**：编排与网关默认 `104857600`（100 MiB），
   而模板给的示例值是 15 MB；两者都能跑，但「模板值 vs 文档/冒烟脚本假设的 100 MiB」不一致时，
@@ -39,7 +39,6 @@
 | `apisix-render` | `alpine:3.19` | 无 | 纯 shell sidecar:把证书内联进 apisix.yaml 并每 6h 重渲染(触发 APISIX reload) |
 | `acme-webroot` | `nginx:1.27-alpine` | 无 | 微型静态 responder:仅服务 ACME `/.well-known/acme-challenge/`(非网关角色) |
 | `certbot` | `certbot/certbot` | 无 | 申请与自动续期 Let's Encrypt 证书(webroot) |
-| `astro` | `lkm-official-website:latest` | 仅内网 `4321` | 前端 SSR |
 | `backend` | `lkm-service:latest` | 仅内网 `8000` | FastAPI(REST `/api/v1`)+ 论坛域 GraphQL + lag 上报 |
 | `auth` | `lkm-service:latest` | 仅内网 `8001` | AUTH 独立进程(`auth.main`) |
 | `worker` | `lkm-service:latest` | 无 | jobs + user-invalidate 订阅。`python -m boot.workers.default` |
@@ -124,13 +123,11 @@ StatefulSet 取代 Pulsar。切换已有集群时也需先排空旧订阅，停�
 浏览器 ──> APISIX(80 与 443)
               ├─ /api/        ──> backend:8000   (保持路径, WS upgrade 已开)
               ├─ /graphql/vN  ──> backend:8000   (支持 WebSocket)
-              ├─ /_astro/*    ──> astro:4321     (指纹静态资源, immutable 长缓存)
               ├─ /lkm/        ──> minio:9000     (对象存储预签名直传/下载, 保留全部 path+query)
-              ├─ 其余         ──> astro:4321     (SSR)          ← 社区域名
               └─ /bot/*       ──> lkmbot:6185    (机器人面板,剥 /bot 前缀) ← 社群域子路径
 ```
 
-后端 REST 前缀为 `/api/vN`，GraphQL 使用 `/graphql/vN`（当前为 `/graphql/v1`）。APISIX 用 Docker 内嵌 DNS(`dns_resolver: ['127.0.0.11']` + `discovery_type: dns`)在运行时动态解析 `backend`/`astro`,不依赖启动期 DNS。
+后端 REST 前缀为 `/api/vN`，GraphQL 使用 `/graphql/vN`（当前为 `/graphql/v1`）。APISIX 用 Docker 内嵌 DNS(`dns_resolver: ['127.0.0.11']` + `discovery_type: dns`)在运行时动态解析 `backend`/`auth`/`lkmbot`,不依赖启动期 DNS。
 
 > 纯静态官网(`static.example`)已迁出本编排:它是独立仓库、部署在独立服务器上(自备 nginx + certbot),
 > 不再经本栈的 APISIX 分流。部署方式见 [LKM-official-static/DEPLOYMENT.md](https://github.com/LKM-AHZ/LKM-official-static/blob/main/DEPLOYMENT.md)。
@@ -142,26 +139,23 @@ StatefulSet 取代 Pulsar。切换已有集群时也需先排空旧订阅，停�
   > 浏览器访问经 APISIX 统一入口即可,无需在安全组另开 9000。
 - **域名可选**:有域名走 `.env` 中 `LKM_COMMUNITY_DOMAINS` 配置的地址 + Let's Encrypt 正式证书;**无域名可用公网 IP 直连**——
   此时走 **HTTP(80)+自签证书(443)** 模式(见下文「无域名/IP 直连」一节),浏览器访问 IP 即可。
-  > **前端默认不绑定域名**:`PUBLIC_SITE_URL` 默认留空,此时 canonical/OG 使用相对 URL 且不生成
-  > sitemap。若部署环境有稳定域名并需要绝对分享链接和 sitemap,再设置
-  > `PUBLIC_SITE_URL=https://<你的域名>` 后重新构建前端。
 - 已安装 Docker 与 Docker Compose 插件(`docker compose version` 可正常输出)。
 - 如果需要 k8s 则需要安装 kubeadm 或使用发行版。
 - 已有 k8s 集群的情况下只需要安装 kubectl 不需要安装全套。
 
 ## 一、获取代码
 
-生产 Compose 使用四个仓库：根仓库作为编排入口，动态前端、后端与社区机器人三个子项目各自独立：
+根仓库作为编排入口，包含桌面客户端、后端与 Bot 三个独立子模块；Compose 只构建服务端与可选 Bot：
 
 ```
 LKM-Website/                  # 根仓库(含 docker-compose.yml 与本教程)
 ├── docker-compose.yml
-├── DEPLOYMENT.md
+├── docs/DEPLOYMENT.md
 ├── deploy/
 │   ├── initdb/               # PostgreSQL 首启初始化脚本(auth 独立库建库、timescaledb 扩展)
 │   ├── apisix/               # 全站公网入口 APISIX 声明式路由/SSL 渲染/冒烟脚本
 │   └── certbot/              # certbot 常驻入口脚本(webroot 申请与续期)
-├── LKM-official-website/     # 前端仓库(含前端 Dockerfile)
+├── LKM-desktop/              # Flutter 客户端，不作为服务端容器部署
 ├── LKM-service/              # 后端仓库(含后端 Dockerfile)
 └── LKM-bot/                  # 机器人仓库(AstrBot fork,含 Dockerfile;仅 --profile bot 用到)
 ```
@@ -169,11 +163,8 @@ LKM-Website/                  # 根仓库(含 docker-compose.yml 与本教程)
 示例:
 
 ```sh
-git clone https://github.com/LKM-AHZ/LKM-Website.git
+git clone --recurse-submodules https://github.com/LKM-AHZ/LKM-Website.git
 cd LKM-Website
-git clone https://github.com/LKM-AHZ/LKM-official-website.git
-git clone https://github.com/LKM-AHZ/LKM-service.git
-git clone https://github.com/Alma1314/LKM-bot.git   # 仅启用机器人时需要
 ```
 
 ## 二、配置环境变量
@@ -529,11 +520,9 @@ docker compose restart signoz-otel-collector   # 注册后立即重连，否则�
 
 ## 三·十一、LKM Bot 社区机器人(可选,`--profile bot`)
 
-`LKM-bot/` 是 AstrBot 的 fork，提供 IM 平台接入与机器人后端 API；**管理面板 UI 已迁到官网仓库**
-（`LKM-official-website/bot-panel/`，构建产物由 Astro 静态托管在 `/bot/`）。bot 只提供
-`/bot/api/*`（SSO、插件页面 HTML、WebSocket 与全部 v1 端点），网关按前缀拆分：静态 UI 走前端
-容器，API 剥掉 `/bot` 前缀后转发给 lkmbot（社区站 backend 路由不受影响）。bot 镜像不再包含
-Node 前端构建，体积与构建时间都随之下降。
+`LKM-bot/` 是 AstrBot 的 fork，提供 IM 平台、后端 API 和独立管理面板。
+面板源码在 `LKM-bot/dashboard/`，bot 镜像构建产物到 `bot/dashboard/dist/` 并由 bot 进程服务。
+网关将 `/bot/` 静态页、API 和 WebSocket 统一剥前缀后转发到 lkmbot，构建与运行均不依赖官网仓库。
 
 ```sh
 # 1) .env：配面板初始密码（留空则面板自生成随机密码并打到日志）
@@ -611,12 +600,12 @@ CDN 默认值只是死代码：面板始终在 `setupMonaco` 里注入本地打�
 | --- | --- | --- |
 | 网关路由 `uri` 与剥前缀正则 | 无尾斜杠 | `render.sh` 展开 `__BOT_BASE_PATH__`（compose 传 `APISIX_BOT_BASE_PATH`；k8s 取 `lkm-gateway-config/LKM_BOT_BASE_PATH`）|
 | 面板运行期 `BOT_DASHBOARD_BASE_PATH` | 无尾斜杠 | compose 展开同一变量；k8s 的 lkmbot 部署读 `lkm-gateway-config/LKM_BOT_BASE_PATH` 同一个键 |
-| 面板构建期 `VITE_BASE_PATH` | **带尾斜杠** | 前端仓库 `bot-panel/` 构建时由 Dockerfile 固定为 `/bot/` |
+| 面板构建期 `VITE_BASE_PATH` | **带尾斜杠** | `LKM-bot/Dockerfile` 的 `BOT_BASE_PATH` 参数（compose 同源注入） |
 
-**首次构建**：面板 `dist` 由**前端镜像**构建（`LKM-official-website/Dockerfile` 的 `bot-panel`
-阶段，产物 `/public/bot` 由 Astro 托管），构建机需要能访问 npm registry；lkmbot 镜像不再构建
-前端。本地全量构建用 `pnpm run build`（先 `build:bot-panel` 再 `build:web`）；只改官网页面时
-可用 `pnpm run build:web` 复用已生成的面板产物。
+**首次构建**：`docker compose --profile bot build lkmbot` 会在 bot 仓库内独立构建面板，
+需要 Node 包仓库或完整本机缓存。源码本机构建使用
+`VITE_BASE_PATH=/bot/ pnpm --dir LKM-bot/dashboard build`。k8s 使用同样的 bot 镜像；
+自定义子路径时，镜像构建参数 `BOT_BASE_PATH` 应与运行期网关配置保持一致。
 
 **systemd 单元不参与本部署**：`deploy/systemd/lkmbot.service` 是 LKM-bot standalone（系统包
 管理器 / AUR，见 `LKM-bot/docs/*/deploy/bot/sys-pm.md`）安装路径的 `systemd --user` 单元，
@@ -647,11 +636,9 @@ audience 的签发方；不符或缺失一律 302 回面板登录页（fail-safe
 **数据目录**：`./LKM-bot/data`（宿主机 bind，非命名卷）。必须 bind 的原因见下条沙箱共享目录；
 副作用是该目录归 root 所有，非 root 运维删除需 sudo。
 
-**面板升级只走重建镜像**：面板前端已迁入官网仓库并由 Astro 在 `/bot/` 提供，bot 镜像不再
-内置 dist，也不再提供「WebUI 在线更新」。若历史部署残留 `LKM-bot/data/dist`，bot 仍会把它当
-静态兜底（只影响直连 6185 的请求），建议删除以免混淆：
-`sudo rm -rf LKM-bot/data/dist`。升级面板请重建官网镜像
-（`docker compose build astro`，面板随官网镜像构建）。
+**面板升级**：重建并替换 lkmbot 镜像，面板随 bot 一起交付。显式的 `--webui-dir` 与
+`LKM-bot/data/dist` 优先于内置产物；存在旧覆盖目录时，需由运维核对并移开，才能使用新内置版本。
+不再通过重建官网镜像更新面板。
 
 **⚠️ 面板里的平台回调地址要带 `/bot` 前缀**：`callback_api_base`（面板「配置」里）用于给外部
 IM 平台回调用，需填 `https://community.example/bot`，否则回调会打到社区站 backend（`/api/v1/webhooks/...`
@@ -686,10 +673,6 @@ LKM_ORIGIN: http://<公网IP>
 LKM_GITHUB_REDIRECT_URI: http://<公网IP>/api/v1/auth/oauth/github/callback
 LKM_FRONTEND_CALLBACK: http://<公网IP>/login/success
 
-# 2. 前端
-#    src/data/config.yaml:site 改为 http://<公网IP>
-#    如启用了开发服务器 Host 限制，将 <公网IP> 加入对应 allowlist
-
 # 3. deploy/apisix/apisix.yaml:各路由 hosts 列（IP 无法配 hosts，需另加按 priority 兜底的路由）；
 #    deploy/apisix/config.yaml 的 redirect.https_port 与 dns 解析按需调整
 # 4. deploy/apisix/apisix.yaml：**停用 http-redirect 路由**（见下）
@@ -702,12 +685,12 @@ LKM_FRONTEND_CALLBACK: http://<公网IP>/login/success
   **不发 SNI**，APISIX 按 SNI 选不到证书 → 301 之后是 TLS 握手失败。保留这条路由会让
   `http://<IP>` 整站不可达（表现为首页 301 后打不开，而非 404）。做法：注释掉该路由
   （`deploy/apisix/apisix.yaml` 的 `id: http-redirect` 整段），`docker compose up -d apisix-render`
-  重渲染后确认 `curl -s -o /dev/null -w '%{http_code}' http://<IP>/` 是 **200 而非 301**。
+  重渲染后确认 `curl -s -o /dev/null -w '%{http_code}' http://<IP>/api/v1/health` 是 **200 而非 301**。
   真实域名部署应保留这条路由（强制 HTTPS 是想要的行为）。
 - **certbot 服务可停**(`docker compose stop certbot`):无域名不签正式证书,其会循环空跑 renew 报错污染日志。
 - **403 后台明文限制**:admin 后台 cookie 带 `Secure`,**纯 HTTP(80)下浏览器不发送** → 后台登录会话无法保持。
   后台请走 **`https://IP`**(自签证书,浏览器首次点"继续访问/信任")。普通用户前台走 JWT,HTTP 下正常。
-- 浏览器访问 `http://<公网IP>` 即可查看站点。
+- 客户端可通过配置的公网 IP 与 API 路径访问服务；Bot 面板位于 `/bot/`。
 
 ## 四、首次签发 HTTPS 证书
 
@@ -1174,7 +1157,7 @@ cd LKM-service
   机房的就近镜像不同,写死会让别处构建失败。
 - **上传大文件被拒**:APISIX 路由已设 `client-control.max_body_size: 104857600`(100m),与后端 `max_upload_bytes` 对齐;更大文件需同时改 `deploy/apisix/apisix.yaml` 与后端配置。
 - **数据库**:使用 PostgreSQL(`timescale/timescaledb:latest-pg16` 服务,卷持久化)。后端经 `LKM_DB_*` 环境变量以 `postgresql+asyncpg` 连接;首次启动时自动建表(默认走 `create_all` 通道)。**换库/改 schema 后需重建数据卷**(`docker compose down -v`,见「数据库」章节)。
-- **换域名**:网关侧只需在 `.env` 改 `LKM_COMMUNITY_DOMAINS`(hosts、CORS 来源、MinIO Host、证书 SNI 全量跟随,见「单一来源」),再 `docker compose up -d apisix-render` 重渲染(bot 面板随社群域走,无需额外 DNS/证书)。后端**自身身份**类配置 `LKM_ORIGIN`/`LKM_RP_ID`/`LKM_GITHUB_REDIRECT_URI`/`LKM_FRONTEND_CALLBACK`/`LKM_S3_PUBLIC_ENDPOINT_URL` 与 `LKM_ALLOWED_HOSTS` **也都在 `.env` 里改**(compose 已全部写成 `${VAR:-默认值}`,不要再去改 `docker-compose.yml`);前端改 `PUBLIC_SITE_URL`/`PUBLIC_BASE_PATH`;最后重新签发证书。四个键漏改任何一项都是**静默失效**(WebAuthn 直接拒、OAuth 回跳旧地址、登录成功白屏、预签名被混合内容拦截),契约测试 `tests/deploy/test_site_identity_config.py` 锁的就是「不许再写回字面量」。
+- **换域名**:网关侧只需在 `.env` 改 `LKM_COMMUNITY_DOMAINS`(hosts、CORS 来源、MinIO Host、证书 SNI 全量跟随,见「单一来源」),再 `docker compose up -d apisix-render` 重渲染(bot 面板随社群域走,无需额外 DNS/证书)。后端**自身身份**类配置 `LKM_ORIGIN`/`LKM_RP_ID`/`LKM_GITHUB_REDIRECT_URI`/`LKM_FRONTEND_CALLBACK`/`LKM_S3_PUBLIC_ENDPOINT_URL` 与 `LKM_ALLOWED_HOSTS` **也都在 `.env` 里改**(compose 已全部写成 `${VAR:-默认值}`,不要再去改 `docker-compose.yml`);最后重新签发证书。四个键漏改任何一项都是**静默失效**(WebAuthn 直接拒、OAuth 回跳旧地址、登录成功白屏、预签名被混合内容拦截),契约测试 `tests/deploy/test_site_identity_config.py` 锁的就是「不许再写回字面量」。
 
 - **头像/文件上传 404**:MinIO 桶未创建(S3 不自动建桶)。正常路径由一次性 job `minio-init` 自动建桶——先看 `docker compose logs minio-init` 是否 `Exited (0)`;失败时再手动 `mc mb .../lkm` 补一次(见上文「MinIO 首次初始化」)。
 

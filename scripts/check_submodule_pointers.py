@@ -84,7 +84,17 @@ def _git(*args: str) -> str:
 
 
 def _pointers() -> list[Pointer]:
-    """从 .gitmodules 取 path/url，从索引取 gitlink SHA（不要求子模块已检出）。"""
+    """校验所有索引 gitlink 均有配置，并读取索引 SHA（不要求检出或提交）。"""
+    links: dict[str, str] = {}
+    for entry in _git("ls-files", "--stage", "-z").split("\0"):
+        if not entry:
+            continue
+        metadata, path = entry.split("\t", 1)
+        mode, sha, stage = metadata.split()
+        if mode == "160000":
+            if stage != "0":
+                raise ValueError(f"子模块 {path} 存在未解决的索引冲突")
+            links[path] = sha
     raw = subprocess.run(
         ["git", "config", "-f", ".gitmodules", "--get-regexp", r"^submodule\..*\.path$"],
         cwd=REPO_ROOT,
@@ -92,14 +102,23 @@ def _pointers() -> list[Pointer]:
         capture_output=True,
     ).stdout.decode()
     pointers: list[Pointer] = []
+    configured: set[str] = set()
     for line in raw.splitlines():
         if not line.strip():
             continue
         key, path = line.split(None, 1)
+        path = path.strip()
+        if path in configured:
+            raise ValueError(f"子模块路径重复配置: {path}")
+        configured.add(path)
         name = key.removesuffix(".path")
         url = _git("config", "-f", ".gitmodules", "--get", f"{name}.url").strip()
-        sha = _git("rev-parse", f"HEAD:{path.strip()}").strip()
-        pointers.append(Pointer(path=path.strip(), sha=sha, url=url))
+        if path not in links:
+            raise ValueError(f".gitmodules 中的 {path} 在索引中没有 gitlink")
+        pointers.append(Pointer(path=path, sha=links[path], url=url))
+    missing = links.keys() - configured
+    if missing:
+        raise ValueError(f"索引 gitlink 缺少 .gitmodules 映射: {', '.join(sorted(missing))}")
     return sorted(pointers, key=lambda p: p.path)
 
 
@@ -174,7 +193,11 @@ def _check(pointer: Pointer) -> Result:
 
 
 def main() -> int:
-    pointers = _pointers()
+    try:
+        pointers = _pointers()
+    except (ValueError, subprocess.CalledProcessError) as error:
+        print(f"[lkm:error] 子模块配置校验失败: {error}", file=sys.stderr)
+        return 1
     if not pointers:
         print("[lkm] 未发现子模块指针")
         return 0
