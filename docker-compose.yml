@@ -461,6 +461,52 @@ services:
     networks:
       - lkm
 
+  # ── Tinode：自托管聊天服务 ──
+  # 账号真身在 postgres 的独立库 tinode（由 Tinode 首启自建，**不要**预建空库：
+  # 它的 init-db 以 schema 存在性判断「库是否存在」，预建空库会让它 CREATE DATABASE
+  # 撞 already exists 而启动失败）。LKM 侧只存 users ↔ Tinode uid 映射（auth 库
+  # tinode_links）。认证走 REST 桥回调 auth 进程：
+  # 客户端 login basic 的 secret = base64("lkm:" + LKM access token)。
+  # 只经网关 /v0/* 暴露（HTTP + WebSocket），容器端口不发布到宿主。
+  tinode:
+    image: tinode/tinode-postgres:latest
+    # 覆盖官方 entrypoint：官方 config.template 没有 REST 认证段，这里用
+    # deploy/tinode/tinode.conf.tmpl 渲染完整配置后再启动（见该脚本注释）。
+    entrypoint: ['bash', '/etc/tinode/entrypoint.sh']
+    depends_on:
+      postgres:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+    environment:
+      POSTGRES_DSN: postgresql://${POSTGRES_USER:-lkm}:${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}@postgres:5432/${LKM_TINODE_DB:-tinode}?sslmode=disable&connect_timeout=10
+      # 适配器的库名判据（官方模板同款）：只写 DSN 时 postgres adapter 仍按默认库
+      # 做存在性检查，init-db 与服务器会各连各的库。
+      TINODE_DB: ${LKM_TINODE_DB:-tinode}
+      # 三个密钥均为随机字节的 base64（生成见 .env.example），缺失即拒绝启动。
+      # API_KEY_SALT 必须与客户端 API key 配对：用 Tinode 镜像自带 keygen 一次生成两者。
+      TINODE_API_KEY_SALT: ${LKM_TINODE_API_KEY_SALT:?需设置 LKM_TINODE_API_KEY_SALT}
+      TINODE_TOKEN_KEY: ${LKM_TINODE_TOKEN_KEY:?需设置 LKM_TINODE_TOKEN_KEY}
+      TINODE_UID_KEY: ${LKM_TINODE_UID_KEY:?需设置 LKM_TINODE_UID_KEY}
+      # use_separate_endpoints=true → Tinode 逐个 POST $TINODE_AUTH_URL/<op>。
+      # query 里的共享令牌由 auth 侧 fail-closed 校验（网关另拦 /api/v1/auth/internal/）。
+      TINODE_AUTH_URL: http://auth:8001/api/v1/auth/internal/tinode/?token=${LKM_TINODE_AUTH_TOKEN:?需设置 LKM_TINODE_AUTH_TOKEN}
+    volumes:
+      - ./deploy/tinode/tinode.conf.tmpl:/etc/tinode/tinode.conf.tmpl:ro
+      - ./deploy/tinode/entrypoint.sh:/etc/tinode/entrypoint.sh:ro
+      # 聊天附件（图片/文件）：Tinode media fs handler 落这里，按房间 ACL 鉴权。
+      - tinode_media:/var/lib/tinode/uploads
+    restart: ${LKM_RESTART_POLICY:-no}
+    healthcheck:
+      # 镜像自带 bash（官方 entrypoint 即 bash 脚本），用 TCP 探活避免依赖 curl/wget。
+      test: ['CMD-SHELL', 'bash -c "exec 3<>/dev/tcp/127.0.0.1/6060"']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - lkm
+
   # L2 缓存 / 跨进程锁 / 限流 / pub-sub 后端。默认 Redis 7；整套可换成 Dragonfly
   # （RESP 兼容，应用零改动——唯一客户端是 LKM-service/app/core/redis.py 的 from_url）。
   # 切换只动下面三个变量，Service 名与 redis://redis:6379/0 不变；见 .env.example
@@ -879,6 +925,8 @@ services:
       # AUTH 进程须持有同一内部缝 token 以校验 backend 的 Bearer（router_read/router_authz
       # 的 _require_internal_token）；不设 URL 避免本进程 snapshot 自打自的回路。
       LKM_AUTH_HTTP_TOKEN: ${LKM_AUTH_HTTP_TOKEN:?生产需设置 LKM_AUTH_HTTP_TOKEN}
+      # Tinode REST 认证桥的共享令牌：Tinode 以 query token 调用本进程，未配即 401。
+      LKM_TINODE_AUTH_TOKEN: ${LKM_TINODE_AUTH_TOKEN:?需设置 LKM_TINODE_AUTH_TOKEN}
       LKM_RP_ID: ${LKM_RP_ID:-localhost}
       # 链路追踪：auth 进程独立 service.name 后缀 -auth
       LKM_OTEL_ENABLED: ${LKM_OTEL_ENABLED:-false}
@@ -1597,6 +1645,8 @@ volumes:
   opensearch_data:
   pulsar_data:
   rabbitmq_data:
+  # Tinode 聊天附件（fs media handler）；账号/消息在 postgres 的 tinode 库。
+  tinode_media:
   prometheus_data:
   alertmanager_data:
   grafana_data:

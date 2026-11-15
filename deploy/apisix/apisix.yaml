@@ -187,6 +187,31 @@ routes:
       service_name: "auth__UPSTREAM_SUFFIX__:8001"
       pass_host: pass
 
+  # ── Tinode 聊天服务 → tinode:6060（HTTP API + WebSocket）──
+  # 客户端协议见 Tinode 文档：HTTP 在 /v0/*，实时通道 /v0/channels（WS upgrade）。
+  # 认证由 Tinode 回调 auth 的 REST 桥完成；网关只做转发，不解析 Tinode token。
+  # 请求体上限与聊天 media.max_size（100MB）同源，避免网关先于 Tinode 截断。
+  - id: chat-tinode
+    uri: /v0/*
+    hosts: [__COMMUNITY_HOSTS__]
+    priority: 112
+    enable_websocket: true
+    plugins:
+      client-control:
+        max_body_size: __MAX_BODY_SIZE__
+      cors:
+        allow_origins: "__COMMUNITY_ORIGINS__"
+        allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
+        allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
+        expose_headers: "X-Request-ID"
+        max_age: 3600
+        allow_credential: true
+    upstream:
+      type: roundrobin
+      discovery_type: dns
+      service_name: "tinode__UPSTREAM_SUFFIX__:6060"
+      pass_host: pass
+
   # ── REST API → backend（精确 /api 与前缀 /api/* 两条）──
   - id: api-exact
     uri: /api

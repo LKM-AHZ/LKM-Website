@@ -1,0 +1,112 @@
+# Tinode：自托管聊天服务（PostgreSQL 适配器 + LKM REST 认证桥）。
+#
+# 与 compose 的 tinode 服务同构：
+# - 账号/房间/消息在 postgres 的独立库 tinode（由 Tinode 首启自建；**不要**预建空库，
+#   否则 init-db 会把它当「不存在」并撞 CREATE DATABASE already exists）；
+# - 认证回调 auth 的 /api/v1/auth/internal/tinode/*（客户端 secret =
+#   base64("lkm:" + LKM access token)）；
+# - 附件落本地卷（media fs handler），按 Tinode 房间 ACL 鉴权。
+#
+# 用 StatefulSet + volumeClaimTemplates：附件卷与实例稳定绑定，重建不丢图。
+apiVersion: v1
+kind: Service
+metadata:
+  name: tinode
+  labels: &labels
+    app.kubernetes.io/name: tinode
+    app.kubernetes.io/component: infra
+    app.kubernetes.io/part-of: lkm
+spec:
+  selector:
+    app.kubernetes.io/name: tinode
+  ports:
+    - name: http
+      port: 6060
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: tinode
+  labels:
+    app.kubernetes.io/name: tinode
+    app.kubernetes.io/component: infra
+    app.kubernetes.io/part-of: lkm
+spec:
+  serviceName: tinode
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tinode
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tinode
+        app.kubernetes.io/component: infra
+        app.kubernetes.io/part-of: lkm
+    spec:
+      containers:
+        - name: tinode
+          image: tinode/tinode-postgres:latest
+          imagePullPolicy: IfNotPresent
+          # 官方 config.template 没有 REST 认证段；渲染本仓库模板后再启动。
+          command: ['/bin/bash', '/etc/tinode/entrypoint.sh']
+          ports:
+            - name: http
+              containerPort: 6060
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: lkm-secrets, key: POSTGRES_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: lkm-secrets, key: POSTGRES_PASSWORD }
+            - name: POSTGRES_DSN
+              value: "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/tinode?sslmode=disable&connect_timeout=10"
+            - name: TINODE_DB
+              value: tinode
+            - name: TINODE_API_KEY_SALT
+              valueFrom:
+                secretKeyRef: { name: lkm-secrets, key: LKM_TINODE_API_KEY_SALT }
+            - name: TINODE_TOKEN_KEY
+              valueFrom:
+                secretKeyRef: { name: lkm-secrets, key: LKM_TINODE_TOKEN_KEY }
+            - name: TINODE_UID_KEY
+              valueFrom:
+                secretKeyRef: { name: lkm-secrets, key: LKM_TINODE_UID_KEY }
+            - name: LKM_TINODE_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef: { name: lkm-secrets, key: LKM_TINODE_AUTH_TOKEN }
+            - name: TINODE_AUTH_URL
+              value: "http://auth:8001/api/v1/auth/internal/tinode/?token=$(LKM_TINODE_AUTH_TOKEN)"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/tinode
+              readOnly: true
+            - name: media
+              mountPath: /var/lib/tinode/uploads
+          readinessProbe:
+            exec:
+              command: ['bash', '-c', 'exec 3<>/dev/tcp/127.0.0.1/6060']
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 4
+          livenessProbe:
+            exec:
+              command: ['bash', '-c', 'exec 3<>/dev/tcp/127.0.0.1/6060']
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 4
+      volumes:
+        - name: config
+          configMap:
+            name: tinode-config
+  volumeClaimTemplates:
+    - metadata:
+        name: media
+      spec:
+        accessModes: ['ReadWriteOnce']
+        resources:
+          requests:
+            storage: 10Gi

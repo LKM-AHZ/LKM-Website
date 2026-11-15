@@ -1,0 +1,51 @@
+{
+  "listen": ":6060",
+  "api_path": "/",
+  "api_key_salt": "$TINODE_API_KEY_SALT",
+  "use_x_forwarded_for": true,
+  "max_message_size": 131072,
+  "auth_config": {
+    "logical_names": ["basic:rest", "rest:"],
+    "token": {
+      "expire_in": 1209600,
+      "serial_num": 1,
+      "key": "$TINODE_TOKEN_KEY"
+    },
+    "rest": {
+      "server_url": "$TINODE_AUTH_URL",
+      "allow_new_accounts": true,
+      "use_separate_endpoints": true
+    }
+  },
+  "store_config": {
+    "uid_key": "$TINODE_UID_KEY",
+    "max_results": 1024,
+    "use_adapter": "postgres",
+    "adapters": {
+      "postgres": {
+        "database": "$TINODE_DB",
+        "dsn": "$POSTGRES_DSN",
+        "max_open_conns": 20,
+        "max_idle_conns": 5,
+        "conn_max_lifetime": 60,
+        "sql_timeout": 10
+      }
+    }
+  },
+  "media": {
+    "use_handler": "fs",
+    "max_size": 104857600,
+    "gc_period": 60,
+    "gc_block_size": 100,
+    "handlers": {
+      "fs": {
+        "upload_dir": "/var/lib/tinode/uploads",
+        "cache_control": "max-age=86400"
+      }
+    }
+  },
+  "tls": {
+    "enabled": false
+  },
+  "push": []
+}

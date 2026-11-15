@@ -11,6 +11,7 @@
 | [Bot平台架构与现状](./Bot平台架构与现状.md)       | Bot 开发、插件作者、运维     | LKMBot 的启动拓扑、消息流水线、平台/Provider/插件、Dashboard 和 LKM SSO 定制                |
 | [社区需求与开发规划](./社区需求与开发规划.md)     | 产品、前端、后端、项目协调者 | 一期各业务域的实现现状、差距、优先级与验收口径                                              |                 |
 | [DysonNetwork 借鉴评估](./DysonNetwork借鉴评估.md) | 产品、后端、技术负责人 | 逐项评估 DysonNetwork 的业务建模与协议设计，给出可借鉴项、落点与不采纳清单 |
+| [实时协议](./实时协议.md) | 桌面端、Bot、后端 | `/ws/events` 的鉴权、通道、帧格式、心跳/续期、重连补偿与事件清单 |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | 部署执行者、运维 | Compose 生产架构、配置、上线与回滚、备份与恢复演练、可选组件与告警投递 |
 | [OPS-CHEATSHEET.md](./OPS-CHEATSHEET.md) | 已部署环境的日常运维 | 常用命令速查；不是首次部署教程 |
 | [DEVELOPMENT.md](./DEVELOPMENT.md) | 开发者 | 本地环境、日常命令、测试门禁与排错 |
