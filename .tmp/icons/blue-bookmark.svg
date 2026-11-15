@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Blue folded bookmark</title>
+  <g transform="translate(-168.5 -147.5) scale(1.75)">
+    <path fill="#2E73FA" fill-rule="evenodd" d="
+      M 171 350.48
+      V 204
+      H 133
+      Q 130 204 130 201
+      V 128
+      Q 130 110 148 110
+      H 335
+      Q 353 110 353 128
+      V 349.79
+      L 264 318.35
+      L 171 350.48
+      Z
+      M 183 122
+      H 329
+      Q 341 122 341 134
+      V 332.82
+      L 264 305.65
+      L 183 333.52
+      Z
+      M 142 192
+      V 130
+      Q 142 122 150 122
+      H 163
+      Q 171 122 171 130
+      V 192
+      Z"/>
+  </g>
+</svg>

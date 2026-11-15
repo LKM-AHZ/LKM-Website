@@ -714,6 +714,14 @@ services:
       # 身份展示读 + 考试解锁/项目升权写全线报错。故生产必须成对配置。
       LKM_AUTH_HTTP_URL: ${LKM_AUTH_HTTP_URL:-http://auth:8001}
       LKM_AUTH_HTTP_TOKEN: ${LKM_AUTH_HTTP_TOKEN:?生产需设置 LKM_AUTH_HTTP_TOKEN}
+      # admin 读取面（/admin/users、/admin/stats）在 backend 内开 auth 库**只读**会话
+      # （core.ports.audit.new_auth_session + auth.snapshot）；HTTP 缝只提供按 id 的批量读，
+      # 列表/聚合必须直连 auth authoritative。缺这组变量时后台用户列表/统计连不上 auth 库。
+      LKM_AUTH_DB_HOST: postgres
+      LKM_AUTH_DB_PORT: 5432
+      LKM_AUTH_DB_NAME: ${LKM_AUTH_DB:-lkm_auth}
+      LKM_AUTH_DB_USER: ${POSTGRES_USER:-lkm}
+      LKM_AUTH_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
       # 多 worker：按压测基线调，默认单 worker；多核下水平跑满 CPU
       LKM_WEB_WORKERS: ${LKM_WEB_WORKERS:-1}
       LKM_BLOG_REPO_DIR: /data/blog_repos

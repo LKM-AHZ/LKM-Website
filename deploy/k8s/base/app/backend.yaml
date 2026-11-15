@@ -60,6 +60,9 @@ spec:
               containerPort: 8000
           envFrom:
             - configMapRef: { name: lkm-config }
+            # admin 读取面（/admin/users、/admin/stats）在 backend 内开 auth 库只读会话，
+            # 需 auth 库连接参数；密码随 lkm-secrets 下发（gen-secret.sh 的 LKM_AUTH_DB_PASSWORD）。
+            - configMapRef: { name: lkm-config-authdb }
             - configMapRef: { name: lkm-config-analytics }
             # lkm-secrets 需同时包含后台「机器人」原生页（BFF）的服务密钥
             # LKM_BOT_ADMIN_API_KEY（LKM-bot「设置 → OpenAPI」创建，带 system/provider/plugin

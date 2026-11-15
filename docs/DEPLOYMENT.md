@@ -865,7 +865,7 @@ CI 的 integration job 已按这两个后端做 matrix，两边都绿才算兼�
 
 `docker compose up` 会自动拉取 `timescale/timescaledb:latest-pg16` 镜像并启动;后端首次启动时自动建表(默认通道 `LKM_USE_ALEMBIC=false` 走 `create_all`,见后端 README),无需手动初始化。
 
-**为什么是 TimescaleDB 版**:`outbox_events`/`outbox_archived`/`points_ledger` 和 auth 独立库的 `audit_logs` 被装配为 **hypertable**(按 `created_at` 自动时间分区；已投递的 outbox 行先归档到冷表，冷表再按时间压缩),并在 `points_ledger` 上建**连续聚合视图** `points_daily`(积分度量/行为报表,读口 `/admin/points-report`),详见《执行路线图》§3.1 与 §8 #40。`outbox_events` 不设置按时间删除策略，避免未投递事件在长时间故障后随 chunk 被丢弃。压缩率取决于实际数据，须在生产数据上测量；`prefect-postgres`、`infisical-db` 仍是普通 PG 镜像。
+**为什么是 TimescaleDB 版**:`outbox_events`/`outbox_archived`/`points_ledger` 和 auth 独立库的 `audit_logs` 被装配为 **hypertable**(按 `created_at` 自动时间分区；已投递的 outbox 行先归档到冷表，冷表再按时间压缩),并在 `points_ledger` 上建**连续聚合视图** `points_daily`(积分度量/行为报表,读口 `/admin/points-report`),详见[后端架构与现状](./后端架构与现状.md) §3.6。`outbox_events` 不设置按时间删除策略，避免未投递事件在长时间故障后随 chunk 被丢弃。压缩率取决于实际数据，须在生产数据上测量；`prefect-postgres`、`infisical-db` 仍是普通 PG 镜像。
 
 两点部署注意:
 
@@ -975,7 +975,7 @@ COMPOSE_PROJECT_NAME=lkm-drill docker compose down -v
 
 **改 schema 的规矩**:
 
-1. **加列/加索引**可走 create_all 通道的**加性同步**(`_sync_additive_schema`,只增不改,见《执行路线图》§8 #38)；超过 64 MiB 的大表及 Timescale hypertable 按第 3 步执行。模型改了**也要补一条 alembic revision**,否则 Alembic 通道建出的库缺列。
+1. **加列/加索引**可走 create_all 通道的**加性同步**(`_sync_additive_schema`,只增不改,见[后端架构与现状](./后端架构与现状.md) §3.4)；超过 64 MiB 的大表及 Timescale hypertable 按第 3 步执行。模型改了**也要补一条 alembic revision**,否则 Alembic 通道建出的库缺列。
 2. **破坏性变更**(改类型 / 删列 / 改约束 / 改主键)**只能走 alembic 并人工评审**:create_all 通道不会 ALTER,直接改模型会让既有库静默失配。
 3. **大表变更分阶段执行**，先出 SQL 评审，不要直接 `upgrade`:
 
