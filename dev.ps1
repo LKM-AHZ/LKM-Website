@@ -5,8 +5,8 @@
 #  原 dev.bat 的参数解析已并入本文件, 不再需要 .bat 包装。
 #
 #  用法:
-#    pwsh ./dev.ps1                 # 启动后端
-#    pwsh ./dev.ps1 back            # 仅后端 (uvicorn, :8000)
+#    pwsh ./dev.ps1                 # 启动 AUTH 进程 (:8001) 与业务后端 (:8000)
+#    pwsh ./dev.ps1 back            # 同上; back/all 保留为等价写法
 #    pwsh ./dev.ps1 --no-run        # 仅安装后端依赖
 #    pwsh ./dev.ps1 back --no-run   # 仅安装后端依赖
 #    pwsh ./dev.ps1 --help          # 显示用法
@@ -43,8 +43,8 @@ function Show-Usage {
     [Console]::WriteLine("")
     [Console]::WriteLine("  模式: back (默认) | all, 也可写 后端")
     [Console]::WriteLine("")
-    [Console]::WriteLine("  dev.ps1                 # 启动后端")
-    [Console]::WriteLine("  dev.ps1 back            # 仅后端 (uvicorn, :8000)")
+    [Console]::WriteLine("  dev.ps1                 # 启动 AUTH (:8001) 与后端 (:8000)")
+    [Console]::WriteLine("  dev.ps1 back            # 同上; back/all 等价")
     [Console]::WriteLine("  dev.ps1 --no-run        # 仅安装后端依赖")
     [Console]::WriteLine("  dev.ps1 back --no-run   # 仅安装后端依赖")
     [Console]::WriteLine("")
@@ -193,91 +193,81 @@ if ($Mode -eq "back" -or $Mode -eq "all") {
     if ($dbStatus -ne 0) { exit $dbStatus }
 }
 
-# ---------- 后端开发密钥 ----------
-# 后端为 RS256-only(无 HS256 对称降级): 签发/验签需 RSA 密钥对, 另需 TOTP/pepper 两个对称密钥;
-# 非测试环境还会强制校验密钥强且非默认。若未通过环境变量(或 .env)提供, 这里自动生成开发用值并注入,
-# 让一键启动即可跑通; 已有配置时则不改动。
-function New-RandomSecret {
-    param([int]$Length = 64)
-    $chars = 65..90 + 97..122 + 48..57   # A-Z a-z 0-9
-    # 必须用 CSPRNG: Get-Random 是 System.Random(时间种子, 可预测); 而且 -Count 去重后
-    # 字符池只有 62 个, 要 64 位根本凑不齐(会静默返回 62 位, 与 DEPLOYMENT.md 的
-    # 「64 位以上随机串」不符)。
-    $bytes = New-Object byte[] $Length
-    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-    -join ($bytes | ForEach-Object { [char]$chars[$_ % $chars.Count] })
+# ---------- 开发密钥与内部缝 ----------
+# 密钥补齐逻辑与 dev.sh 共用 scripts/prepare_dev_secrets.py: 已有环境变量或
+# LKM-service/.env 配置时不改动, 只为缺失项生成值 (JWT 密钥对写入 deploy/jwt/keys)。
+Write-Log "准备开发密钥（缺失时自动生成）..."
+$secretJson = $null
+Push-Location $BackDir
+try {
+    $secretJson = (& uv run python (Join-Path $ScriptsDir "prepare_dev_secrets.py") --json) -join "`n"
+    $secretStatus = $LASTEXITCODE
+} finally {
+    Pop-Location
 }
-
-# 后端只读取 LKM-service/.env（工作目录为 LKM-service），进程环境变量优先级更高。
-# 不应把根目录用于 Docker Compose 的 .env 误认为后端配置。
-$BackEnv = Join-Path $BackDir ".env"
-
-function Test-EnvFileHasKey {
-    # 后端 .env 里存在未被注释的 `KEY=非空值` 行即返回 true
-    param([string]$Key)
-    if (-not (Test-Path -LiteralPath $BackEnv)) { return $false }
-    if (Select-String -LiteralPath $BackEnv -Pattern ("^\s*" + [regex]::Escape($Key) + "\s*=\s*\S") -Quiet) {
-        return $true
-    }
-    return $false
+if ($secretStatus -ne 0) {
+    [Console]::Error.WriteLine("[lkm:error] 生成开发密钥失败。")
+    exit 1
 }
-
-# 为后端生成开发密钥。
-if ($Mode -eq "back" -or $Mode -eq "all") {
-    # RS256 密钥对(必填前置): 未在 env/.env 指定文件路径时, 用 openssl 生成到 deploy/jwt/keys。
-    if ([string]::IsNullOrWhiteSpace($env:LKM_JWT_PRIVATE_KEY_FILE) -and
-        [string]::IsNullOrWhiteSpace($env:LKM_JWT_PUBLIC_KEY_FILE) -and
-        -not (Test-EnvFileHasKey "LKM_JWT_PRIVATE_KEY_FILE") -and
-        -not (Test-EnvFileHasKey "LKM_JWT_PUBLIC_KEY_FILE")) {
-        $KeyDir   = Join-Path (Join-Path $RootDir "deploy") "jwt"
-        $KeyDir   = Join-Path $KeyDir "keys"
-        $PrivFile = Join-Path $KeyDir "jwt-private.pem"
-        $PubFile  = Join-Path $KeyDir "jwt-public.pem"
-        $hasPrivate = Test-Path -LiteralPath $PrivFile
-        $hasPublic  = Test-Path -LiteralPath $PubFile
-        if ($hasPrivate -xor $hasPublic) {
-            [Console]::Error.WriteLine("[lkm:error] 开发密钥对只存在一半: $KeyDir。请检查后再重新生成，避免误轮换。")
-            exit 1
-        }
-        if (-not $hasPrivate) {
-            Require-Command "openssl"
-            New-Item -ItemType Directory -Force -Path $KeyDir | Out-Null
-            $tmpPrivate = Join-Path $KeyDir ("jwt-private." + [guid]::NewGuid().ToString("N") + ".tmp")
-            $tmpPublic  = Join-Path $KeyDir ("jwt-public." + [guid]::NewGuid().ToString("N") + ".tmp")
-            try {
-                & openssl genrsa -out $tmpPrivate 2048 2>$null
-                if ($LASTEXITCODE -ne 0) { throw "openssl genrsa 失败" }
-                & openssl rsa -in $tmpPrivate -pubout -out $tmpPublic 2>$null
-                if ($LASTEXITCODE -ne 0) { throw "openssl rsa -pubout 失败" }
-                Move-Item -LiteralPath $tmpPrivate -Destination $PrivFile
-                Move-Item -LiteralPath $tmpPublic -Destination $PubFile
-            } catch {
-                Remove-Item -LiteralPath $PrivFile, $PubFile -ErrorAction SilentlyContinue
-                [Console]::Error.WriteLine("[lkm:error] 生成开发密钥对失败: " + $_)
-                exit 1
-            } finally {
-                Remove-Item -LiteralPath $tmpPrivate, $tmpPublic -ErrorAction SilentlyContinue
-            }
-            Write-Log "已为开发环境生成 RS256 密钥对(deploy/jwt/keys)。"
-        }
-        # 绝对路径, 免 uvicorn 以 LKM-service 为 CWD 时相对路径解析到错处
-        $env:LKM_JWT_PRIVATE_KEY_FILE = $PrivFile
-        $env:LKM_JWT_PUBLIC_KEY_FILE  = $PubFile
-    }
-    if ([string]::IsNullOrWhiteSpace($env:LKM_TOTP_ENCRYPTION_KEY) -and
-        -not (Test-EnvFileHasKey "LKM_TOTP_ENCRYPTION_KEY")) {
-        $env:LKM_TOTP_ENCRYPTION_KEY = New-RandomSecret 64
-        Write-Log "已为开发环境生成 LKM_TOTP_ENCRYPTION_KEY。"
-    }
-    if ([string]::IsNullOrWhiteSpace($env:LKM_VERIFICATION_CODE_PEPPER) -and
-        -not (Test-EnvFileHasKey "LKM_VERIFICATION_CODE_PEPPER")) {
-        $env:LKM_VERIFICATION_CODE_PEPPER = New-RandomSecret 64
-        Write-Log "已为开发环境生成 LKM_VERIFICATION_CODE_PEPPER。"
+if (-not [string]::IsNullOrWhiteSpace($secretJson)) {
+    $secrets = $secretJson | ConvertFrom-Json
+    foreach ($name in $secrets.PSObject.Properties.Name) {
+        [Environment]::SetEnvironmentVariable($name, [string]$secrets.$name)
     }
 }
 
-Write-Log "启动后端: uvicorn main:app --reload --port $BackPort"
-[Console]::WriteLine()
-Set-Location $BackDir
-& uv run uvicorn main:app --reload --port $BackPort
-exit $LASTEXITCODE
+# 双形态退役后 auth 是后端的硬依赖: 注入内部缝地址/令牌 (与 dev.sh 默认值一致)。
+if ([string]::IsNullOrWhiteSpace($env:LKM_AUTH_HTTP_URL)) {
+    $env:LKM_AUTH_HTTP_URL = "http://127.0.0.1:8001"
+}
+if ([string]::IsNullOrWhiteSpace($env:LKM_AUTH_HTTP_TOKEN)) {
+    $env:LKM_AUTH_HTTP_TOKEN = "dev-internal-auth-token-change-me-32chars"
+}
+
+# ---------- 启动两个进程 ----------
+# 任一进程退出即整体退出并沿用其退出码, 与 dev.sh 一致。
+# Windows 用 taskkill /T 杀进程树; Unix 递归 pgrep。uv 若先于 python 退出,
+# 孙进程回收是尽力而为 (Ctrl+C 时同一控制台进程组已收到信号)。
+function Stop-ProcessTree {
+    param([int]$ProcessId)
+    if ($env:OS -eq "Windows_NT") {
+        & taskkill.exe /PID $ProcessId /T /F 2>$null | Out-Null
+        return
+    }
+    $children = & pgrep -P $ProcessId 2>$null
+    foreach ($child in $children) {
+        if ($child) { Stop-ProcessTree -ProcessId ([int]$child) }
+    }
+    Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+}
+
+$Uv = (Get-Command "uv").Source
+if ([string]::IsNullOrWhiteSpace($Uv)) { $Uv = "uv" }
+$AuthProc = $null
+$BackProc = $null
+$ExitCode = 0
+try {
+    Write-Log "启动 AUTH 进程: python -m auth.main (8001)"
+    $AuthProc = Start-Process -FilePath $Uv -ArgumentList @("run", "python", "-m", "auth.main") `
+        -WorkingDirectory $BackDir -PassThru -NoNewWindow
+    Write-Log "启动后端: uvicorn main:app --reload --port $BackPort"
+    [Console]::WriteLine()
+    $BackProc = Start-Process -FilePath $Uv `
+        -ArgumentList @("run", "uvicorn", "main:app", "--reload", "--port", "$BackPort") `
+        -WorkingDirectory $BackDir -PassThru -NoNewWindow
+
+    while (-not $AuthProc.HasExited -and -not $BackProc.HasExited) {
+        Start-Sleep -Milliseconds 500
+    }
+    if ($BackProc.HasExited) { $ExitCode = $BackProc.ExitCode } else { $ExitCode = $AuthProc.ExitCode }
+}
+finally {
+    $running = @($AuthProc, $BackProc) | Where-Object { $null -ne $_ -and -not $_.HasExited }
+    if ($running.Count -gt 0) { Write-Log "收到退出信号，正在停止..." }
+    foreach ($proc in @($AuthProc, $BackProc)) {
+        if ($null -eq $proc) { continue }
+        if (-not $proc.HasExited) { Stop-ProcessTree -ProcessId $proc.Id }
+        $proc.WaitForExit(5000) | Out-Null
+    }
+}
+exit $ExitCode

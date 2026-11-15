@@ -46,7 +46,7 @@ git submodule status
 ### 本地开发
 
 ```sh
-# Linux / macOS：安装依赖并启动后端
+# Linux / macOS：安装依赖并启动 AUTH(:8001) + 后端(:8000)
 ./dev.sh
 ./dev.sh --no-run  # 仅安装后端依赖
 
@@ -57,7 +57,8 @@ flutter run
 ```
 
 Windows 使用 `.\dev.ps1`，安装了 pwsh 的 Linux/macOS 使用 `pwsh ./dev.ps1`；
-`--no-run` 仅安装后端依赖。脚本兼容 `back` / `all` 参数，均只操作后端。
+`--no-run` 仅安装后端依赖。脚本兼容 `back` / `all` 参数，均启动 AUTH 与后端两个进程；
+缺少开发密钥时两端都会自动生成。
 
 后端 API 地址为 `http://127.0.0.1:8000`，Swagger UI 为 `http://127.0.0.1:8000/docs`。
 桌面客户端在设置中配置服务地址。

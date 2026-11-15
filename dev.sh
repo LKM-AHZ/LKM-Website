@@ -3,8 +3,8 @@
 # LKM 统一开发服务器启动脚本
 #
 # 用法：
-#   ./dev.sh          # 启动后端(LKM-service)
-#   ./dev.sh back      # 仅启动后端
+#   ./dev.sh          # 启动 AUTH 进程(:8001)与业务后端(:8000)
+#   ./dev.sh back     # 同上；back/all 保留为等价写法
 #   ./dev.sh --no-run  # 仅安装后端依赖，不启动服务
 #   ./dev.sh back --no-run  # 仅安装后端依赖
 #
@@ -16,6 +16,11 @@ BACKEND_DIR="$ROOT_DIR/LKM-service"
 
 # 默认端口（都可覆盖：与既有服务撞端口时按需换）
 BACKEND_PORT="${BACKEND_PORT:-8000}"
+
+# 双形态退役后认证只由独立 AUTH 进程提供：本地开发同时起 auth（固定 8001，见 auth/main.py）
+# 并通过内部缝地址/令牌把 backend 指过去。
+export LKM_AUTH_HTTP_URL="${LKM_AUTH_HTTP_URL:-http://127.0.0.1:8001}"
+export LKM_AUTH_HTTP_TOKEN="${LKM_AUTH_HTTP_TOKEN:-dev-internal-auth-token-change-me-32chars}"
 
 log() {
   echo -e "\033[1;36m[lkm]\033[0m $*"
@@ -60,8 +65,24 @@ run_backend() {
   (cd "$BACKEND_DIR" && uv run uvicorn main:app --reload --port "$BACKEND_PORT")
 }
 
-# 只装所选模式需要的依赖；未知参数不能悄悄启动全部服务。
-MODE=back
+run_auth() {
+  log "启动 AUTH 进程: python -m auth.main (8001)"
+  (cd "$BACKEND_DIR" && uv run python -m auth.main)
+}
+
+# 缺失的开发密钥自动补齐；已有环境变量/.env 配置时不改动。
+prepare_dev_secrets() {
+  local output
+  log "准备开发密钥（缺失时自动生成）..."
+  if ! output="$(cd "$BACKEND_DIR" && uv run python "$ROOT_DIR/scripts/prepare_dev_secrets.py" --shell)"; then
+    error "生成开发密钥失败。"
+    exit 1
+  fi
+  [ -z "$output" ] || eval "$output"
+}
+
+# 未知参数不能悄悄启动服务；双形态退役后 auth 是后端的硬依赖，
+# back 与 all 都启动同一套进程（AUTH + backend）。
 MODE_SEEN=false
 NO_RUN=false
 for arg in "$@"; do
@@ -72,10 +93,6 @@ for arg in "$@"; do
         exit 2
       fi
       MODE_SEEN=true
-      case "$arg" in
-        后端) MODE=back ;;
-        *) MODE="$arg" ;;
-      esac
       ;;
     --no-run) NO_RUN=true ;;
     *) error "未知参数: $arg（用法: ./dev.sh [all|back] [--no-run]）"; exit 2 ;;
@@ -96,9 +113,10 @@ fi
 (cd "$BACKEND_DIR" && uv run python "$ROOT_DIR/scripts/check_dev_db.py")
 log "准备业务库与认证库 schema..."
 (cd "$BACKEND_DIR" && uv run python "$ROOT_DIR/scripts/prepare_dev_db.py")
+prepare_dev_secrets
 
-# 每个服务独占进程组，退出时连 uv/python 等孙进程一起停止。
-# 单服务模式也走同一套收尾逻辑，避免 Ctrl+C 后留下监听端口的子进程。
+# 每个服务独占进程组，退出时连 uv/python 等孙进程一起停止，
+# 避免 Ctrl+C 后留下监听端口的子进程。
 set -m
 pids=()
 cleanup() {
@@ -129,6 +147,7 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 trap cleanup EXIT
 
+run_auth & pids+=("$!")
 run_backend & pids+=("$!")
 
 # 无参 wait 永远返回 0；轮询首个退出者并保留其退出码。

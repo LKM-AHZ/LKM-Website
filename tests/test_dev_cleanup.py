@@ -1,6 +1,7 @@
 """Run with: python3 tests/test_dev_cleanup.py"""
 
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -22,21 +23,33 @@ def listening(port):
         return sock.connect_ex(("127.0.0.1", port)) == 0
 
 
-def run_case(mode, temp, stop_signal=signal.SIGTERM):
+def run_case(
+    mode,
+    temp,
+    stop_signal=signal.SIGTERM,
+    script="dev.sh",
+    driver=None,
+    expected_codes=None,
+):
     back_port = free_port()
-    expected = [back_port]
-    pid_file = temp / f"{mode}.pids"
+    auth_port = free_port()
+    while auth_port == back_port:
+        auth_port = free_port()
+    expected = [back_port, auth_port]
+    pid_file = temp / f"{script}-{mode}.pids"
     pid_file.write_text("")
-    log_file = temp / f"{mode}.log"
+    log_file = temp / f"{script}-{mode}.log"
     env = os.environ | {
         "PATH": f"{temp / 'bin'}:{os.environ['PATH']}",
         "BACKEND_PORT": str(back_port),
+        "DEV_TEST_AUTH_PORT": str(auth_port),
         "DEV_TEST_SERVER": str(temp / "server.py"),
         "DEV_TEST_PIDS": str(pid_file),
     }
+    command = driver([str(ROOT / script), mode]) if driver else [str(ROOT / script), mode]
     with log_file.open("w") as log:
         proc = subprocess.Popen(
-            [str(ROOT / "dev.sh"), mode],
+            command,
             cwd=ROOT,
             env=env,
             stdout=log,
@@ -52,7 +65,10 @@ def run_case(mode, temp, stop_signal=signal.SIGTERM):
                 time.sleep(0.1)
             assert all(listening(port) for port in expected), log_file.read_text()
             proc.send_signal(stop_signal)
-            assert proc.wait(timeout=10) == 128 + stop_signal, log_file.read_text()
+            code = proc.wait(timeout=10)
+            if expected_codes is None:
+                expected_codes = (128 + stop_signal,)
+            assert code in expected_codes, f"exit={code}\n{log_file.read_text()}"
             assert not any(listening(port) for port in expected), log_file.read_text()
         finally:
             if proc.poll() is None:
@@ -74,10 +90,17 @@ def main():
         stub = bin_dir / "uv"
         stub.write_text(
             "#!/usr/bin/env bash\n"
-            'if [[ "$1" == install || "$1" == sync || "$2" == python ]]; then exit 0; fi\n'
-            'python3 "$DEV_TEST_SERVER" "${@: -1}" &\n'
-            'echo "$!" >> "$DEV_TEST_PIDS"\n'
-            'wait "$!"\n'
+            "start() {\n"
+            '  python3 "$DEV_TEST_SERVER" "$1" &\n'
+            '  echo "$!" >> "$DEV_TEST_PIDS"\n'
+            '  wait "$!"\n'
+            "}\n"
+            'if [[ "$1" == install || "$1" == sync ]]; then exit 0; fi\n'
+            'if [[ "$2" == python ]]; then\n'
+            '  [[ "$3" == "-m" ]] && start "$DEV_TEST_AUTH_PORT"\n'
+            "  exit 0\n"
+            "fi\n"
+            'start "${@: -1}"\n'
         )
         stub.chmod(0o755)
         (temp / "server.py").write_text(
@@ -96,11 +119,28 @@ def main():
         )
         for mode in ("back", "all"):
             run_case(mode, temp)
-            print(f"{mode}: child ports released before dev.sh exits")
+            print(f"{mode}: backend+auth ports released before dev.sh exits")
         run_case("all", temp, signal.SIGINT)
-        print("all + Ctrl+C: child ports released before dev.sh exits")
+        print("all + Ctrl+C: backend+auth ports released before dev.sh exits")
         run_case("all", temp, signal.SIGHUP)
-        print("all + terminal close: child ports released before dev.sh exits")
+        print("all + terminal close: backend+auth ports released before dev.sh exits")
+
+        # dev.ps1 监督逻辑同样要回收两个进程；本机无 pwsh 时跳过。
+        if shutil.which("pwsh"):
+            pwsh = lambda args: ["pwsh", "-NoProfile", "-File"] + args
+            for mode in ("back", "all"):
+                # pwsh 在 Ctrl+C(SIGINT) 时执行 finally 回收两个进程，退出码为 0。
+                run_case(
+                    mode,
+                    temp,
+                    signal.SIGINT,
+                    script="dev.ps1",
+                    driver=pwsh,
+                    expected_codes=(0,),
+                )
+                print(f"{mode}: backend+auth ports released before dev.ps1 exits")
+        else:
+            print("pwsh not found: skipped dev.ps1 cleanup cases")
 
 
 if __name__ == "__main__":

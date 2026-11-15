@@ -64,7 +64,7 @@ LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / 
 
 ### 方式一:一键脚本(推荐)
 
-根目录脚本安装依赖并启动后端：
+根目录脚本安装依赖并启动 AUTH 进程与业务后端：
 
 ```sh
 ./dev.sh
@@ -72,8 +72,10 @@ LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / 
 ```
 
 Windows 使用 `.\dev.ps1`，安装了 pwsh 的 Linux/macOS 使用 `pwsh ./dev.ps1`。
-两者保留 `back` / `all` 参数，均只操作后端；端口通过 `BACKEND_PORT` 覆盖，默认 `8000`。
-PowerShell 在缺少开发密钥时生成开发用值；Bash 需在后端 `.env` 或环境变量中提供密钥。
+两者保留 `back` / `all` 参数，均启动同一套进程：AUTH 固定 `:8001`，业务后端通过
+`BACKEND_PORT` 覆盖、默认 `8000`；脚本会自动注入内部缝地址/令牌。缺少开发密钥时两个
+脚本都会补齐（`scripts/prepare_dev_secrets.py`：RS256 密钥对生成到 `deploy/jwt/keys/`，
+TOTP/pepper 为每次运行临时生成），环境变量或后端 `.env` 已有配置时不改动。
 启动前会检查 PostgreSQL 连接并初始化业务库和认证库的 schema；`--no-run` 不检查数据库。
 
 Linux/macOS 若尚未配置数据库，可先运行 `./scripts/start_dev_db.sh`，在 Git 忽略的 `.dev/`
