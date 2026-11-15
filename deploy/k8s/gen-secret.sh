@@ -111,6 +111,28 @@ jwt_public_block() {
     sed 's/^/    /' "$JWT_PUB_FILE"
 }
 
+# HarmonyOS Push Kit 服务账号私钥是多行 PEM。get() 按单行解析 .env，双引号里的
+# \n 也不会还原成换行，故私钥只从进程环境（Infisical 注入）或 PEM 文件读取。
+huawei_push_block() {
+    v="$(printenv LKM_HUAWEI_PUSH_PRIVATE_KEY 2>/dev/null || true)"
+    key_path="${LKM_HUAWEI_PUSH_PRIVATE_KEY_PATH:-$(get LKM_HUAWEI_PUSH_PRIVATE_KEY_PATH)}"
+    if [ -z "$v" ] && [ -n "$key_path" ]; then
+        if [ -f "$key_path" ]; then
+            v="$(cat "$key_path")"
+        else
+            echo "[gen-secret] 警告：LKM_HUAWEI_PUSH_PRIVATE_KEY_PATH 指向的文件不存在：$key_path" >&2
+        fi
+    fi
+    if [ -z "$v" ]; then
+        if [ "$(get LKM_HUAWEI_PUSH_ENABLED false)" = "true" ]; then
+            echo "[gen-secret] 警告：LKM_HUAWEI_PUSH_ENABLED=true 但未提供私钥（环境变量或 *_PATH 文件），Pod 将启动校验失败" >&2
+        fi
+        return 0
+    fi
+    printf '  LKM_HUAWEI_PUSH_PRIVATE_KEY: |\n'
+    printf '%s\n' "$v" | sed 's/^/    /'
+}
+
 # Secret 的键集 = 应用/中间件消费的全部敏感项。POSTGRES_PASSWORD 与 LKM_DB_PASSWORD 等
 # 同值多键是刻意的：让各 Pod 直接 envFrom 这一张表即可，不必在 Deployment 里到处写
 # secretKeyRef 做逐键映射（少一层易漏的间接）。
@@ -164,6 +186,14 @@ stringData:
   LKM_BOT_INTERNAL_TOKEN: "$(get_dq LKM_BOT_INTERNAL_TOKEN)"
   # SigNoz UI 自身会话签名密钥（非应用 JWT）。独立键，勿再借用应用密钥。
   LKM_SIGNOZ_JWT_SECRET: "$(get_dq_opt LKM_SIGNOZ_JWT_SECRET change-me-signoz-ui)"
+  # HarmonyOS Push Kit v3（可选；默认关闭）。私钥由 huawei_push_block 以多行块输出。
+  LKM_HUAWEI_PUSH_ENABLED: "$(get_dq LKM_HUAWEI_PUSH_ENABLED false)"
+  LKM_HUAWEI_PUSH_PROJECT_ID: "$(get_dq LKM_HUAWEI_PUSH_PROJECT_ID)"
+  LKM_HUAWEI_PUSH_KEY_ID: "$(get_dq LKM_HUAWEI_PUSH_KEY_ID)"
+  LKM_HUAWEI_PUSH_SUB_ACCOUNT: "$(get_dq LKM_HUAWEI_PUSH_SUB_ACCOUNT)"
+  LKM_HUAWEI_PUSH_CATEGORY: "$(get_dq LKM_HUAWEI_PUSH_CATEGORY SUBSCRIPTION)"
+  LKM_HUAWEI_PUSH_TEST_MESSAGE: "$(get_dq LKM_HUAWEI_PUSH_TEST_MESSAGE false)"
+$(huawei_push_block)
 $(jwt_public_block)
 YAML
 
