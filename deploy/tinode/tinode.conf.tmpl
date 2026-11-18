@@ -23,8 +23,12 @@
     "use_adapter": "postgres",
     "adapters": {
       "postgres": {
-        "database": "$TINODE_DB",
-        "dsn": "$POSTGRES_DSN",
+        "User": "$TINODE_DB_USER",
+        "Passwd": "$TINODE_DB_PASSWORD",
+        "Host": "$TINODE_DB_HOST",
+        "Port": "$TINODE_DB_PORT",
+        "DBName": "$TINODE_DB",
+        "SSLMode": "disable",
         "max_open_conns": 20,
         "max_idle_conns": 5,
         "conn_max_lifetime": 60,

@@ -105,7 +105,7 @@ Pipeline 的上下文、调度器和阶段基类位于 `bot/core/pipeline/`；�
 | `/welcome`     | 欢迎页与运行状态                        |
 | `/platforms`   | 消息平台配置                            |
 | `/providers`   | 模型 Provider 与模型源                  |
-| `/extension/*` | 已安装插件、插件市场、MCP、Skills、组件 |
+| `/extension/*` | 已安装插件、MCP、Skills、组件 |
 | `/config`      | AstrBot 核心配置与配置 profile          |
 | `/persona`     | 人设、能力与绑定                        |
 | `/data/*`      | 统计、会话、控制台、Trace               |
@@ -157,11 +157,9 @@ bot 与面板默认**不向项目方或上游作者的域名发任何请求**。
 | 使用统计 | **否** | 指标只写入本机 SQLite（`Metric.upload` 不再上报；上游的 `tickstats.soulter.top` 已移除） |
 | 检查更新 | 用户点击时 | `api.github.com/repos/Alma1314/LKM-bot/releases`（GitHub REST，自带 User-Agent） |
 | 下载更新包 | 用户点击时 | 该 release 的 `zipball_url`（GitHub）；旧的托管包 registry 已移除 |
-| 插件市场 | 打开市场时 | GitHub 上的公开插件登记仓库；可在面板换成自定义市场源 |
-| 文转图（remote） | **必须自行配置** | 无内置服务；未配置 `t2i_endpoint` 时直接报错，`local` 策略不发请求 |
 | `/help` 公告 | **否** | 不再拉取上游公告 |
 | 模型提供商 / IM 平台 / 搜索 / TTS | 用户配置后 | 对应厂商 API（业务必需） |
-| 沙箱镜像 | 启用 boxlite 时 | `BOT_BOXLITE_IMAGE`，未设置时沿用上游 `soulter/shipyard-ship` |
+| 沙箱镜像 | 启用 boxlite 时 | 必须显式配置 `BOT_BOXLITE_IMAGE`；未配置直接报错，无内置镜像 |
 
 面板侧的资源同样自托管：字体（`src/assets/fonts`，随产物打包）、提供商图标（`@lobehub/icons-static-svg` 构建期打包）、语音检测运行时（构建期从 `node_modules` 复制到 `public/vendor/vad`）。构建产物中不再出现 `cdn.jsdelivr.net` / `fonts.googleapis.com` 的实际请求。
 
@@ -171,7 +169,7 @@ bot 与面板默认**不向项目方或上游作者的域名发任何请求**。
   - `data_v4.db`：主 SQLite 数据库；
   - `cmd_config.json`：核心配置；
   - `knowledge_base/kb.db`：知识库数据库；
-  - `mcp_server.json`、`skills.json`、`t2i_templates/`、附件与临时文件。
+  - `mcp_server.json`、`skills.json`、附件与临时文件。
 - 生产环境应使用持久卷挂载数据目录；容器镜像内的 `data/` 仅用于开发/样例。
 - 配置可通过 Dashboard、`data/cmd_config.json` 或环境变量覆盖；敏感值不应提交到仓库。
 

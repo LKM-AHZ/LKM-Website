@@ -479,9 +479,14 @@ services:
       auth:
         condition: service_healthy
     environment:
-      POSTGRES_DSN: postgresql://${POSTGRES_USER:-lkm}:${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}@postgres:5432/${LKM_TINODE_DB:-tinode}?sslmode=disable&connect_timeout=10
-      # 适配器的库名判据（官方模板同款）：只写 DSN 时 postgres adapter 仍按默认库
-      # 做存在性检查，init-db 与服务器会各连各的库。
+      # Tinode v0.25 的 postgres 适配器实测要求连接用户名为 postgres（换用户名后
+      # DBName 被忽略、连接落到同名库并失败）。该角色由 deploy/initdb/03-tinode-role.sh
+      # 在 PG 首启时创建（LOGIN CREATEDB，密码复用 POSTGRES_PASSWORD）。
+      TINODE_DB_USER: postgres
+      TINODE_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产需设置 POSTGRES_PASSWORD}
+      TINODE_DB_HOST: postgres
+      TINODE_DB_PORT: "5432"
+      # tinode 库由 Tinode 首启自建（init-db），不预建空库。
       TINODE_DB: ${LKM_TINODE_DB:-tinode}
       # 三个密钥均为随机字节的 base64（生成见 .env.example），缺失即拒绝启动。
       # API_KEY_SALT 必须与客户端 API key 配对：用 Tinode 镜像自带 keygen 一次生成两者。

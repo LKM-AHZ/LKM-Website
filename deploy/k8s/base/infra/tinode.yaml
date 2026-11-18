@@ -55,14 +55,17 @@ spec:
             - name: http
               containerPort: 6060
           env:
-            - name: POSTGRES_USER
-              valueFrom:
-                secretKeyRef: { name: lkm-secrets, key: POSTGRES_USER }
-            - name: POSTGRES_PASSWORD
+            # Tinode 0.25 实测要求用户名是 postgres；角色由 postgres-initdb 的
+            # 03-tinode-role.sh 首启创建（LOGIN CREATEDB，密码复用 POSTGRES_PASSWORD）。
+            - name: TINODE_DB_USER
+              value: postgres
+            - name: TINODE_DB_PASSWORD
               valueFrom:
                 secretKeyRef: { name: lkm-secrets, key: POSTGRES_PASSWORD }
-            - name: POSTGRES_DSN
-              value: "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/tinode?sslmode=disable&connect_timeout=10"
+            - name: TINODE_DB_HOST
+              value: postgres
+            - name: TINODE_DB_PORT
+              value: "5432"
             - name: TINODE_DB
               value: tinode
             - name: TINODE_API_KEY_SALT

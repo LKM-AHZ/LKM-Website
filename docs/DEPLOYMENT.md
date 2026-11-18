@@ -117,6 +117,28 @@ StatefulSet 取代 Pulsar。切换已有集群时也需先排空旧订阅，停�
 监控使用 `message_subscription_backlog{broker=...}`；原 `pulsar_subscription_backlog`
 保留供旧看板读取 Pulsar 指标。
 
+### 聊天服务：Tinode
+
+聊天由 compose 的 `tinode` 服务（`tinode/tinode-postgres`）承载，客户端经网关 `/v0/*`
+直连（HTTP + WebSocket）；账号仍以 LKM 为准，登录时由 `/api/v1/auth/internal/tinode/*`
+桥换算成 Tinode 会话。必填密钥与客户端 API key 的生成见 `.env.example`。
+
+实测（2026-11-17，v0.25.3）两个部署约束：
+
+1. **连接用户名必须是 `postgres`**。Tinode 的 postgres 适配器在此用户名之外的场景会忽略
+   `DBName`，直接连到与用户名同名的库并失败。compose 使用
+   `deploy/initdb/03-tinode-role.sh` 在 PG 首启时创建该角色（`LOGIN CREATEDB`，密码复用
+   `POSTGRES_PASSWORD`）。
+2. **已初始化的数据卷不会重跑 initdb**。升级既有部署时须手工执行一次：
+
+   ```sql
+   CREATE ROLE postgres WITH LOGIN CREATEDB PASSWORD '<POSTGRES_PASSWORD>';
+   ```
+
+   随后重启 `tinode`（首启由它自建 `tinode` 库，不要预建空库）。
+
+客户端接入协议要点见 [实时协议](实时协议.md) §4.3。
+
 请求分流(有域名走 443 / 无域名走 80):
 
 ```

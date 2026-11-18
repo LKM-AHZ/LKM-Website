@@ -54,6 +54,7 @@ configMapGenerator:
     files:
       - ../../initdb/01-auth-db.sh
       - ../../initdb/02-timescaledb.sh
+      - ../../initdb/03-tinode-role.sh
   # Tinode 配置模板 + 渲染入口 —— 与 compose 挂的是同一批文件（单一模板展开点）。
   - name: tinode-config
     files:
