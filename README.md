@@ -50,9 +50,9 @@ git submodule status
 ./dev.sh
 ./dev.sh --no-run  # 仅安装后端依赖
 
-# 桌面客户端
+# 桌面客户端（首次：检查/安装平台依赖并 flutter pub get）
 cd LKM-desktop
-flutter pub get
+./buildtools/setup-dev.sh --install
 flutter run
 ```
 

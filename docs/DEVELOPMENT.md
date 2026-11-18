@@ -98,7 +98,7 @@ uv run uvicorn main:app --reload --port 8000
 
 # 桌面客户端（终端 2，从根目录开始）
 cd LKM-desktop
-flutter pub get
+./buildtools/setup-dev.sh --install  # 首次：检查/安装平台依赖并 flutter pub get
 flutter run
 ```
 
