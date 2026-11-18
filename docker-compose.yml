@@ -35,7 +35,7 @@ services:
   apisix-render:
     # 纯 shell sidecar（只跑 render.sh 的 sh/awk/sed/openssl），非 Web 服务器角色：
     # 用最小 alpine，不借用任何 Web 服务器镜像。
-    image: alpine:3.20
+    image: alpine:3.24
     entrypoint: ['sh', '/src/render.sh']
     environment:
       # 网关配置的**单一来源**：路由 hosts 与 CORS 来源由域名变量展开，请求体上限与后端LKM_MAX_UPLOAD_BYTES 取同一个 env。
@@ -231,7 +231,7 @@ services:
   # 启用：LKM_OTEL_ENABLED=true 且 LKM_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318/v1/traces
   # 后 `docker compose --profile otel up -d`。内部指标 :8888/metrics 可查接收 span 数。
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.164.0-386
+    image: otel/opentelemetry-collector-contrib:0.165.0-386
     profiles: ['otel']
     command: ['--config=/etc/otelcol/config.yaml']
     volumes:
@@ -300,7 +300,7 @@ services:
   # Prometheus 指标抓取：只抓 backend 的 /metrics
   # （auth 进程刻意不挂 /metrics，见部署文档「已知限制」）。默认不启。
   prometheus:
-    image: prom/prometheus:v3.15.1
+    image: prom/prometheus:v3.16.0
     profiles: ['monitoring']
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -322,7 +322,7 @@ services:
   # 配置只在启动时需要，且 Alertmanager 不自动重载——改地址后需
   # `docker compose restart alertmanager`（见 docs/DEPLOYMENT.md「告警投递」）。
   alertmanager-render:
-    image: alpine:3.20
+    image: alpine:3.24
     profiles: ['monitoring']
     entrypoint: ['sh', '/src/render.sh']
     environment:
@@ -342,7 +342,7 @@ services:
   # 此前只有 rule_files，既没有 alerting 段也没有本服务 —— 告警只在 Prometheus UI
   # 里可见，等于没人会知道（DBPoolExhausted / OutboxBacklogHigh 这类尤其致命）。
   alertmanager:
-    image: prom/alertmanager:v0.34.2
+    image: prom/alertmanager:v0.35.0
     profiles: ['monitoring']
     depends_on:
       # 必须等渲染完成：单文件 bind 的源不存在时 Docker 会把挂载点建成**目录**，
@@ -366,7 +366,7 @@ services:
   # deploy/grafana/provisioning 预置（QPS/P50/P95/错误率/outbox 积压/Pulsar lag）。
   # 默认只绑回环，公网暴露请自行经网关加鉴权。
   grafana:
-    image: grafana/grafana:13.3.0
+    image: grafana/grafana:13.3.1
     profiles: ['monitoring']
     depends_on:
       - prometheus
@@ -385,7 +385,7 @@ services:
 
   # Infisical 密钥管理：默认不启。独立 Redis 避免首次引导时重建主栈 Redis。
   infisical-redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     profiles: ['infisical']
     command: ['redis-server', '--save', '', '--appendonly', 'no']
     healthcheck:
@@ -417,7 +417,7 @@ services:
       - lkm
 
   infisical:
-    image: infisical/infisical:v0.167.6
+    image: infisical/infisical:v0.167.8
     profiles: ['infisical']
     depends_on:
       infisical-db:
@@ -519,7 +519,7 @@ services:
   # **不持久化**（默认 `--save "" --appendonly no`）：原先靠 AOF 兜底的租约/限流状态已改为
   # 不依赖持久化，重启即空属预期。
   redis:
-    image: ${LKM_REDIS_IMAGE:-redis:7-alpine}
+    image: ${LKM_REDIS_IMAGE:-redis:8-alpine}
     command: ${LKM_REDIS_COMMAND:-redis-server --save "" --appendonly no}
     volumes:
       - redis_data:/data
@@ -578,7 +578,7 @@ services:
   # 管理端口仅容器网络内暴露；凭据与 URL 由 .env 的 RABBITMQ_DEFAULT_PASS /
   # LKM_RABBITMQ_URL 提供（密码须 URL 编码且两处一致）。
   rabbitmq:
-    image: rabbitmq:4.2-management-alpine
+    image: rabbitmq:4.4-management-alpine
     hostname: rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-lkm}
