@@ -64,16 +64,21 @@ LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / 
 
 ### 方式一:一键脚本(推荐)
 
-根目录脚本安装依赖并启动 AUTH 进程与业务后端：
+根目录脚本安装依赖并启动 AUTH 进程、业务后端与桌面端：
 
 ```sh
-./dev.sh
-./dev.sh --no-run  # 仅安装后端依赖
+./dev.sh            # AUTH(:8001) + 后端(:8000) + 桌面端(flutter run)
+./dev.sh back       # 只启动 AUTH 与业务后端
+./dev.sh desktop    # 只启动桌面端
+./dev.sh --no-run   # 仅安装依赖
 ```
 
-Windows 使用 `.\dev.ps1`，安装了 pwsh 的 Linux/macOS 使用 `pwsh ./dev.ps1`。
-两者保留 `back` / `all` 参数，均启动同一套进程：AUTH 固定 `:8001`，业务后端通过
-`BACKEND_PORT` 覆盖、默认 `8000`；脚本会自动注入内部缝地址/令牌。缺少开发密钥时两个
+Windows 使用 `.\dev.ps1`，安装了 pwsh 的 Linux/macOS 使用 `pwsh ./dev.ps1`，参数与
+`dev.sh` 一致（也可写 `后端` / `桌面端`）。`all` 为默认模式。AUTH 固定 `:8001`，业务后端通过
+`BACKEND_PORT` 覆盖、默认 `8000`；桌面端设备按当前平台选择，可用 `DESKTOP_DEVICE`
+覆盖（如 `android`、`ohos`）。启动桌面端前脚本会安装 webf 依赖并构建小程序资源
+（`assets/webf/` 是生成物、不进 git，需要 Node.js 24+ 与 pnpm）。桌面端在脚本中非交互运行，
+需要热重载等交互键时请在 `LKM-desktop` 下先执行 `pnpm --dir webf build` 再运行 `flutter run`。脚本会自动注入内部缝地址/令牌。缺少开发密钥时两个
 脚本都会补齐（`scripts/prepare_dev_secrets.py`：RS256 密钥对生成到 `deploy/jwt/keys/`，
 TOTP/pepper 为每次运行临时生成），环境变量或后端 `.env` 已有配置时不改动。
 启动前会检查 PostgreSQL 连接并初始化业务库和认证库的 schema；`--no-run` 不检查数据库。
@@ -98,9 +103,11 @@ uv run uvicorn main:app --reload --port 8000
 
 # 桌面客户端（终端 2，从根目录开始）
 cd LKM-desktop
-./buildtools/setup-dev.sh --install  # 首次：检查/安装平台依赖并 flutter pub get
+./buildtools/setup-dev.sh --install  # 检查/安装平台依赖，安装 webf 依赖并构建小程序资源
 flutter run
 ```
+
+`assets/webf/` 是生成物、不进 git；改了 `webf/` 下源码后先执行 `pnpm --dir webf build`。
 
 本地后端使用 PostgreSQL，配置见 `LKM-service/.env.example`。
 

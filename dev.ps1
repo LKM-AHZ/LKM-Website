@@ -5,9 +5,11 @@
 #  原 dev.bat 的参数解析已并入本文件, 不再需要 .bat 包装。
 #
 #  用法:
-#    pwsh ./dev.ps1                 # 启动 AUTH 进程 (:8001) 与业务后端 (:8000)
-#    pwsh ./dev.ps1 back            # 同上; back/all 保留为等价写法
-#    pwsh ./dev.ps1 --no-run        # 仅安装后端依赖
+#    pwsh ./dev.ps1                 # 启动 AUTH(:8001)、业务后端(:8000) 与桌面端(flutter run)
+#    pwsh ./dev.ps1 all             # 同上
+#    pwsh ./dev.ps1 back            # 只启动 AUTH 与业务后端
+#    pwsh ./dev.ps1 desktop         # 只启动桌面端 (也可写 桌面/桌面端)
+#    pwsh ./dev.ps1 --no-run        # 仅安装依赖
 #    pwsh ./dev.ps1 back --no-run   # 仅安装后端依赖
 #    pwsh ./dev.ps1 --help          # 显示用法
 #
@@ -30,6 +32,7 @@ try {
 $RootDir    = $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($RootDir)) { $RootDir = (Get-Location).Path }
 $BackDir    = Join-Path $RootDir "LKM-service"
+$DeskDir    = Join-Path $RootDir "LKM-desktop"
 $ScriptsDir = Join-Path $RootDir "scripts"
 
 function Write-Log {
@@ -41,11 +44,13 @@ function Write-Log {
 function Show-Usage {
     [Console]::WriteLine("用法: dev.ps1 [模式] [--no-run]")
     [Console]::WriteLine("")
-    [Console]::WriteLine("  模式: back (默认) | all, 也可写 后端")
+    [Console]::WriteLine("  模式: all (默认) | back | desktop, 也可写 后端 / 桌面 / 桌面端")
     [Console]::WriteLine("")
-    [Console]::WriteLine("  dev.ps1                 # 启动 AUTH (:8001) 与后端 (:8000)")
-    [Console]::WriteLine("  dev.ps1 back            # 同上; back/all 等价")
-    [Console]::WriteLine("  dev.ps1 --no-run        # 仅安装后端依赖")
+    [Console]::WriteLine("  dev.ps1                 # 启动 AUTH (:8001)、后端 (:8000) 与桌面端")
+    [Console]::WriteLine("  dev.ps1 all             # 同上")
+    [Console]::WriteLine("  dev.ps1 back            # 只启动 AUTH 与后端")
+    [Console]::WriteLine("  dev.ps1 desktop         # 只启动桌面端")
+    [Console]::WriteLine("  dev.ps1 --no-run        # 仅安装依赖")
     [Console]::WriteLine("  dev.ps1 back --no-run   # 仅安装后端依赖")
     [Console]::WriteLine("")
     [Console]::WriteLine("  旧写法 -Mode back -NoRun 仍然可用。")
@@ -54,7 +59,7 @@ function Show-Usage {
 function Exit-UsageError {
     param([string]$Message)
     [Console]::Error.WriteLine("[lkm:error] " + $Message)
-    [Console]::Error.WriteLine("用法: dev.ps1 [all|back|后端] [--no-run] [--help]")
+    [Console]::Error.WriteLine("用法: dev.ps1 [all|back|desktop|后端|桌面] [--no-run] [--help]")
     exit 2
 }
 
@@ -62,11 +67,23 @@ function ConvertTo-Mode {
     # 位置参数与 -Mode 取值共用; 未知取值返回 $null。
     param([string]$Value)
     switch ($Value.ToLowerInvariant()) {
-        "all"   { return "all" }
-        "back"  { return "back" }
-        "后端"  { return "back" }
-        default { return $null }
+        "all"     { return "all" }
+        "back"    { return "back" }
+        "后端"    { return "back" }
+        "desktop" { return "desktop" }
+        "桌面"    { return "desktop" }
+        "桌面端"  { return "desktop" }
+        default   { return $null }
     }
+}
+
+function Get-DesktopDevice {
+    # 按平台选 flutter 设备; 可用 DESKTOP_DEVICE 覆盖 (如 android / ohos)。
+    if (-not [string]::IsNullOrWhiteSpace($env:DESKTOP_DEVICE)) { return $env:DESKTOP_DEVICE }
+    if ($env:OS -eq "Windows_NT") { return "windows" }
+    $uname = & uname -s 2>$null
+    if ($uname -eq "Darwin") { return "macos" }
+    return "linux"
 }
 
 function Require-Command {
@@ -96,11 +113,29 @@ function Install-Back {
     try { & uv sync } finally { Pop-Location }
 }
 
+function Install-Desk {
+    Write-Log "安装桌面端依赖 (flutter pub get) ..."
+    [Console]::WriteLine("")
+    Push-Location $DeskDir
+    try { & flutter pub get } finally { Pop-Location }
+    Write-Log "安装 webf 依赖 (pnpm install) ..."
+    Push-Location $DeskDir
+    try { & pnpm --dir webf install --frozen-lockfile --ignore-scripts } finally { Pop-Location }
+}
+
+# assets/webf/ 是生成物、不进 git, 启动前必须重建, 否则客户端缺少小程序资源。
+function Build-Webf {
+    Write-Log "构建 webf 资源 (pnpm --dir webf build) ..."
+    [Console]::WriteLine("")
+    Push-Location $DeskDir
+    try { & pnpm --dir webf build } finally { Pop-Location }
+}
+
 # ---------- 参数解析 ----------
 # 不用 param() 块: 旧 dev.bat 是以位置参数转发的(`back`、`--no-run`), 而 param() 会把
 # `--no-run` 当成未声明的命名参数直接报错退出。这里统一解析 $args, 同时兼容旧文档里的
 # `-Mode back -NoRun` 写法。
-$Mode     = "back"
+$Mode     = "all"
 $NoRun    = $false
 $ShowHelp = $false
 $ModeSeen = $false
@@ -150,23 +185,36 @@ Write-Log ("模式       : " + $Mode)
 
 # ---------- 前置检查 ----------
 # 先查命令和子模块, 再校验端口, 最后才装依赖: 配置写错时不必等 uv 跑完。
-if ($Mode -eq "all" -or $Mode -eq "back") {
+if ($Mode -ne "desktop") {
     Require-Command "uv"
     if (-not (Test-Path -LiteralPath (Join-Path $BackDir "pyproject.toml"))) {
         [Console]::Error.WriteLine("[lkm:error] 后端子模块未初始化: $BackDir")
         exit 1
     }
 }
+if ($Mode -ne "back") {
+    Require-Command "flutter"
+    Require-Command "node"
+    Require-Command "pnpm"
+    if (-not (Test-Path -LiteralPath (Join-Path $DeskDir "pubspec.yaml"))) {
+        [Console]::Error.WriteLine("[lkm:error] 桌面端子模块未初始化: $DeskDir")
+        exit 1
+    }
+}
 
 # --no-run 不监听端口, 与 dev.sh 一致跳过端口校验。
-if (-not $NoRun) {
+if (-not $NoRun -and $Mode -ne "desktop") {
     $BackPort = Get-Port "BACKEND_PORT" 8000
 }
 
 # ---------- 依赖 ----------
-if ($Mode -eq "all" -or $Mode -eq "back") {
+if ($Mode -ne "desktop") {
     Install-Back
     if ($LASTEXITCODE -ne 0) { [Console]::Error.WriteLine("[lkm:error] 后端依赖安装失败。"); exit 1 }
+}
+if ($Mode -ne "back") {
+    Install-Desk
+    if ($LASTEXITCODE -ne 0) { [Console]::Error.WriteLine("[lkm:error] 桌面端依赖安装失败。"); exit 1 }
 }
 [Console]::WriteLine()
 Write-Log "依赖就绪。"
@@ -176,7 +224,7 @@ if ($NoRun) { exit 0 }
 # 先确认能连上(错连/未启动时报错更直白), 再建 schema。
 # 注意: 这两步不要包进函数里取值 —— 原生命令的 stdout 会变成函数返回值,
 # 退出码判断就被日志行污染了(实测会让 $LASTEXITCODE 变成字符串数组)。
-if ($Mode -eq "back" -or $Mode -eq "all") {
+if ($Mode -ne "desktop") {
     $dbStatus = 0
     Push-Location $BackDir
     try {
@@ -196,35 +244,46 @@ if ($Mode -eq "back" -or $Mode -eq "all") {
 # ---------- 开发密钥与内部缝 ----------
 # 密钥补齐逻辑与 dev.sh 共用 scripts/prepare_dev_secrets.py: 已有环境变量或
 # LKM-service/.env 配置时不改动, 只为缺失项生成值 (JWT 密钥对写入 deploy/jwt/keys)。
-Write-Log "准备开发密钥（缺失时自动生成）..."
-$secretJson = $null
-Push-Location $BackDir
-try {
-    $secretJson = (& uv run python (Join-Path $ScriptsDir "prepare_dev_secrets.py") --json) -join "`n"
-    $secretStatus = $LASTEXITCODE
-} finally {
-    Pop-Location
-}
-if ($secretStatus -ne 0) {
-    [Console]::Error.WriteLine("[lkm:error] 生成开发密钥失败。")
-    exit 1
-}
-if (-not [string]::IsNullOrWhiteSpace($secretJson)) {
-    $secrets = $secretJson | ConvertFrom-Json
-    foreach ($name in $secrets.PSObject.Properties.Name) {
-        [Environment]::SetEnvironmentVariable($name, [string]$secrets.$name)
+if ($Mode -ne "desktop") {
+    Write-Log "准备开发密钥（缺失时自动生成）..."
+    $secretJson = $null
+    Push-Location $BackDir
+    try {
+        $secretJson = (& uv run python (Join-Path $ScriptsDir "prepare_dev_secrets.py") --json) -join "`n"
+        $secretStatus = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+    if ($secretStatus -ne 0) {
+        [Console]::Error.WriteLine("[lkm:error] 生成开发密钥失败。")
+        exit 1
+    }
+    if (-not [string]::IsNullOrWhiteSpace($secretJson)) {
+        $secrets = $secretJson | ConvertFrom-Json
+        foreach ($name in $secrets.PSObject.Properties.Name) {
+            [Environment]::SetEnvironmentVariable($name, [string]$secrets.$name)
+        }
+    }
+
+    # 双形态退役后 auth 是后端的硬依赖: 注入内部缝地址/令牌 (与 dev.sh 默认值一致)。
+    if ([string]::IsNullOrWhiteSpace($env:LKM_AUTH_HTTP_URL)) {
+        $env:LKM_AUTH_HTTP_URL = "http://127.0.0.1:8001"
+    }
+    if ([string]::IsNullOrWhiteSpace($env:LKM_AUTH_HTTP_TOKEN)) {
+        $env:LKM_AUTH_HTTP_TOKEN = "dev-internal-auth-token-change-me-32chars"
     }
 }
 
-# 双形态退役后 auth 是后端的硬依赖: 注入内部缝地址/令牌 (与 dev.sh 默认值一致)。
-if ([string]::IsNullOrWhiteSpace($env:LKM_AUTH_HTTP_URL)) {
-    $env:LKM_AUTH_HTTP_URL = "http://127.0.0.1:8001"
-}
-if ([string]::IsNullOrWhiteSpace($env:LKM_AUTH_HTTP_TOKEN)) {
-    $env:LKM_AUTH_HTTP_TOKEN = "dev-internal-auth-token-change-me-32chars"
+# ---------- webf 资源 ----------
+if ($Mode -ne "back") {
+    Build-Webf
+    if ($LASTEXITCODE -ne 0) {
+        [Console]::Error.WriteLine("[lkm:error] webf 资源构建失败。")
+        exit 1
+    }
 }
 
-# ---------- 启动两个进程 ----------
+# ---------- 启动进程 ----------
 # 任一进程退出即整体退出并沿用其退出码, 与 dev.sh 一致。
 # Windows 用 taskkill /T 杀进程树; Unix 递归 pgrep。uv 若先于 python 退出,
 # 孙进程回收是尽力而为 (Ctrl+C 时同一控制台进程组已收到信号)。
@@ -241,31 +300,48 @@ function Stop-ProcessTree {
     Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
 }
 
-$Uv = (Get-Command "uv").Source
-if ([string]::IsNullOrWhiteSpace($Uv)) { $Uv = "uv" }
-$AuthProc = $null
-$BackProc = $null
+$Procs = @()
 $ExitCode = 0
 try {
-    Write-Log "启动 AUTH 进程: python -m auth.main (8001)"
-    $AuthProc = Start-Process -FilePath $Uv -ArgumentList @("run", "python", "-m", "auth.main") `
-        -WorkingDirectory $BackDir -PassThru -NoNewWindow
-    Write-Log "启动后端: uvicorn main:app --reload --port $BackPort"
-    [Console]::WriteLine()
-    $BackProc = Start-Process -FilePath $Uv `
-        -ArgumentList @("run", "uvicorn", "main:app", "--reload", "--port", "$BackPort") `
-        -WorkingDirectory $BackDir -PassThru -NoNewWindow
+    if ($Mode -ne "desktop") {
+        $Uv = (Get-Command "uv").Source
+        if ([string]::IsNullOrWhiteSpace($Uv)) { $Uv = "uv" }
+        Write-Log "启动 AUTH 进程: python -m auth.main (8001)"
+        $Procs += Start-Process -FilePath $Uv -ArgumentList @("run", "python", "-m", "auth.main") `
+            -WorkingDirectory $BackDir -PassThru -NoNewWindow
+        Write-Log "启动后端: uvicorn main:app --reload --port $BackPort"
+        [Console]::WriteLine()
+        $Procs += Start-Process -FilePath $Uv `
+            -ArgumentList @("run", "uvicorn", "main:app", "--reload", "--port", "$BackPort") `
+            -WorkingDirectory $BackDir -PassThru -NoNewWindow
+    }
+    if ($Mode -ne "back") {
+        $device = Get-DesktopDevice
+        Write-Log ("启动桌面端: flutter run -d " + $device)
+        [Console]::WriteLine()
+        if ($env:OS -eq "Windows_NT") {
+            # flutter 是 .bat: Start-Process 不能直接执行, 经 cmd.exe 转发。
+            $Procs += Start-Process -FilePath "cmd.exe" `
+                -ArgumentList @("/c", "flutter", "run", "-d", $device) `
+                -WorkingDirectory $DeskDir -PassThru -NoNewWindow
+        }
+        else {
+            $Procs += Start-Process -FilePath "flutter" `
+                -ArgumentList @("run", "-d", $device) `
+                -WorkingDirectory $DeskDir -PassThru -NoNewWindow
+        }
+    }
 
-    while (-not $AuthProc.HasExited -and -not $BackProc.HasExited) {
+    while ($true) {
+        $done = @($Procs | Where-Object { $_.HasExited })
+        if ($done.Count -gt 0) { $ExitCode = $done[0].ExitCode; break }
         Start-Sleep -Milliseconds 500
     }
-    if ($BackProc.HasExited) { $ExitCode = $BackProc.ExitCode } else { $ExitCode = $AuthProc.ExitCode }
 }
 finally {
-    $running = @($AuthProc, $BackProc) | Where-Object { $null -ne $_ -and -not $_.HasExited }
+    $running = @($Procs | Where-Object { -not $_.HasExited })
     if ($running.Count -gt 0) { Write-Log "收到退出信号，正在停止..." }
-    foreach ($proc in @($AuthProc, $BackProc)) {
-        if ($null -eq $proc) { continue }
+    foreach ($proc in $Procs) {
         if (-not $proc.HasExited) { Stop-ProcessTree -ProcessId $proc.Id }
         $proc.WaitForExit(5000) | Out-Null
     }

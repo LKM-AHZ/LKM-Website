@@ -37,7 +37,7 @@ git submodule status
 
 ### 环境要求
 
-- Flutter/Dart（版本与命令见 `LKM-desktop/README.md`）；Bot 面板使用 Node.js 24+ 和其声明的 pnpm 版本
+- Flutter/Dart（版本与命令见 `LKM-desktop/README.md`）；Node.js 24+ 与 pnpm（Bot 面板与桌面端内置小程序）
 - Python `>=3.13`、[uv](https://docs.astral.sh/uv/)
 - PostgreSQL（后端必需；先启动并创建 `lkm` 数据库，连接参数见 `LKM-service/.env.example`）
 - Git
@@ -46,19 +46,21 @@ git submodule status
 ### 本地开发
 
 ```sh
-# Linux / macOS：安装依赖并启动 AUTH(:8001) + 后端(:8000)
+# Linux / macOS：安装依赖并启动 AUTH(:8001) + 后端(:8000) + 桌面端(flutter run)
 ./dev.sh
-./dev.sh --no-run  # 仅安装后端依赖
+./dev.sh back       # 只启动后端服务
+./dev.sh desktop    # 只启动桌面端
+./dev.sh --no-run   # 仅安装依赖
 
-# 桌面客户端（首次：检查/安装平台依赖并 flutter pub get）
-cd LKM-desktop
-./buildtools/setup-dev.sh --install
-flutter run
+# 首次缺少 Linux 平台构建依赖时（安装系统包并 flutter pub get）
+cd LKM-desktop && ./buildtools/setup-dev.sh --install
 ```
 
-Windows 使用 `.\dev.ps1`，安装了 pwsh 的 Linux/macOS 使用 `pwsh ./dev.ps1`；
-`--no-run` 仅安装后端依赖。脚本兼容 `back` / `all` 参数，均启动 AUTH 与后端两个进程；
-缺少开发密钥时两端都会自动生成。
+Windows 使用 `.\dev.ps1`，安装了 pwsh 的 Linux/macOS 使用 `pwsh ./dev.ps1`，
+参数与 `dev.sh` 一致。脚本会为后端补齐缺少的开发密钥，并在启动桌面端前安装、构建
+webf 小程序资源（`assets/webf/` 不进 git）。桌面端设备默认按当前平台选择，可用
+`DESKTOP_DEVICE` 覆盖。桌面端以非交互方式运行，需要热重载时请单独在
+`LKM-desktop` 下执行 `flutter run`（先运行 `pnpm --dir webf build`）。
 
 后端 API 地址为 `http://127.0.0.1:8000`，Swagger UI 为 `http://127.0.0.1:8000/docs`。
 桌面客户端在设置中配置服务地址。

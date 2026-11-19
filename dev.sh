@@ -3,16 +3,20 @@
 # LKM 统一开发服务器启动脚本
 #
 # 用法：
-#   ./dev.sh          # 启动 AUTH 进程(:8001)与业务后端(:8000)
-#   ./dev.sh back     # 同上；back/all 保留为等价写法
-#   ./dev.sh --no-run  # 仅安装后端依赖，不启动服务
-#   ./dev.sh back --no-run  # 仅安装后端依赖
+#   ./dev.sh            # 启动 AUTH(:8001)、业务后端(:8000) 与桌面端(flutter run)
+#   ./dev.sh all        # 同上
+#   ./dev.sh back       # 只启动 AUTH 与业务后端
+#   ./dev.sh desktop    # 只启动桌面端（桌面/桌面端）
+#   ./dev.sh --no-run   # 只安装依赖，不启动服务
+#   ./dev.sh back --no-run  # 只安装后端依赖
+#   ./dev.sh desktop --no-run  # 只安装桌面端依赖
 #
 set -euo pipefail
 
 # 脚本所在目录（根目录）与各子项目路径
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$ROOT_DIR/LKM-service"
+DESKTOP_DIR="$ROOT_DIR/LKM-desktop"
 
 # 默认端口（都可覆盖：与既有服务撞端口时按需换）
 BACKEND_PORT="${BACKEND_PORT:-8000}"
@@ -70,6 +74,49 @@ run_auth() {
   (cd "$BACKEND_DIR" && uv run python -m auth.main)
 }
 
+# 桌面端设备：按当前平台选，可用 DESKTOP_DEVICE 覆盖。
+desktop_device() {
+  if [ -n "${DESKTOP_DEVICE:-}" ]; then
+    echo "$DESKTOP_DEVICE"
+    return
+  fi
+  case "$(uname -s)" in
+    Darwin*) echo macos ;;
+    MINGW*|MSYS*|CYGWIN*) echo windows ;;
+    *) echo linux ;;
+  esac
+}
+
+install_desktop_deps() {
+  if [ ! -f "$DESKTOP_DIR/pubspec.yaml" ]; then
+    error "未找到 $DESKTOP_DIR/pubspec.yaml（子模块未初始化？）。"
+    return 1
+  fi
+  log "安装桌面端依赖 (flutter pub get)..."
+  (cd "$DESKTOP_DIR" && flutter pub get)
+  log "安装 webf 依赖 (pnpm install)..."
+  (cd "$DESKTOP_DIR" && pnpm --dir webf install --frozen-lockfile --ignore-scripts)
+}
+
+# assets/webf/ 是生成物、不进 git，启动前必须重建，否则客户端缺少小程序资源。
+build_webf() {
+  log "构建 webf 资源 (pnpm --dir webf build)..."
+  (cd "$DESKTOP_DIR" && pnpm --dir webf build)
+}
+
+run_desktop() {
+  if [ ! -d "$DESKTOP_DIR" ]; then
+    error "目录不存在: $DESKTOP_DIR（子模块未初始化？）"
+    return 1
+  fi
+  local device
+  device="$(desktop_device)"
+  log "启动桌面端: flutter run -d $device"
+  # stdin 接 /dev/null：后台进程组读终端会被 SIGTTIN 挂起且无法交互；
+  # 需要热重载等交互键时请单独在 LKM-desktop 下运行 flutter run。
+  (cd "$DESKTOP_DIR" && flutter run -d "$device" </dev/null)
+}
+
 # 缺失的开发密钥自动补齐；已有环境变量/.env 配置时不改动。
 prepare_dev_secrets() {
   local output
@@ -81,39 +128,55 @@ prepare_dev_secrets() {
   [ -z "$output" ] || eval "$output"
 }
 
-# 未知参数不能悄悄启动服务；双形态退役后 auth 是后端的硬依赖，
-# back 与 all 都启动同一套进程（AUTH + backend）。
+# 未知参数不能悄悄启动服务。双形态退役后 auth 是后端的硬依赖；
+# 无参默认 all = 后端（AUTH + backend）+ 桌面端。
+MODE="all"
 MODE_SEEN=false
 NO_RUN=false
 for arg in "$@"; do
   case "$arg" in
-    all|back|后端)
+    all|back|desktop|后端|桌面|桌面端)
       if [ "$MODE_SEEN" = true ]; then
         error "只能指定一个启动模式。"
         exit 2
       fi
       MODE_SEEN=true
+      case "$arg" in
+        back|后端) MODE="back" ;;
+        desktop|桌面|桌面端) MODE="desktop" ;;
+        *) MODE="all" ;;
+      esac
       ;;
     --no-run) NO_RUN=true ;;
-    *) error "未知参数: $arg（用法: ./dev.sh [all|back] [--no-run]）"; exit 2 ;;
+    *) error "未知参数: $arg（用法: ./dev.sh [all|back|desktop] [--no-run]）"; exit 2 ;;
   esac
 done
 
-require_cmd uv
-if [ "$NO_RUN" = false ]; then
-  validate_port BACKEND_PORT "$BACKEND_PORT"
+if [ "$MODE" != "desktop" ]; then
+  require_cmd uv
+  if [ "$NO_RUN" = false ]; then
+    validate_port BACKEND_PORT "$BACKEND_PORT"
+  fi
+fi
+if [ "$MODE" != "back" ]; then
+  require_cmd flutter
+  require_cmd node
+  require_cmd pnpm
 fi
 
-install_deps
+if [ "$MODE" != "desktop" ]; then install_deps; fi
+if [ "$MODE" != "back" ]; then install_desktop_deps; fi
 if [ "$NO_RUN" = true ]; then
   log "依赖安装完成。"
   exit 0
 fi
 
-(cd "$BACKEND_DIR" && uv run python "$ROOT_DIR/scripts/check_dev_db.py")
-log "准备业务库与认证库 schema..."
-(cd "$BACKEND_DIR" && uv run python "$ROOT_DIR/scripts/prepare_dev_db.py")
-prepare_dev_secrets
+if [ "$MODE" != "desktop" ]; then
+  (cd "$BACKEND_DIR" && uv run python "$ROOT_DIR/scripts/check_dev_db.py")
+  log "准备业务库与认证库 schema..."
+  (cd "$BACKEND_DIR" && uv run python "$ROOT_DIR/scripts/prepare_dev_db.py")
+  prepare_dev_secrets
+fi
 
 # 每个服务独占进程组，退出时连 uv/python 等孙进程一起停止，
 # 避免 Ctrl+C 后留下监听端口的子进程。
@@ -147,8 +210,14 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 trap cleanup EXIT
 
-run_auth & pids+=("$!")
-run_backend & pids+=("$!")
+if [ "$MODE" != "desktop" ]; then
+  run_auth & pids+=("$!")
+  run_backend & pids+=("$!")
+fi
+if [ "$MODE" != "back" ]; then
+  build_webf
+  run_desktop & pids+=("$!")
+fi
 
 # 无参 wait 永远返回 0；轮询首个退出者并保留其退出码。
 # macOS 自带 Bash 3.2 不支持 wait -n。
