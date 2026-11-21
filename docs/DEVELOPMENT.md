@@ -28,7 +28,7 @@ LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / 
 ├── dev.ps1                   # 本地一键启动脚本(Windows PowerShell 与 pwsh 通用)
 ├── dev.sh                    # 本地一键启动脚本(Linux / macOS,参数与 dev.ps1 一致)
 ├── .gitignore                # 忽略 .env、记忆目录等敏感/本地文件
-├── LKM-desktop/              # Flutter 桌面客户端与 Vue/WebF StarHope
+├── LKM-desktop/              # Flutter 桌面客户端与 Vue/WebF 内置小程序
 ├── LKM-service/              # 后端(FastAPI,REST /api/v1 + GraphQL)
 ├── LKM-bot/                  # 机器人(bot)
 ```
@@ -243,7 +243,7 @@ uv run python scripts/check_raw_sql.py # 裸 SQL 门禁:业务查询必须走 OR
 
 ## 五、桌面与 Bot 面板开发
 
-桌面客户端在 `LKM-desktop/` 开发，复用同仓库的编辑器与原生 UI。StarHope 源码位于
+桌面客户端在 `LKM-desktop/` 开发，复用同仓库的编辑器与原生 UI。内置小程序源码位于
 `webf/`，其构建资源随桌面客户端打包。Bot 面板位于 `LKM-bot/dashboard/`，使用自己的
 锁文件，构建到 `bot/dashboard/dist/` 并由 bot 进程服务。
 

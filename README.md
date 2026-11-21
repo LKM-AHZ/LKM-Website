@@ -6,7 +6,7 @@ LKM（理科迷）的本地开发与部署编排仓库，包含 Flutter 桌面�
 
 | 目录                    | 技术栈                                           |                       默认端口 | 用途                                        |
 | ----------------------- | ------------------------------------------------ | -----------------------------: | ------------------------------------------- |
-| `LKM-desktop/` | Flutter、Dart、Vue/WebF | — | 桌面客户端与内置 StarHope |
+| `LKM-desktop/` | Flutter、Dart、Vue/WebF | — | 桌面客户端与内置小程序 |
 | `LKM-service/`          | FastAPI、SQLAlchemy、PostgreSQL、Pulsar/RabbitMQ |                `8000` / `8001` | 业务 API、AUTH 服务及后台 worker            |
 | `LKM-bot/`              | Python、AstrBot fork                             | `6185`（仅经网关 `/bot/`） | 社区机器人面板，可选组件（`--profile bot`） |
 | `deploy/`               | APISIX、Kustomize、可观测性配置                  |                   `80` / `443` | Compose/Kubernetes 部署资产                 |

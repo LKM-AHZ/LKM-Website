@@ -27,7 +27,7 @@
 
 ### 子项目文档
 
-- 桌面客户端：`LKM-desktop/README.md` 说明 Flutter 开发；StarHope 的源码、锁文件、测试和内置资源均在同仓库的 `webf/` 中。
+- 桌面客户端：`LKM-desktop/README.md` 说明 Flutter 开发；内置小程序的源码、锁文件、测试和资源均在同仓库的 `webf/` 中。
 - 后端：`README.md` 讲服务边界、运行、迁移与验证；接口字段以运行时 OpenAPI 为准。
 - 社区机器人：上游 AstrBot 文档在 `LKM-bot/docs/`（平台接入、provider 配置等）；**部署**以
   `docs/DEPLOYMENT.md` 为准——bot 自带的 `compose.yml`/`k8s/` 示例已删除，收编进根编排，上游文档
@@ -47,7 +47,7 @@
 
 | 修改内容 | 从哪里进入 | 代码与文档归属 |
 |---|---|---|
-| 桌面页面、社区交互、编辑器、StarHope | `LKM-desktop/lib/`、`LKM-desktop/webf/` | 桌面子仓库；[README](../LKM-desktop/README.md) |
+| 桌面页面、社区交互、编辑器、内置小程序 | `LKM-desktop/lib/`、`LKM-desktop/webf/` | 桌面子仓库；[README](../LKM-desktop/README.md) |
 | API、认证、异步任务 | `LKM-service/main.py` → `boot/backend.py` → `app/`、`auth/`、`core/` | 后端子仓库；[结构说明](../LKM-service/README.md#项目结构) |
 | Bot 消息、管理面板、社区 SSO | `LKM-bot/main.py` → `bot/core/initial_loader.py`；WebUI 在 `LKM-bot/dashboard/` | Bot 子仓库；[开发导航](../LKM-bot/README.md#代码结构与开发入口) |
 | 统一启动、网关、容器、跨项目契约 | `dev.sh` / `dev.ps1`、`docker-compose.yml`、`deploy/`、`scripts/` | 根仓库；本目录保存跨项目架构、开发和部署文档 |
