@@ -205,6 +205,8 @@ if ($Mode -ne "back") {
 # --no-run 不监听端口, 与 dev.sh 一致跳过端口校验。
 if (-not $NoRun -and $Mode -ne "desktop") {
     $BackPort = Get-Port "BACKEND_PORT" 8000
+    # 本地网关: /api/v1/auth/* -> :8001, 其余 -> BackPort (生产由 APISIX 承担)
+    $GatewayPort = Get-Port "GATEWAY_PORT" 8002
 }
 
 # ---------- 依赖 ----------
@@ -272,6 +274,10 @@ if ($Mode -ne "desktop") {
     if ([string]::IsNullOrWhiteSpace($env:LKM_AUTH_HTTP_TOKEN)) {
         $env:LKM_AUTH_HTTP_TOKEN = "dev-internal-auth-token-change-me-32chars"
     }
+    # 桌面端 Web 调试（flutter run -d web-server）的跨域来源；空列表会拒掉浏览器请求。
+    if ([string]::IsNullOrWhiteSpace($env:LKM_CORS_ORIGINS)) {
+        $env:LKM_CORS_ORIGINS = "http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081"
+    }
 }
 
 # ---------- webf 资源 ----------
@@ -314,20 +320,29 @@ try {
         $Procs += Start-Process -FilePath $Uv `
             -ArgumentList @("run", "uvicorn", "main:app", "--reload", "--port", "$BackPort") `
             -WorkingDirectory $BackDir -PassThru -NoNewWindow
+        Write-Log "启动本地网关: /api/v1/auth -> :8001，其余 -> :$BackPort（:$GatewayPort）"
+        $Procs += Start-Process -FilePath "python" `
+            -ArgumentList @((Join-Path $ScriptsDir "dev_gateway.py"), "--listen", "$GatewayPort", "--backend-port", "$BackPort", "--auth-port", "8001") `
+            -WorkingDirectory $RootDir -PassThru -NoNewWindow
     }
     if ($Mode -ne "back") {
         $device = Get-DesktopDevice
         Write-Log ("启动桌面端: flutter run -d " + $device)
         [Console]::WriteLine()
+        $flutterArgs = @("run", "-d", $device)
+        # 后端同起时客户端指向本地网关, 否则 /api/v1/auth/* 会 404。
+        if ($Mode -ne "desktop") {
+            $flutterArgs += "--dart-define=LKM_SERVER_URL=http://127.0.0.1:$GatewayPort"
+        }
         if ($env:OS -eq "Windows_NT") {
             # flutter 是 .bat: Start-Process 不能直接执行, 经 cmd.exe 转发。
             $Procs += Start-Process -FilePath "cmd.exe" `
-                -ArgumentList @("/c", "flutter", "run", "-d", $device) `
+                -ArgumentList (@("/c", "flutter") + $flutterArgs) `
                 -WorkingDirectory $DeskDir -PassThru -NoNewWindow
         }
         else {
             $Procs += Start-Process -FilePath "flutter" `
-                -ArgumentList @("run", "-d", $device) `
+                -ArgumentList $flutterArgs `
                 -WorkingDirectory $DeskDir -PassThru -NoNewWindow
         }
     }

@@ -20,11 +20,16 @@ DESKTOP_DIR="$ROOT_DIR/LKM-desktop"
 
 # 默认端口（都可覆盖：与既有服务撞端口时按需换）
 BACKEND_PORT="${BACKEND_PORT:-8000}"
+# 本地网关：/api/v1/auth/* -> :8001，其余 -> BACKEND_PORT（生产由 APISIX 承担）
+GATEWAY_PORT="${GATEWAY_PORT:-8002}"
 
 # 双形态退役后认证只由独立 AUTH 进程提供：本地开发同时起 auth（固定 8001，见 auth/main.py）
 # 并通过内部缝地址/令牌把 backend 指过去。
 export LKM_AUTH_HTTP_URL="${LKM_AUTH_HTTP_URL:-http://127.0.0.1:8001}"
 export LKM_AUTH_HTTP_TOKEN="${LKM_AUTH_HTTP_TOKEN:-dev-internal-auth-token-change-me-32chars}"
+
+# 桌面端 Web 调试（flutter run -d web-server）的跨域来源；空列表会拒掉浏览器请求。
+export LKM_CORS_ORIGINS="${LKM_CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081}"
 
 log() {
   echo -e "\033[1;36m[lkm]\033[0m $*"
@@ -74,6 +79,14 @@ run_auth() {
   (cd "$BACKEND_DIR" && uv run python -m auth.main)
 }
 
+# 客户端只配一个 LKM 地址，而 /api/v1/auth/* 在独立 AUTH 进程里；本地没有
+# APISIX，用这个薄网关把前缀分流，客户端指向 :$GATEWAY_PORT 即可登录。
+run_gateway() {
+  log "启动本地网关: /api/v1/auth -> :8001，其余 -> :$BACKEND_PORT（:$GATEWAY_PORT）"
+  python3 "$ROOT_DIR/scripts/dev_gateway.py" \
+    --listen "$GATEWAY_PORT" --backend-port "$BACKEND_PORT" --auth-port 8001
+}
+
 # 桌面端设备：按当前平台选，可用 DESKTOP_DEVICE 覆盖。
 desktop_device() {
   if [ -n "${DESKTOP_DEVICE:-}" ]; then
@@ -114,7 +127,13 @@ run_desktop() {
   log "启动桌面端: flutter run -d $device"
   # stdin 接 /dev/null：后台进程组读终端会被 SIGTTIN 挂起且无法交互；
   # 需要热重载等交互键时请单独在 LKM-desktop 下运行 flutter run。
-  (cd "$DESKTOP_DIR" && flutter run -d "$device" </dev/null)
+  # 后端同起时客户端指向本地网关，否则 /api/v1/auth/* 会 404。
+  if [ "$MODE" != "desktop" ]; then
+    (cd "$DESKTOP_DIR" && flutter run -d "$device" \
+      --dart-define=LKM_SERVER_URL="http://127.0.0.1:$GATEWAY_PORT" </dev/null)
+  else
+    (cd "$DESKTOP_DIR" && flutter run -d "$device" </dev/null)
+  fi
 }
 
 # 缺失的开发密钥自动补齐；已有环境变量/.env 配置时不改动。
@@ -154,8 +173,10 @@ done
 
 if [ "$MODE" != "desktop" ]; then
   require_cmd uv
+  require_cmd python3
   if [ "$NO_RUN" = false ]; then
     validate_port BACKEND_PORT "$BACKEND_PORT"
+    validate_port GATEWAY_PORT "$GATEWAY_PORT"
   fi
 fi
 if [ "$MODE" != "back" ]; then
@@ -213,6 +234,7 @@ trap cleanup EXIT
 if [ "$MODE" != "desktop" ]; then
   run_auth & pids+=("$!")
   run_backend & pids+=("$!")
+  run_gateway & pids+=("$!")
 fi
 if [ "$MODE" != "back" ]; then
   build_webf

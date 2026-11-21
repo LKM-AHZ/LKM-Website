@@ -75,7 +75,9 @@ LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / 
 
 Windows 使用 `.\dev.ps1`，安装了 pwsh 的 Linux/macOS 使用 `pwsh ./dev.ps1`，参数与
 `dev.sh` 一致（也可写 `后端` / `桌面端`）。`all` 为默认模式。AUTH 固定 `:8001`，业务后端通过
-`BACKEND_PORT` 覆盖、默认 `8000`；桌面端设备按当前平台选择，可用 `DESKTOP_DEVICE`
+`BACKEND_PORT` 覆盖、默认 `8000`；脚本还会起本地网关 `GATEWAY_PORT`（默认 `8002`），把
+`/api/v1/auth/*` 转给 AUTH、其余转给业务后端——客户端只有一个服务地址，浏览器/桌面端
+指向 `:8002` 才能登录（生产由 APISIX 承担同样的分流）；桌面端设备按当前平台选择，可用 `DESKTOP_DEVICE`
 覆盖（如 `android`、`ohos`）。启动桌面端前脚本会安装 webf 依赖并构建小程序资源
 （`assets/webf/` 是生成物、不进 git，需要 Node.js 24+ 与 pnpm）。桌面端在脚本中非交互运行，
 需要热重载等交互键时请在 `LKM-desktop` 下先执行 `pnpm --dir webf build` 再运行 `flutter run`。脚本会自动注入内部缝地址/令牌。缺少开发密钥时两个

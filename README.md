@@ -58,7 +58,8 @@ cd LKM-desktop && ./buildtools/setup-dev.sh --install
 
 Windows 使用 `.\dev.ps1`，安装了 pwsh 的 Linux/macOS 使用 `pwsh ./dev.ps1`，
 参数与 `dev.sh` 一致。脚本会为后端补齐缺少的开发密钥，并在启动桌面端前安装、构建
-webf 小程序资源（`assets/webf/` 不进 git）。桌面端设备默认按当前平台选择，可用
+webf 小程序资源（`assets/webf/` 不进 git）。脚本同时起本地网关 `:8002`
+（`/api/v1/auth/*` → AUTH `:8001`，其余 → 后端），桌面端与浏览器开发把服务地址指向它。桌面端设备默认按当前平台选择，可用
 `DESKTOP_DEVICE` 覆盖。桌面端以非交互方式运行，需要热重载时请单独在
 `LKM-desktop` 下执行 `flutter run`（先运行 `pnpm --dir webf build`）。
 
