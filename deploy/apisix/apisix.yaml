@@ -230,7 +230,7 @@ routes:
         allow_origins: "__COMMUNITY_ORIGINS__"
         allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
         allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
-        expose_headers: "X-Request-ID"
+        expose_headers: "X-Request-ID,X-Total"
         max_age: 3600
         allow_credential: true
     upstream:
@@ -259,7 +259,7 @@ routes:
         allow_origins: "__COMMUNITY_ORIGINS__"
         allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
         allow_headers: "Authorization,Content-Type,Accept,Origin,X-Request-ID,X-Requested-With,Cache-Control,Pragma"
-        expose_headers: "X-Request-ID"
+        expose_headers: "X-Request-ID,X-Total"
         max_age: 3600
         allow_credential: true
     upstream:
