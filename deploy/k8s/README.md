@@ -1,265 +1,168 @@
-# LKM 全栈 k8s 清单（Kustomize）
+# LKM Kubernetes 部署（Kustomize）
 
-把 `docker-compose.yml` 描述的整栈（网关 + 应用层 + 有状态中间件）搬到 Kubernetes。
-清单与 compose **逐服务对应**，不是另一套架构；差异只在「compose 有而 k8s 没有」的机制上，
-每一处都在下面「与 compose 的差异」列明。
+> 配置核对：2026-11-28。清单首先用于 kind 单节点验证；生产需处理下面的存储、
+> 消息持久化、证书及组件差异。基础配置与密钥说明见 [部署手册](../../docs/DEPLOYMENT.md)。
 
-> 本文档假定读者已了解根级 [部署说明](../../docs/DEPLOYMENT.md)。当前清单首先服务于 kind
-> 单节点验收；生产使用前必须逐项处理本文“已知限制”，不能把 kind overlay 原样视作生产方案。
+## 当前验证状态
+
+2026-11-28 本轮静态检查中，kind overlay 渲染失败：应用清单
+[`auth.yaml`](base/app/auth.yaml)、[`backend.yaml`](base/app/backend.yaml) 与
+[`workers.yaml`](base/app/workers.yaml) 的同一容器映射内重复声明 `resources`。
+修复这些重复键并重新渲染通过后，才能执行下面的部署流程；本轮未连接集群或执行 apply。
 
 ## 前置条件
 
-- `kubectl` 与集群版本兼容；客户端支持 Kustomize。
-- 本地验收安装 kind，且宿主机 `80/443` 未被其他服务占用。
-- 已构建并让集群可拉取 `lkm-service` 镜像；
-  启用 bot 时还需要 `lkm-bot`（`docker compose --profile bot build lkmbot`）。
-- 本地开发可从根目录 `.env` 生成 Secret；生产可按根级部署说明用 Infisical CLI 注入同名环境变量。
-- 生产集群已准备 StorageClass、负载均衡、DNS、正式证书和备份方案。
+- kubectl 与集群版本兼容，支持 Kustomize；本地验证另需 kind。
+- 集群可拉取后端镜像；启用 Bot 时另准备 Bot 镜像。
+- 配齐 `.env.example` 中的必填项并生成 RS256 密钥；生产可由 Infisical CLI 注入。
+- 生产准备 StorageClass、镜像仓凭据、负载均衡、DNS、受信证书和备份方案。
 
-## 目录
+## 目录与配置来源
 
-```
-deploy/k8s/
-├── gen-secret.sh              # 从注入环境变量或根 .env 派生 Secret（不落盘、不进 git）
-├── gen-tls.sh                 # 生成网关 TLS Secret（自签；生产可导入正式证书）
-├── base/                      # 全栈清单（namespace lkm）
-│   ├── kustomization.yaml     # 用 configMapGenerator 直接引用仓库既有部署资产
-│   ├── app-config.yaml        # 非敏感配置（三张表：公共 / AUTH 库 / 分析+编排）
-│   ├── infra/                 # postgres redis pulsar minio clickhouse vector otel prefect
-│   ├── app/                   # backend auth workers(×10) lkmbot(可选,replicas 0)
-│   └── gateway/               # apisix(+render init/sidecar) acme-webroot 网关配置
-└── overlays/
-    ├── kind/                  # 本地单节点验收（NodePort + 站点身份）
-    └── prod/                  # 生产模板（域名 / LB / 站点身份）
-```
+| 路径 | 用途 |
+|---|---|
+| `base/` | 命名空间 lkm、配置、应用、基础设施与网关 |
+| `overlays/kind/` | 本地 NodePort 与站点身份，含 setup/load-image 脚本 |
+| `overlays/prod/` | 生产域名、站点身份、TLS 与 LoadBalancer 模板 |
+| `overlays/rabbitmq/` | 继承 prod，以 RabbitMQ 替换 Pulsar |
+| `components/redis-dragonfly/` | Redis 的 Dragonfly 替换组件 |
+| `signoz/` | 可选 SigNoz 清单 |
+| `gen-secret.sh`、`gen-tls.sh` | 应用 Secret 与网关证书 Secret |
 
-## 单一来源：不复制仓库里的部署资产
+`base/kustomization.yaml` 的 configMapGenerator 直接引用根 `deploy/` 中的
+APISIX 模板、initdb、Tinode、ClickHouse、OTel、监控及告警配置。Vector 使用单独的
+CRI 日志 source，输出与持久缓冲语义见 `base/infra/vector.toml`。
 
-`configMapGenerator` 直接引用 **base 目录之外**的既有文件，compose 与 k8s 共用同一份：
-
-| 资产 | 来源文件 | 谁在用 |
-|---|---|---|
-| APISIX 路由模板 | `deploy/apisix/apisix.yaml` | compose 与 k8s |
-| APISIX 自身配置模板 | `deploy/apisix/config.yaml` | 同上 |
-| 渲染脚本 | `deploy/apisix/render.sh` | 同上 |
-| ACME responder 配置 | `deploy/apisix/acme-webroot.conf` | 同上 |
-| PostgreSQL 首启脚本 | `deploy/initdb/01-auth-db.sh` | 同上 |
-| ClickHouse DDL | `deploy/clickhouse/init.sql` | 同上 |
-| OTel Collector 配置 | `deploy/otel/otel-collector.yaml` | 同上 |
-
-因此构建时**必须**放开 kustomize 的加载限制。注意 `kubectl apply -k` **不接受**
-该标志（只有 `kubectl kustomize` 接受），所以统一走「先渲染、再 apply」：
+引用位于 base 目录外，渲染必须开启 `LoadRestrictionsNone`。
+`kubectl apply -k` 不接受此参数，应先渲染，再 apply：
 
 ```sh
-kubectl kustomize deploy/k8s/overlays/kind --load-restrictor LoadRestrictionsNone \
-  | kubectl apply -f -
+# 在根仓库执行；只渲染检查，不连接集群
+kubectl kustomize deploy/k8s/overlays/kind --load-restrictor LoadRestrictionsNone > /tmp/lkm-kind.yaml
 ```
 
-本地验收可直接用封装好的脚本：`sh deploy/k8s/overlays/kind/setup.sh`。
+## 部署顺序
 
-> 两处**刻意不复用**的文件：`infra/vector.toml`（k8s 读 CRI 日志，compose 读 docker
-> json-file，日志格式不同故 source 段必然不同）与 `infra/vector.yaml`（DaemonSet vs 单容器）。
-> 解析意图与 sink 语义保持一致，差异已在《执行路线图》§8 登记。
-
-## 部署
-
-### 1. 前置：命名空间、Secret 与证书
-
-Secret 必须落在目标命名空间里，故命名空间要先存在（清单里也含 Namespace，但那在下一步）：
+本地 kind 可直接运行 `sh deploy/k8s/overlays/kind/setup.sh`。
+手工部署按以下顺序，先创建命名空间，再创建 Secret：
 
 ```sh
 kubectl apply -f deploy/k8s/base/namespace.yaml
-
-# 应用密钥（三个主密钥 / PG 密码 / MinIO 密码 / AUTH seam token …）；生产见下方 Infisical 命令
 sh deploy/k8s/gen-secret.sh | kubectl apply -f -
-
-# 网关 TLS 证书（本地/验收用自签；生产换正式证书，见脚本注释）
 sh deploy/k8s/gen-tls.sh | kubectl apply -f -
-```
-
-> 首次仍需先建命名空间——`deploy/k8s/overlays/kind/setup.sh` 已按此顺序编排好，可直接用它。
-
-生产可从 Infisical 注入整栈密钥（同 Compose 项目的 `prod` 环境），并禁用本地 `.env` 回退：
-
-```sh
-set -o pipefail
-infisical run --env=prod -- sh deploy/infisical/check-env.sh \
-  env ENV_FILE=/dev/null sh deploy/k8s/gen-secret.sh | kubectl apply -f -
-```
-
-`.env` 和注入环境变量均缺失必填项时，`gen-secret.sh` 会直接报错，不会生成半截 Secret。
-
-### 2. 应用
-
-```sh
 kubectl kustomize deploy/k8s/overlays/kind --load-restrictor LoadRestrictionsNone \
   | kubectl apply -f -
 ```
 
-**首次部署的启动顺序**：k8s 没有 compose 的 `depends_on`，应用层不会等中间件就绪。
-一次性 Job 只有 `minio-init`（建桶）；Pulsar 的租户/namespace 由 **Pod 内 sidecar** 建，
-无需在这里等：
+`gen-tls.sh` 默认生成自签证书，只用于验证；生产按脚本的键名导入正式证书。
+生产还要修改 `overlays/prod/gateway-domains.yaml`、`site-identity.yaml` 和
+`gateway-tls.yaml` 的示例地址、证书键和挂载路径，并选择对应 overlay。
+
+若由 Infisical 注入配置，可用一个空的普通文件禁止本地 `.env` 回退。
+`gen-secret.sh` 要求 ENV_FILE 是存在的普通文件，不能用 `/dev/null`：
 
 ```sh
+# Bash；临时文件为空，不写入密钥
+set -o pipefail
+lkm_env_file=$(mktemp)
+trap 'rm -f "$lkm_env_file"' EXIT
+infisical run --env=prod -- sh deploy/infisical/check-env.sh \
+  env ENV_FILE="$lkm_env_file" sh deploy/k8s/gen-secret.sh | kubectl apply -f -
+```
+
+生产注入仍需可读取的 RS256 PEM 文件；可用 `JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH`
+指定生成 Secret 时读取的位置。不要保存或提交渲染出的 Secret 明文。
+
+## 启动与验证
+
+Kubernetes 不提供 Compose 的 depends_on 语义。数据服务就绪前应用可能重启；
+`minio-init` 是建桶 Job，Pulsar 租户与 namespace 由 Pod 内 sidecar 初始化。
+
+```sh
+kubectl -n lkm get pods
+kubectl -n lkm get jobs
 kubectl -n lkm wait --for=condition=complete job/minio-init --timeout=10m
-# 若应用 Pod 在 Job 完成前就起来并因连不上而崩溃重启，让它们重连一次：
-kubectl -n lkm rollout restart deployment
-```
+kubectl -n lkm rollout status deploy/auth
+kubectl -n lkm rollout status deploy/backend
 
-后续部署（Job 已 completed 时 apply 是 no-op）不需要这一步。
+kubectl -n lkm exec deploy/backend -- python -c \
+  "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/api/v1/readiness').read().decode())"
 
-### 3. 验收
-
-```sh
-kubectl -n lkm get pods                      # 期望：prefect-server/worker 也 Running
-kubectl -n lkm get jobs                      # minio-init 完成
-```
-
-网关冒烟（复用 compose 的同一脚本；`SMOKE_BOT=1` 且 bot 已 scale 起来时会追加面板可达检查）：
-
-```sh
-# kind：宿主机 80/443 已映射到 NodePort，脚本按 SNI 走域名
+# kind 已映射宿主 80/443，域名需与网关配置一致
 sh deploy/apisix/smoke.sh 127.0.0.1
 ```
 
-探针分级（M6.2）在 k8s 下的实测：
+若依赖已就绪而应用仍未恢复，先查看具体 Pod 日志和事件，再重启受影响的 Deployment。
+不需要每次 apply 后重启全部应用。
+
+## 与 Compose 的差异
+
+| 事项 | 当前 K8s 行为 |
+|---|---|
+| 消息总线 | base/kind/prod 默认 Pulsar；rabbitmq overlay 才切到 RabbitMQ，Compose 默认 RabbitMQ |
+| 镜像版本 | 各清单独立声明，部分与 Compose 不同；部署前核对，不假定同版本 |
+| 组件覆盖 | 有 Tinode；未交付 Compose 的 ClamAV、Infisical、shipyard 部署单元 |
+| 可选组件 | 搜索、监控、Bot 等以默认 0 副本表达，Prefect 常驻 |
+| TLS | 使用 `lkm-tls` Secret；集群内未交付 certbot 自动签发/续期 |
+| DNS | 网关使用 CoreDNS 与上游 FQDN；普通客户端可通过 namespace search domain 解析短名 |
+| 日志 | Vector DaemonSet 读取 `/var/log/pods` 的 CRI 日志 |
+| 应用探针 | backend/auth 使用 exec + urllib；worker 没有独立探针 |
+| broker 探针 | Pulsar 探针只检查 broker；namespace/schema 初始化由 sidecar 负责，需另看其日志 |
+| 告警地址 | 可选 Secret `lkm-alert-webhook` 的 `url`；模板和 render 脚本与 Compose 共用 |
+
+backend/auth 的 exec 探针使用 `127.0.0.1`，避免 kubelet HTTP 探针的动态 Pod IP
+被 TrustedHost 拒绝。`LKM_ALLOWED_HOSTS` 保留 `127.0.0.1`、`localhost` 与内部服务名。
+
+## 生产前必须处理的限制
+
+1. **Pulsar 不持久化**：数据用 emptyDir，Pod 重建时丢失已发布但未消费消息。
+   容器重启不等于 Pod 重建，不能将 emptyDir 理解成每次进程启动都清空。
+   未发布事件仍在 PG outbox；已发布事件不能靠 outbox 自动恢复。
+   生产若要求消息跨重建保留，应另行部署可靠 broker，或评估持久化 RabbitMQ overlay。
+2. **共享 backend PVC 为 ReadWriteOnce**：backend 与挂载该 PVC 的 worker 需调度到同节点，
+   或使用满足应用共享语义的存储方案；多节点部署不能直接沿用 kind 假设。
+3. **backend/auth 默认单副本且启动时迁移**：扩容前先解决并发迁移；Bot SSO 的一次性票据
+   表在进程内存，也需保持单副本或改用共享存储。
+4. **证书外部管理**：安排签发、续期和 Secret 更新。证书变更后验证网关实际加载的新证书。
+5. **备份独立设计**：根 `tools/backup.py` 面向 Compose，不能直接用于 K8s。
+   覆盖 PG 各库、MinIO、backend PVC、Tinode 附件与其他启用组件，实际演练恢复。
+6. **可观测数据限制**：Prometheus 使用 emptyDir，Pod 重建丢历史；Vector 节点状态和缓冲
+   位于 `/var/lib/lkm/vector`，换节点时需考虑采集位置和待写入日志。
+7. **Job spec 不可变**：修改 minio-init 命令时需规划删除/重建 Job，不能指望 apply 覆盖。
+8. **文件扫描与沙箱**：需要 ClamAV 时单独部署并配置应用；需要 Bot 沙箱时指向集群外 Bay，
+   当前清单不提供 Docker socket 沙箱服务。
+
+指标端点位于 backend。auth/worker 的业务指标通过 Redis 中继由 backend 聚合；
+这不包含 auth 自身独立的 HTTP QPS/延迟指标。
+
+## 可选功能
 
 ```sh
-kubectl -n lkm exec deploy/backend -- python -c \
-  "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8000/api/v1/readiness').read().decode())"
-```
+# 监控；启用告警时还需配置 webhook
+kubectl -n lkm scale deploy/prometheus deploy/grafana deploy/alertmanager --replicas=1
+# Grafana 通过本机转发访问，密码来自已配置的 Secret
+kubectl -n lkm port-forward svc/grafana 3000:3000
 
-## 与 compose 的差异（逐条）
-
-| 机制 | compose | k8s | 说明 |
-|---|---|---|---|
-| 启动顺序 | `depends_on: condition` | initContainer / Job / 探针 | 网关用 initContainer 先渲染配置；数据初始化用 Job |
-| 网关配置 | 挂仓库 `config.yaml` | 挂 `apisix-render` **渲染产物** | DNS 解析需随运行时变化，改为占位展开（见下） |
-| upstream DNS | Docker 内嵌 DNS `127.0.0.11`，服务短名 | CoreDNS ClusterIP + **FQDN** | lua-resty-dns 是裸查询，CoreDNS 不补 search domain |
-| TLS 证书 | certbot 写共享卷 | Secret `lkm-tls`（外部签发/续期） | k8s 里跨 Pod 共享证书应以 Secret 为载体 |
-| 日志采集 | 挂 docker.sock 读 json-file | DaemonSet 读 `/var/log/pods`（CRI） | 日志格式不同，source 段必然不同 |
-| 可选组件开关 | `--profile` | 副本数（prometheus / grafana / lkmbot 默认 0） | Prefect 常驻；其余可选组件用 0 副本表达「默认不启用」 |
-| Pulsar 数据 | `pulsar_data` 卷持久化 | **emptyDir（不持久化）** | 见上节：账本跨不了 Pod 重建，改以「每次干净启动」换自愈；租户/namespace 由 Pod 内 sidecar 建 |
-| 探针 | healthcheck | liveness / readiness / startup **三分** | 语义沿用 M6.2 的 `/liveness` 与 `/readiness` |
-| 告警 webhook | `.env` 的 `LKM_ALERT_WEBHOOK_URL` | Secret `lkm-alert-webhook`（键 `url`,**可选**） | 地址是凭证，不进 git；两边跑**同一份** `deploy/alertmanager/render.sh` 展开模板 |
-
-### 探针为什么用 `exec` 而不是 `httpGet`
-
-M6.1 的 `TrustedHostMiddleware` 会校验 Host 头，而 kubelet 的 `httpGet` 探针把 Host 设为
-**Pod IP**（动态、无法进白名单）→ 一律 400 → 探针长期失败把 Pod 判死。`exec` 探针从容器内
-打 `127.0.0.1`，Host 命中白名单里的回环，与 compose healthcheck 同款。
-**因此 `LKM_ALLOWED_HOSTS` 必须始终包含 `127.0.0.1` 与 `localhost`。**
-
-## Pulsar：刻意做成「无状态」，Pod 重建即自愈
-
-k8s 侧的 Pulsar **不挂持久卷**（数据目录是 `emptyDir`），这是刻意取舍而非疏漏。
-
-**为什么不能持久化**：ledger 元数据里记的是 bookie 的 **IP:端口**；Pod 重建后 IP 会变
-（StatefulSet 只固定名字不固定 IP），且 embedded bookie **每次进程启动都随机取端口**
-（实测三次登记为 `:37145` / `:34811` / `:38119`）。任一变化都会让旧 ledger 不可读
-（`Failed to read entry` / `Bookie handle is not available`）→ broker 不健康 → 依赖它的
-backend 与 9 个 worker 全部起不来。**这就是 compose 上复发两次的那个故障，k8s 下同样复现**
-（实测：删 Pod 后 45 处 ledger 读失败）。
-
-三条「钉住 bookie 位置」的路都试过且**无效**，不要再走：`PULSAR_PREFIX_advertisedAddress`
-环境变量（standalone 不读该前缀）、`--advertised-address/--bookkeeper-port` CLI（只作用于
-broker）、改写 `standalone.conf`（`advertisedAddress` 被解析成列表 `[, <dns>]`，
-`bookiePort` 被启动器覆盖回随机值）。
-
-**于是改为**：既然账本跨不了重启，就让每次启动都是干净的。效果（已实测）——删除 `pulsar-0`
-后：broker 起来即 healthcheck ok、**0 处 ledger 读失败**、租户与 `biz/auth/system`
-namespace 由**同 Pod 的 `pulsar-init` sidecar** 自动重建（不再依赖一次性 Job，故 Pod 重建
-也自愈）、消费者自动重连并重建 topic、`/readiness` 回 200。全程无需人工干预。
-
-**代价（明确写入语义变更）**：Pulsar 内**已发布但未被消费**的消息在 Pod 重建时丢失。
-未发布的事件由 PG 的 `outbox_events` 经 relay 重新投递（消费者按 `event_id` 幂等），
-但「已发布→未消费」这一窗口没有兜底。这与 compose 侧「持久化但可能脏 ledger、需人工清卷」
-是**等价强度的取舍**（都保不住那一窗口），只是把故障从「崩溃循环 + 人工介入」换成了
-「自动恢复 + 丢在途消息」。
-
-> **生产建议**：不要以「standalone StatefulSet」形态自托管 Pulsar。官方 Pulsar Helm chart
-> （多 bookie、可显式配置端口与 advertised address）或托管 Pulsar 服务才能同时给到
-> 跨重启持久化与多副本。该取舍已登记《执行路线图》§8 #29。
-
-## 已知限制（部署前必读）
-
-1. **`lkm-backend-data` 是 ReadWriteOnce 的共享 PVC**：backend 与 4 个 worker 都挂 `/data`
-   （blog_repos 同卷同路径）。RWO 意味着这些 Pod **必须调度到同一节点**——单机 kind 天然满足，
-   多节点生产集群需改用 ReadWriteMany 的 StorageClass，否则后调度的 Pod 卡 `ContainerCreating`。
-2. **backend / auth 固定 1 副本**：两者在 lifespan 里跑 alembic 迁移，多副本会并发迁移。
-   要横向扩展需先把迁移抽成独立 Job。
-3. **证书签发/续期不在集群内**：compose 的 certbot 未移植为 Deployment。生产建议用
-   cert-manager，或用定时任务把 certbot 产物按 `gen-tls.sh` 的键名重新导入 Secret。
-   `acme-webroot` 仍保留（若走 cert-manager 可把其副本置 0）。
-4. **ClickHouse 未设 `nofile` ulimit**：k8s 的 Pod spec 无对应字段（compose 设了 262144）。
-   CH 会打 `max_open_files` 警告但不影响功能；真实负载出现 "Too many open files" 时再经
-   容器运行时配置抬高。
-5. **Job spec 不可变**：改 `minio-init` 的命令前需先
-   `kubectl -n lkm delete job <name>`，否则 apply 报错。
-6. **指标只覆盖 backend**：`/metrics` 挂在单体 FastAPI（`app.main`），auth 进程
-   （`auth.main`）刻意不挂，故 Grafana 面板看不到 auth 的 QPS/延迟。Prometheus
-   与 Grafana 清单里的容器间地址用的是**短名**（`backend:8000` / `prometheus:9090`），
-   靠 `/etc/resolv.conf` 的 search 域解析（与 APISIX 的 lua-resty-dns 裸查询不同）。
-   **2026-09-19 已在 kind 上实测通过**：Pod 内 `resolv.conf` 为
-   `search lkm.svc.cluster.local svc.cluster.local cluster.local`（`ndots:5`），短名
-   `backend` 解析到 ClusterIP；把 prometheus 拉起（`replicas: 1`）后其
-   `/api/v1/targets` 显示 `http://backend:8000/metrics` 已进入抓取——`health=down`
-   仅因当时 backend Pod 未就绪（`connection refused`），**不是解析失败**。
-   结论：**无需在 overlay 里另给 FQDN 版配置**。
-   Prometheus 数据是 emptyDir，Pod 重建即丢历史（观测数据可重建，不引入 PV 依赖）。
-8. **bot 的沙箱（shipyard）在集群内不交付**：Bay 经 Docker Engine API 在**宿主** spawn 兄弟
-   容器、把宿主路径 bind 进沙箱、并让其加入一个 Docker 网络——k8s 节点多为 containerd
-   （没有 docker.sock），spawn 出的容器也不受 k8s 调度与网络命名空间管理（kind 节点内更无从谈起）。
-   因此 `deploy/k8s/` 只交付 `app/lkmbot.yaml`（可选组件，默认 0 副本），**没有** shipyard 清单。
-   需要沙箱时把 bot 指向**集群外**的 Bay：面板「配置 → 沙箱」里填 `shipyard_neo_endpoint`
-   （新 Bay）或 `sandbox.shipyard_endpoint`（旧 Bay）+ access token。bot 默认
-   `computer_use_runtime: none`，不接沙箱不影响其余功能。
-
-## Prefect / ClickHouse / 监控
-
-compose 用 `--profile`，k8s 用副本数：
-
-```sh
-# Prefect 默认常驻；worker 启动时自动注册 cron 与 flow deployments。
-# 可选：让 jobs handler 把复杂数据管道转交 Prefect flow。
-kubectl -n lkm set env deploy/worker LKM_PREFECT_ENABLED=true
-```
-
-从旧 APScheduler 清单升级时，先 `kubectl -n lkm scale deploy/worker-scheduler --replicas=0`，应用新清单并等待 `prefect-worker` 就绪，再 `kubectl -n lkm delete deploy/worker-scheduler --ignore-not-found`。`kubectl apply` 不会自动删除旧 Deployment。
-
-ClickHouse 同理：置 `LKM_CLICKHOUSE_ENABLED=true`，并让 `backend`（admin 只读查询）
-与 `worker`（回落直调导出）重建。向量采集（vector DaemonSet）与 OTel collector
-默认即在跑，无需开关。
-
-Vector 的节点目录 `/var/lib/lkm/vector` 保存文件读取位置和最多 512 MiB 的 ClickHouse 写入缓冲；首次部署从现有日志文件末尾开始，重启后从保存的位置继续读取。
-
-监控（M6.12）只需拉起两个 Deployment（配置与 compose 共用同一批文件）：
-
-```sh
-kubectl -n lkm scale deploy/prometheus deploy/grafana --replicas=1
-# Grafana：kubectl -n lkm port-forward svc/grafana 3000:3000（密码见 LKM_GRAFANA_ADMIN_PASSWORD）
-```
-
-bot 面板同理（镜像需先构建并让集群可拉取，kind 用 `setup.sh` 注入 `lkm-bot:latest`）：
-
-```sh
+# Bot 面板；镜像须可拉取，SSO 需 RS256 公钥及管理员权限
 kubectl -n lkm scale deploy/lkmbot --replicas=1
-# 面板经网关的社群域子路径 https://<社群域>/bot/ 访问（社区后台「机器人」菜单内嵌同一地址），
-# 证书用社群域那一份即可（bot 已无独立子域）
-# 初始密码来自 Secret 的 LKM_BOT_DASHBOARD_PASSWORD（未配则看 Pod 日志里的随机密码）
-# SSO 免登需要 lkm-secrets 里有 LKM_JWT_PUBLIC_KEY（gen-secret.sh 已并入）；缺了则由
-# 面板自带登录页兜底（fail-safe），不影响其余功能
+# 对外地址：https://<社群域>/bot/
 ```
 
-回退：副本置 0 + 变量置 false。
+Prefect worker 启动时注册 cron 与 flow deployments；`LKM_PREFECT_ENABLED` 控制复杂任务转交。
+ClickHouse 的开关与地址在 app-config 中配置，启用后重建对应 backend/worker。
+配置应写回 overlay，避免只用 `kubectl set env` 后被下一次 apply 覆盖。
 
-## 回退到 compose
+停用可选组件时将副本数写回 0，同时关闭应用侧相应开关。
+切换 broker 前先停写、排空积压，不能自动迁移在途消息；apply 不会自动删除旧 broker 资源。
 
-两套编排是并列的，互不依赖：
+## 卸载与切换环境
 
 ```sh
+# 仅在确认目标集群与 namespace 后执行
 kubectl kustomize deploy/k8s/overlays/kind --load-restrictor LoadRestrictionsNone \
   | kubectl delete -f -
 ```
 
-即清空 k8s 侧（PVC/Secret 需另删），compose 栈不受影响。
+渲染结果包含 Namespace；删除 namespace 会删除其中的 Secret、PVC 等资源，存储回收还受
+PV reclaim policy 影响。卸载前完成备份，不应将此命令当作无数据影响的“回退到 Compose”。
+两套环境之间的数据迁移需要单独验证。

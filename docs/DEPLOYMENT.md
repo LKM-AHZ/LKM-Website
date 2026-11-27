@@ -1,5 +1,7 @@
 # LKM 服务部署教程
 
+> 配置核对：2026-11-28。镜像版本、变量默认值和服务依赖以 `docker-compose.yml` 为准。
+
 > 正式域名尚未确定。本文 `.example` 地址均为占位示例；Compose 默认仅配置本地回环与容器服务名。
 > 上线前请显式配置网关域名、允许的 Host、WebAuthn 身份、OAuth 回调及存储公网地址。
 > Kubernetes 生产 overlay 还需同步替换 `gateway-tls.yaml` 的证书键和路径。
@@ -14,15 +16,11 @@
 
 - 服务器时间同步正常，公网安全组只开放实际需要的 `80/443` 和 SSH 端口。
 - 已从 `.env.example` 创建 `.env` 并替换所有密码/密钥，或按下文 Infisical 整栈密钥迁移完成注入。
-- **`LKM_AUTH_HTTP_TOKEN` 必须是 `openssl rand -hex 48` 一类的真随机值**：compose 的 `${VAR:?}`
-  只拒绝空值，占位值由后端在生产校验里 fail-fast（`core/config.py` 的 `_no_insecure_secrets_outside_dev`：
-  命中 `change-me`/`changeme`/`your-`/`placeholder` 直接拒启动）。模板里默认写的是 `change-me`，
-  照抄即启动失败——这是刻意的，别为了让它起来而填个占位值。
-- **`LKM_RESTART_POLICY=unless-stopped`**：编排的重启策略默认是 `${LKM_RESTART_POLICY:-no}`，
-  不显式设置则主机重启后所有容器不自愈。
-- **`LKM_MAX_UPLOAD_BYTES` 按目标值显式写清**：编排与网关默认 `104857600`（100 MiB），
-  而模板给的示例值是 15 MB；两者都能跑，但「模板值 vs 文档/冒烟脚本假设的 100 MiB」不一致时，
-  上传边界测试会失败。选定一个数后同时确认网关 `client-control.max_body_size` 由同一变量派生。
+- **`LKM_AUTH_HTTP_TOKEN` 使用强随机值**：模板留空，Compose 拒绝空值，后端生产校验拒绝弱令牌和占位值。
+- **`LKM_RESTART_POLICY=unless-stopped`**：默认 `no` 不会在主机重启后自动恢复服务。
+- **`LKM_MAX_UPLOAD_BYTES`**：模板与编排默认均为 `104857600`（100 MiB），网关和后端由同一变量派生。
+- 默认聊天服务也需要 `.env.example` 中的 Tinode 密钥；客户端 API key 必须与服务端 salt 配对。
+
 - 换域名时另见文末 FAQ「换域名」：后端自身身份的 5 个键也全在 `.env` 里，compose 不再写死。
 - `docker compose config --quiet` 成功，且渲染结果中没有空的必填变量。
 - 域名 DNS 已指向目标主机；无域名部署已接受自签证书的限制。
@@ -31,33 +29,37 @@
 
 ## 架构概览
 
-单机 docker-compose 编排（支持k8s）,APISIX 为唯一对外入口(nginx 已移除):
+单机 docker-compose 编排（支持k8s）,APISIX 为统一对外入口:
 
-| 服务 | 镜像 | 端口(对外) | 职责 |
-|---|---|---|---|
-| `apisix` | `apache/apisix:3.9.0-debian` | `80` / `443` | **唯一网关**:TLS 终止、HTTP→HTTPS 重定向、反代分流、gzip、CORS 白名单、限流 |
-| `apisix-render` | `alpine:3.19` | 无 | 纯 shell sidecar:把证书内联进 apisix.yaml 并每 6h 重渲染(触发 APISIX reload) |
-| `acme-webroot` | `nginx:1.27-alpine` | 无 | 微型静态 responder:仅服务 ACME `/.well-known/acme-challenge/`(非网关角色) |
-| `certbot` | `certbot/certbot` | 无 | 申请与自动续期 Let's Encrypt 证书(webroot) |
-| `backend` | `lkm-service:latest` | 仅内网 `8000` | FastAPI(REST `/api/v1`)+ 论坛域 GraphQL + lag 上报 |
-| `auth` | `lkm-service:latest` | 仅内网 `8001` | AUTH 独立进程(`auth.main`) |
-| `worker` | `lkm-service:latest` | 无 | jobs + user-invalidate 订阅。`python -m boot.workers.default` |
-| `worker-send` | `lkm-service:latest` | 无 | 发送订阅。`python -m boot.workers.send` |
-| `worker-notify` | `lkm-service:latest` | 无 | 对象事件登记订阅。`python -m boot.workers.notify` |
-| `worker-notification` | `lkm-service:latest` | 无 | 站内信生成订阅。`python -m boot.workers.notification` |
-| `worker-points-reward` | `lkm-service:latest` | 无 | points 奖励入账订阅。`python -m boot.workers.points_reward` |
-| `worker-points-stats` | `lkm-service:latest` | 无 | points 行为计数/成就订阅。`python -m boot.workers.points_stats` |
-| `worker-points-tasks` | `lkm-service:latest` | 无 | points 每日任务订阅。`python -m boot.workers.points_tasks` |
-| `prefect-server` / `prefect-worker` | `lkm-service:latest` | 仅内网 `4200` | cron 调度、flow 编排与执行 |
-| `worker-dlq` | `lkm-service:latest` | 无 | 死信落库(`boot.workers.dlq`) |
-| `worker-outbox` | `lkm-service:latest` | 无 | outbox relay(`boot.workers.outbox`) |
-| `postgres` | `timescale/timescaledb:latest-pg16` | 仅内网 `5432` | 后端数据库(biz `lkm` + auth `lkm_auth`);outbox、`points_ledger` 与 `audit_logs` 为 hypertable |
-| `redis` | `redis:7-alpine` | 仅内网 `6379` | leader 租约、共享限流 / 缓存 |
-| `rabbitmq` | `rabbitmq:4.2-management-alpine` | 仅内网 `5672`/`15672` | **默认消息总线**(管理端口不发布到宿主) |
-| `pulsar` | `apachepulsar/pulsar:3.3.0` | 仅内网 `6650`/`8080` | **备选消息总线**(standalone,自带 ZK+BookKeeper;6650 broker / 8080 Admin REST)。仅 `--profile pulsar` 启动,见下 |
-| `minio` | `minio/minio:latest` | 仅容器内 `9000`/`9001` | S3 兼容对象存储:文件库文件与成员头像 |
-| `lkmbot` | `lkm-bot:latest` | 仅经网关 `/bot/` 子路径 | 社区机器人面板(AstrBot fork)。**可选组件**(`--profile bot`);面板 `6185` 不发布到宿主 |
-| `shipyard` | `soulter/shipyard-bay:latest` | 无 | bot 代码沙箱(旧版 Bay)。**可选组件**(`--profile bot`),挂 docker.sock |
+| 服务 | 端口（对外） | 职责 |
+|---|---|---|
+| `apisix` | `80` / `443` | **唯一网关**:TLS 终止、HTTP→HTTPS 重定向、反代分流、gzip、CORS 白名单、限流 |
+| `apisix-render` | 无 | 纯 shell sidecar:把证书内联进 apisix.yaml 并每 6h 重渲染(触发 APISIX reload) |
+| `acme-webroot` | 无 | 微型静态 responder:仅服务 ACME `/.well-known/acme-challenge/`(非网关角色) |
+| `certbot` | 无 | 申请与自动续期 Let's Encrypt 证书(webroot) |
+| `backend` | 仅内网 `8000` | FastAPI(REST `/api/v1`)+ 论坛域 GraphQL + lag 上报 |
+| `auth` | 仅内网 `8001` | AUTH 独立进程(`auth.main`) |
+| `worker` | 无 | jobs + user-invalidate 订阅。`python -m boot.workers.default` |
+| `worker-send` | 无 | 发送订阅。`python -m boot.workers.send` |
+| `worker-notify` | 无 | 对象事件登记订阅。`python -m boot.workers.notify` |
+| `worker-notification` | 无 | 站内信生成订阅。`python -m boot.workers.notification` |
+| `worker-points-reward` | 无 | points 奖励入账订阅。`python -m boot.workers.points_reward` |
+| `worker-points-stats` | 无 | points 行为计数/成就订阅。`python -m boot.workers.points_stats` |
+| `worker-points-tasks` | 无 | points 每日任务订阅。`python -m boot.workers.points_tasks` |
+| `prefect-server` / `prefect-worker` | 仅内网 `4200` | cron 调度、flow 编排与执行 |
+| `worker-dlq` | 无 | 死信落库(`boot.workers.dlq`) |
+| `worker-outbox` | 无 | outbox relay(`boot.workers.outbox`) |
+| `postgres` | 仅内网 `5432` | 后端数据库(biz `lkm` + auth `lkm_auth`);outbox、`points_ledger` 与 `audit_logs` 为 hypertable |
+| `redis` | 仅内网 `6379` | leader 租约、共享限流 / 缓存 |
+| `rabbitmq` | 仅内网 `5672`/`15672` | **默认消息总线**(管理端口不发布到宿主) |
+| `pulsar` | 仅内网 `6650`/`8080` | **备选消息总线**(standalone,自带 ZK+BookKeeper;6650 broker / 8080 Admin REST)。仅 `--profile pulsar` 启动,见下 |
+| `minio` | 仅容器内 `9000`/`9001` | S3 兼容对象存储:文件库文件与成员头像 |
+| `lkmbot` | 仅经网关 `/bot/` 子路径 | 社区机器人面板(AstrBot fork)。**可选组件**(`--profile bot`);面板 `6185` 不发布到宿主 |
+| `shipyard` | 无 | bot 代码沙箱(旧版 Bay)。**可选组件**(`--profile bot`),挂 docker.sock |
+| `worker-content-index` | 无 | 内容与文件检索增量同步 |
+| `tinode` | 经网关 `/v0/*` | 聊天服务与附件 |
+| `minio-init` | 无 | 首次部署幂等建桶，完成后退出 |
+| `clamav` | 无 | 文件病毒扫描 |
 
 > `worker*` 与 `backend`/`auth` 共用 `lkm-service:latest` 镜像,仅启动入口不同;各自常驻消费
 > 一个订阅(默认 RabbitMQ 队列;消费失败重投超限后进死信 `system/dlq` / `lkm.dlq-persist`,
@@ -65,30 +67,14 @@
 > points 拆三个订阅(reward/stats/tasks)消费同一 `biz/points.apply` topic 实现扇出与故障隔离;
 > `worker-notification`(M6.8)以第四个订阅消费同一 topic 生成站内信,同样独立记账、互不阻塞。
 
-> **Pulsar 无状态化**(仅切回 Pulsar 时相关):`pulsar` 由 `deploy/pulsar/entrypoint.sh` 包装启动——
-> 每次启动**先清空数据目录**,broker 就绪后**幂等重建** `lkm` 租户与 `biz/auth/system` namespace;
-> healthcheck 语义为「broker 就绪**且** namespace 已建」,故依赖它的 12 个应用服务按
-> `service_healthy` 等它就绪即可(原一次性 `pulsar-init` 服务已随之删除:它只在首次 `up` 时跑,
-> pulsar 重启后不会重跑,正是过去清卷后必须人工介入的根源)。
-> **代价**:pulsar 内「**已发布但未消费**」的消息会在每次重启时丢失(未发布事件仍在 PG
-> `outbox_events`,由 relay 重投;消费端按 `event_id` 幂等去重)。要真正持久,请改用官方 Helm
-> chart(多 bookie、显式端口)或托管服务——单机 compose 里的 standalone 无法既自托管又持久
-> (根因:embedded bookie 每次进程启动随机取端口,ledger 里记的 `IP:端口` 必然失效)。
-
-> **Schema 校验强制(命名空间策略)**:同一段初始化里还对 `biz/auth/system` 执行
-> `namespaces set-schema-validation-enforce -e`,并**回读**确认策略为 `true`(只信命令退出码会
-> 吞掉真实错误;k8s 侧 `infra/pulsar.yaml` 的 init sidecar 逐字同口径)。
-> **它保证什么、不保证什么——2026-09-30 在真 broker(standalone 3.3.0)上实测界定,别误读**:
-> - **保证**:topic 已有 schema 时,**未声明 schema 的 producer 接不进来**(`IncompatibleSchema`)。
-> - **不保证**:payload 与 schema 是否匹配。违约 payload(`fn` 为整数 / `args` 为字符串 / 整条
->   不成形)与未声明的 `fn` 一律**照发成功**;把 `fn` 收紧成 Avro `enum` 亦然;消费者不带 schema
->   也放行;topic 尚无 schema 时,无 schema 的 producer 反而能抢先建出无 schema 的 topic。
+> **Pulsar 的数据语义**：Compose 的 `deploy/pulsar/entrypoint.sh` 每次启动清空数据目录，
+> broker 就绪后重建租户与 `biz/auth/system` namespace，healthcheck 同时检查初始化标记。
+> 已发布但尚未消费的消息在重启时丢失；未发布事件仍由 PG outbox 重试。
+> 该配置适合本地验证，生产持久化需求应另行部署可靠 broker。
 >
-> 即它管「**谁在发**」,管不了「**发的是什么**」。真正的**事件契约**(`fn` → 实参形状 + 允许承载它
-> 的 routing_key)在应用层 `LKM-service/app/core/event_contract.py`,由发布期(`messaging.publish`
-> 与 outbox relay 折叠)、消费期(`worker`)两侧强制,违约计入
-> `event_contract_violations_total{fn,side}`(告警规则 `deploy/prometheus/rules/lkm-event-contract.yml`)。
-> 相关测试:`LKM-service/tests/test_event_contract.py`、`tests/deploy/test_pulsar_config.py`。
+> 初始化脚本开启并回读 namespace 的 schema 校验策略。payload 的函数名、参数形状与 routing key
+> 由应用层 `LKM-service/core/event_contract.py` 强制，不能以 broker 开关替代应用契约。
+> 对应测试见 `tests/test_event_contract.py` 与 `tests/deploy/test_pulsar_config.py`。
 
 ### 消息总线：RabbitMQ（默认）与切回 Pulsar
 
@@ -137,30 +123,29 @@ StatefulSet 取代 Pulsar。切换已有集群时也需先排空旧订阅，停�
 
    随后重启 `tinode`（首启由它自建 `tinode` 库，不要预建空库）。
 
-客户端接入协议要点见 [实时协议](实时协议.md) §4.3。
+客户端接入协议要点见 [实时协议的 Tinode 接入](实时协议.md#5-tinode-聊天接入)。
 
-请求分流(有域名走 443 / 无域名走 80):
+请求分流：
 
+```text
+客户端 ──> APISIX(80/443)
+              ├─ /api/v1/auth/*、后台认证写面、JWKS ──> auth:8001
+              ├─ /api/*、/graphql/v1               ──> backend:8000
+              ├─ /v0/*                            ──> tinode:6060
+              ├─ /lkm/*                           ──> minio:9000
+              └─ /bot/*                           ──> lkmbot:6185
 ```
-浏览器 ──> APISIX(80 与 443)
-              ├─ /api/        ──> backend:8000   (保持路径, WS upgrade 已开)
-              ├─ /graphql/vN  ──> backend:8000   (支持 WebSocket)
-              ├─ /lkm/        ──> minio:9000     (对象存储预签名直传/下载, 保留全部 path+query)
-              └─ /bot/*       ──> lkmbot:6185    (机器人面板,剥 /bot 前缀) ← 社群域子路径
-```
 
-后端 REST 前缀为 `/api/vN`，GraphQL 使用 `/graphql/vN`（当前为 `/graphql/v1`）。APISIX 用 Docker 内嵌 DNS(`dns_resolver: ['127.0.0.11']` + `discovery_type: dns`)在运行时动态解析 `backend`/`auth`/`lkmbot`,不依赖启动期 DNS。
-
-> 纯静态官网(`static.example`)已迁出本编排:它是独立仓库、部署在独立服务器上(自备 nginx + certbot),
-> 不再经本栈的 APISIX 分流。部署方式见 [LKM-official-static/DEPLOYMENT.md](https://github.com/LKM-AHZ/LKM-official-static/blob/main/DEPLOYMENT.md)。
+`/api/v1/admin/auth/me` 精确路由到 backend；内部 AUTH 端点由网关拦截。
+APISIX 通过动态 DNS 发现容器上游。静态官网独立部署，不属于本编排的页面验收范围。
 
 ## 前置条件
 
 - 一台有公网 IP 的 Linux 主机,防火墙/安全组放行 `80` 与 `443` 端口。
   > MinIO 不开放独立公网端口:对象存储经 APISIX `/lkm/` 路径转发到 `minio:9000`(仅内网),
   > 浏览器访问经 APISIX 统一入口即可,无需在安全组另开 9000。
-- **域名可选**:有域名走 `.env` 中 `LKM_COMMUNITY_DOMAINS` 配置的地址 + Let's Encrypt 正式证书;**无域名可用公网 IP 直连**——
-  此时走 **HTTP(80)+自签证书(443)** 模式(见下文「无域名/IP 直连」一节),浏览器访问 IP 即可。
+- 公网生产环境准备正式域名与证书；本机可使用默认 localhost 配置，自签证书仅用于验证。
+  无公网域名的远程验证方式见下文，仓库未交付完整的 IP + 明文 HTTP 部署方案。
 - 已安装 Docker 与 Docker Compose 插件(`docker compose version` 可正常输出)。
 - 如果需要 k8s 则需要安装 kubeadm 或使用发行版。
 - 已有 k8s 集群的情况下只需要安装 kubectl 不需要安装全套。
@@ -191,88 +176,55 @@ cd LKM-Website
 
 ## 二、配置环境变量
 
-在根目录创建 `.env` 文件(compose 会自动读取,**此文件已被 .gitignore 忽略,不要提交**):
+从模板创建根目录 `.env`，逐项填写注释标出的密钥和密码；不要提交此文件。
+模板是完整配置入口，下面只列部署时必须核对的类别。
 
 ```sh
-# 两个对称密钥必须为强随机值、互不相同(生产环境 LKM_ENV=production 会强制校验)
-LKM_TOTP_ENCRYPTION_KEY=<64 位以上随机串>
-LKM_VERIFICATION_CODE_PEPPER=<64 位以上随机串>
-
-# PostgreSQL 数据库密码(必须设置)
-POSTGRES_PASSWORD=<强随机密码>
-
-# 可选:覆盖数据库用户名/库名(默认均为 lkm)
-POSTGRES_USER=lkm
-POSTGRES_DB=lkm
-
-# Redis(compose 已默认指向 redis 服务,一般无需改动)
-# 留空则后端回退到单机内存版限流(共享限流失效);生产建议保留 compose 默认值
-# LKM_REDIS_URL=redis://redis:6379/0
-
-# 域名与上传上限(**单一来源**:网关与后端都从这里派生)。
-# 换域名只改这一行:render.sh 据此展开 APISIX 的 hosts / CORS 来源 / MinIO Host 改写 / 证书 SNI。
-# LKM_COMMUNITY_DOMAINS=community.example      # 社群站(/api、/graphql、认证面、MinIO 预签名 host)
-# (bot 面板并入社群域子路径 /bot/,无独立域名配置项;官网 static.example 已迁至独立服务器,不在此列)
-# bot 面板的子路径前缀(**单一来源**,默认 /bot):网关路由 uri/剥前缀正则、面板运行期 base
-#   与前端构建期 base 三面都由它派生(改了这一处即全量跟随,细节见「LKM Bot」一节)。
-# LKM_BOT_BASE_PATH=/bot
-# 上传上限(字节):同一个值同时给后端校验与网关 client-control.max_body_size
-# LKM_MAX_UPLOAD_BYTES=104857600
-# bot 的上传上限**独立**(bot 单文件 512MB vs 社群站 100MB,共用会把 bot 上传打死)
-# LKM_BOT_MAX_UPLOAD_BYTES=550000000
-
-# 公网 Host 白名单(M6.1;compose 已给生产默认值,一般无需改动)。
-# 必须含内网服务名与回环(backend,auth,localhost,127.0.0.1),
-#   否则容器 healthcheck 直连 127.0.0.1 会被判 400 → 容器长期 unhealthy。
-# LKM_ALLOWED_HOSTS=community.example,www.community.example,backend,auth,localhost,127.0.0.1
-#
-# 注:**没有** LKM_CORS_ORIGINS。生产不挂应用层 CORS —— backend/auth 无对外端口,流量必经
-# APISIX,网关的 cors 插件是唯一权威(来源由上面的域名变量展开)。应用层 CORSMiddleware 只在
-# 非生产挂载,供本地前端直连 :8000 跨域调试。
-
-# MinIO 对象存储(必须设置密码;文件库与成员头像均存于此)
-MINIO_ROOT_PASSWORD=<强随机密码>
-# 可选:MinIO 管理员账号(默认 lkmadmin)
-# MINIO_ROOT_USER=lkmadmin
-# 可选:S3 桶名/对象 key 前缀(默认 lkm / files)
-# LKM_S3_BUCKET=lkm
-# LKM_S3_PREFIX=files
-
-# S3 预签名直传/下载的公网地址(浏览器直连 MinIO 用)。
-# 默认走站点公网地址经 APISIX /lkm/ 转发(MinIO 不打公网端口),一般无需改动。
-# 若 MinIO 暴露了另外的公网端口,改成对应的地址即可。
-# LKM_S3_PUBLIC_ENDPOINT_URL=https://community.example
-
-# 可选:GitHub OAuth 登录(不启用可留空)
-LKM_GITHUB_CLIENT_ID=
-LKM_GITHUB_CLIENT_SECRET=
-
-# RS256/JWKS 非对称签发(必填,已无 HS256 对称降级)。auth 持私钥签发,backend 与
-# APISIX 网关只用公钥验签(验签方拿不到签发能力)。
-#   1) sh deploy/jwt/gen-keys.sh        # 生成 deploy/jwt/keys/{jwt-private,jwt-public}.pem
-#   2) 填下面两行(值是**容器内**路径;compose 已把该目录只读挂到 /etc/lkm/jwt)。
-#      两变量为**必填**:未先生成密钥即 compose 拒绝启动。
-LKM_JWT_PRIVATE_KEY_FILE=/etc/lkm/jwt/jwt-private.pem
-LKM_JWT_PUBLIC_KEY_FILE=/etc/lkm/jwt/jwt-public.pem
-#   3) docker compose up -d --no-deps auth backend apisix-render apisix
-# 注:网关验签目前挂在后台会话端点 /api/v1/admin/auth/me(公开只读接口必须保持匿名);
-#    公钥可经 https://<社群域名>/.well-known/jwks.json 获取。
-```
-
-生成随机密钥:
-
-```sh
+cp .env.example .env
+sh deploy/jwt/gen-keys.sh
+# 每个密钥单独生成；Tinode 的字节数/base64 及 API key 配对按模板专用命令处理
 openssl rand -hex 48
 ```
 
-> 若启用 GitHub OAuth,需在 GitHub App 后台把回调地址设为
-> `https://community.example/api/v1/auth/oauth/github/callback`（若更换域名，OAuth 平台配置也必须同步）。
+| 类别 | 关键配置 |
+|---|---|
+| 应用与内部通信 | `LKM_TOTP_ENCRYPTION_KEY`、`LKM_VERIFICATION_CODE_PEPPER`、`LKM_AUTH_HTTP_TOKEN` |
+| RS256 文件 | `LKM_JWT_PRIVATE_KEY_FILE=/etc/lkm/jwt/jwt-private.pem`、`LKM_JWT_PUBLIC_KEY_FILE=/etc/lkm/jwt/jwt-public.pem` |
+| 数据库和存储 | `POSTGRES_PASSWORD`、`MINIO_ROOT_PASSWORD`、`PREFECT_DB_PASSWORD` |
+| RabbitMQ | `RABBITMQ_DEFAULT_PASS`、密码一致且经过 URL 编码的 `LKM_RABBITMQ_URL` |
+| 聊天 | `LKM_TINODE_API_KEY_SALT`、`LKM_TINODE_TOKEN_KEY`、`LKM_TINODE_UID_KEY`、`LKM_TINODE_AUTH_TOKEN` |
+| 站点身份 | `LKM_COMMUNITY_DOMAINS`、`LKM_ALLOWED_HOSTS`、`LKM_RP_ID`、`LKM_ORIGIN`、`LKM_S3_PUBLIC_ENDPOINT_URL` |
+| OAuth（启用时） | client id/secret、`LKM_GITHUB_REDIRECT_URI`、`LKM_FRONTEND_CALLBACK`，并同步 OAuth 平台回调 |
+| 运维及可选服务 | 重启策略、上传上限，以及所用 profile 的密码、令牌和地址 |
+
+生产域名示例（替换为实际地址）：
+
+```dotenv
+LKM_COMMUNITY_DOMAINS=community.example
+LKM_ALLOWED_HOSTS=community.example,backend,auth,localhost,127.0.0.1
+LKM_RP_ID=community.example
+LKM_ORIGIN=https://community.example
+LKM_S3_PUBLIC_ENDPOINT_URL=https://community.example
+LKM_GITHUB_REDIRECT_URI=https://community.example/api/v1/auth/oauth/github/callback
+LKM_FRONTEND_CALLBACK=https://community.example/login/success
+LKM_RESTART_POLICY=unless-stopped
+```
+
+网关域名变量只控制路由、CORS 和证书选择，不会自动替换后端身份和 OAuth 配置。
+Host 白名单保留容器服务名及回环地址，供内部通信和探针使用。
+
+```sh
+docker compose config --quiet
+python3 tools/preflight.py --static-only
+```
+
+`config` 检查插值和结构；预检检查配置问题。通过这些检查仍需执行启动和目标环境验收。
 
 ## 三、构建并启动
 
 ```sh
-cd LKM-Website
 docker compose up -d --build
+docker compose ps --all
 ```
 
 首次构建需拉取基础镜像与依赖,可能耗时数分钟。`depends_on` 等待 PostgreSQL、Redis、MinIO 等基础服务；所选消息总线可晚于应用就绪，worker 会重连，outbox relay 会重试投递，`/readiness` 在已配置 broker 不可达时返回 503。Pulsar 的 `healthy` **已蕴含**租户与 namespace 初始化完成(见上「Pulsar 无状态化」)。
@@ -296,8 +248,6 @@ docker compose up -d --build
   登录限流是**两层分工而非重复**——网关按 IP 粗粒度削峰（`policy: local`、60/60s），
   应用做账号级精确锁定（用户名级 + 真实 IP 级 Redis 滑动窗口，IP 取自网关注入的 `X-Real-IP`）。
   两层数值刻意不同，不要当成"重复"去同步。
-- **nginx 已彻底移除**：全栈仅存的 nginx 镜像是 `acme-webroot` 一处**静态文件服务器**角色（非网关），
-  它与 APISIX 是互补关系而非重叠。
 
 **运行时冒烟/验收**（网关 up 后，在仓库根执行）：
 
@@ -367,22 +317,16 @@ infisical run --env=prod -- sh deploy/infisical/check-env.sh \
 账号密码变更还要先完成服务端密码轮换，不能只改 Infisical 的值。RSA 私钥、公钥和 TLS 证书
 仍按现有文件/Secret 流程挂载，不写入 `.env`。
 
-K8s 从同一项目生成 Secret，`ENV_FILE=/dev/null` 禁止回退本地 `.env`；先在集群创建
-`lkm` namespace 与 RSA 密钥文件，然后执行（Bash 的 `pipefail` 防止生成失败却误报成功）：
-
-```sh
-kubectl apply -f deploy/k8s/base/namespace.yaml
-set -o pipefail
-infisical run --env=prod -- sh deploy/infisical/check-env.sh \
-  env ENV_FILE=/dev/null sh deploy/k8s/gen-secret.sh | kubectl apply -f -
-```
+K8s Secret 注入流程见 [Kubernetes 部署说明](../deploy/k8s/README.md#部署顺序)。
+先创建命名空间并准备 RSA 密钥文件；用空的普通配置文件禁止本地 `.env` 回退，
+不要将 `ENV_FILE` 设为 `/dev/null`。
 
 核对 Secret 更新后再部署/重启消费它的 Pod。回滚时使用安全保存的上一版 Secret 与对应数据库
 凭据，不要把旧 `.env` 或 Infisical 引导密钥提交到仓库。
 
 ## 三·七、Prefect 编排
 
-全部 cron 由 Prefect deployment 调度，经 Pulsar 发布事件，由 jobs worker 执行任务。复杂数据管道（如 `user_dim` 对账/回填）继续由 Prefect flow 编排。Prefect server/worker 默认启动；`LKM_PREFECT_ENABLED` 只控制 jobs handler 是否把复杂任务转交 flow。
+全部 cron 由 Prefect deployment 调度，经所选消息总线发布事件，由 jobs worker 执行任务。复杂数据管道（如 `user_dim` 对账/回填）继续由 Prefect flow 编排。Prefect server/worker 默认启动；`LKM_PREFECT_ENABLED` 只控制 jobs handler 是否把复杂任务转交 flow。
 
 启动与接线：
 
@@ -399,14 +343,14 @@ docker compose up -d --force-recreate worker
 运维：
 
 ```sh
-# Prefect UI：server 只 expose 4200，经 SSH 隧道访问
-ssh -L 4200:127.0.0.1:4200 <server>   # 本地开 http://127.0.0.1:4200
+# Prefect UI 默认不映射宿主端口；需浏览器访问时，先用本地 override
+# 将 127.0.0.1:4200:4200 映射到 prefect-server，再通过 SSH 隧道访问
 # 查看 flow run
 docker compose exec prefect-worker prefect flow-run ls
 # 手动触发一次对账
 docker compose exec prefect-worker prefect deployment run 'user-dim-reconcile/reconcile'
 # 回填指定用户（在 worker 容器内以本地代码执行 flow）
-docker compose exec prefect-worker python -m app.flows.user_dim --backfill --ids 1,2,3
+docker compose exec prefect-worker python -m app.flows.user_dim --backfill --ids <用户UUID1>,<用户UUID2>
 ```
 
 - 复杂 flow 触发失败会 **fail-open 回落直调**；`LKM_PREFECT_ENABLED=false` 只关闭复杂 flow 转交，不关闭 cron 调度。
@@ -427,7 +371,7 @@ docker compose --profile clickhouse up -d
 #    LKM_CLICKHOUSE_URL=http://clickhouse:8123
 #    CLICKHOUSE_PASSWORD=<强随机>   # 同时用于 CH 服务、vector、后端
 docker compose up -d --force-recreate backend worker
-# 3) 可选：走 Prefect 触发导出（需先按三·七起 profile=prefect）
+# 3) 可选：走已常驻的 Prefect 触发导出
 #    LKM_PREFECT_ANALYTICS_DEPLOYMENT=analytics-clickhouse-export/analytics-export
 ```
 
@@ -448,16 +392,16 @@ curl -s 'http://<host>/api/v1/admin/analytics/app_logs/summary?since=2026-10-01T
 
 - 汇总接口只接受最长 31 天的时间窗，最多返回 `LKM_CLICKHOUSE_QUERY_LIMIT_MAX` 个时间/类别组合；可用 `interval=day` 降低结果粒度。
 - Vector 将待写日志缓存到持久卷（Compose `vector_data`；Kubernetes 节点 `/var/lib/lkm/vector`，每个节点最多 512 MiB）。缓冲满时暂停读取，源日志仍受 Docker/kubelet 轮转限制。
-- 表 TTL：`app_logs` 30 天 / `event_failures` 180 天 / `audit_logs` 365 天（**固定值**；改 `deploy/clickhouse/init.sql` 后需重建数据卷 `docker compose --profile clickhouse down -v` 才生效）。
+- 表 TTL：`app_logs` 30 天 / `event_failures` 180 天 / `audit_logs` 365 天。首启由 init.sql 建表；既有表需评审后执行对应 ALTER TABLE，修改初始化文件不会更新既有表，也不应为修改 TTL 删除数据卷。
 - CH 未启用 / 不可达时：admin 查询返 **503**（不返空列表），周期导出 no-op 不报错。
-- 回退：`LKM_CLICKHOUSE_ENABLED=false`（默认）+ `docker compose --profile clickhouse down`，不影响主栈。
+- 停用：将 `LKM_CLICKHOUSE_ENABLED=false` 写入配置并重建消费该配置的应用，再用 `docker compose stop vector clickhouse` 停止分析组件。
 
 ## 三·九、监控面板
 
 Prometheus 抓 `backend` 的 `/metrics`，Grafana 预置「LKM 后端总览」面板。默认不启：
 
 ```sh
-# 1) 拉起（根 .env 可设 LKM_GRAFANA_ADMIN_PASSWORD，默认 admin）
+# 1) 拉起（先设置 LKM_GRAFANA_ADMIN_PASSWORD 强密码）
 docker compose --profile monitoring up -d prometheus grafana
 
 # 2) 打开面板（默认只绑回环，不对外暴露）
@@ -465,12 +409,12 @@ docker compose --profile monitoring up -d prometheus grafana
 ```
 
 面板内容：QPS（按 handler）、延迟 P50/P95、5xx 错误率、**outbox 积压**
-（`outbox_pending_count`）、**Pulsar 订阅 lag**（`pulsar_subscription_backlog`）、
+（`outbox_pending_count`）、**消息订阅积压**（`message_subscription_backlog{broker=...}`）、
 GraphQL P95 与受控拒绝速率。
 
 - 数据源与面板由 `deploy/grafana/provisioning` 预置（改面板改 `deploy/grafana/dashboards/lkm-overview.json`，30 秒自动重载）。
 - **已知限制**：`/metrics` 只挂在单体 `backend`；auth 进程刻意不挂，故面板无 auth 的 QPS/延迟。
-- 回退：`docker compose --profile monitoring down`（保留卷则历史保留；加 `-v` 一并清理）。
+- 停用：`docker compose stop prometheus grafana alertmanager alertmanager-render`，保留数据卷。
 
 ### 三·九·一、告警投递(Alertmanager)
 
@@ -538,7 +482,7 @@ docker compose restart signoz-otel-collector   # 注册后立即重连，否则�
     ClickHouse 照常可用，只有用到该函数的查询（部分告警/面板）会报函数缺失。
   - `signoz-otel-collector` 的 OTLP 端口（4317/4318）**不发布到宿主**，仅经应用侧 collector 进入；
     外部代理需自行经网关加鉴权后再放行。
-- 回退：`docker compose --profile signoz down`（数据在 `signoz_*` 命名卷里，加 `-v` 一并清理）。
+- 停用：关闭应用 tracing 配置并重建相关应用，再停止 `signoz`、`signoz-otel-collector`、`signoz-clickhouse`、`signoz-zookeeper`；数据卷保留。
 
 ## 三·十一、LKM Bot 社区机器人(可选,`--profile bot`)
 
@@ -560,27 +504,16 @@ SMOKE_BOT=1 sh deploy/apisix/smoke.sh 127.0.0.1
 
 访问方式（二选一，同一个面板）：
 
-- **社区后台 →「机器人」菜单**（推荐）：管理员已登录后台即免登进入（SSO）。
+- **支持 Bot 管理的客户端**：管理员具有 `admin.bot_panel` 权限时可换取 SSO 票据。
 - 直接开 `https://community.example/bot/`：无后台会话时落到面板自带登录页（账号/密码见首启日志或
   上面的 `.env`）。
 
-回退：`docker compose --profile bot down`（bot 数据在宿主机目录里，不受 `-v` 影响）。
+停用 Bot：`docker compose stop lkmbot shipyard`。带 profile 的 `down` 会停止整个 Compose 项目。
 
-**原生概览页（BFF，可选）**：社区后台「机器人 → 概览」已改为原生页面，数据由 backend 以
-API Key 读取面板 OpenAPI v1，浏览器不再直连 `/bot/`。两项都要配齐才生效，任一留空则页面
-显示「未接入」并引导到完整面板（iframe 与 SSO 换票链路不受影响）：
-
-```sh
-# LKM_BOT_API_BASE_URL=http://lkmbot:6185/api/v1
-# LKM_BOT_ADMIN_API_KEY=<面板「设置 → OpenAPI」创建的 Key，需 system/provider/plugin 读取 scope>
-```
-
-八个机器人页面现已全部原生：概览、日志为完整原生视图；平台/模型/插件/知识库/配置为原生
-列表 + 启停/编辑，编辑动作在弹窗里加载面板原页面（每次向 `/admin/bot/sso-ticket` 换新票，
-一次性票据不复用），因此保存、2FA、动态表单等行为与面板一致。任一页面在
-`LKM_BOT_API_BASE_URL`/`LKM_BOT_ADMIN_API_KEY` 未配置或 bot 不可达时整页回退同源 iframe
-完整面板，功能不缺失。K8s 部署时 `LKM_BOT_ADMIN_API_KEY` 放进 `lkm-secrets`，
-`LKM_BOT_API_BASE_URL` 在 `lkm-config`（默认空）。
+**Bot 管理 BFF（可选）**：backend 可用 API Key 读取面板 OpenAPI v1，配置
+`LKM_BOT_API_BASE_URL=http://lkmbot:6185/api/v1` 与 `LKM_BOT_ADMIN_API_KEY`。
+客户端入口以当前桌面实现为准；不再沿用旧网页原生页面和 iframe 的交付描述。
+K8s 中 API Key 放进 `lkm-secrets`，地址放进 `lkm-config`。
 
 **bot → backend 服务通道（媒体 + 文件库，可选但推荐）**：与上面方向相反——这次是 bot 以服务
 身份调后端。配齐后 bot 产出的媒体（TTS 音频、T2I 图片、聊天附件）改存后端对象存储
@@ -649,7 +582,7 @@ audience 的签发方；不符或缺失一律 302 回面板登录页（fail-safe
 - 面板 `6185` **不发布到宿主**，对外只经 APISIX 的 `/bot/*` 路由（含面板 WebSocket）。
 - OneBot v11 `6199` 同样不发布，按 NapCat 的位置二选一：
   - **同机容器**（推荐）：让 NapCat 加入 `lkm` 网络，连 `ws://lkmbot:6199/ws`，无需开端口。
-  - **异机**：自行加端口映射（建议绑内网网卡，如 `127.0.0.1:6199:6199`）并在 bot 配置里设 token；
+  - **异机**：自行加端口映射（绑定实际内网网卡，如 `<内网IP>:6199:6199`）并在 bot 配置里设 token；
     不要把 6199 挂到 `/bot` 路径上（`/ws` 与面板同 host，鉴权与协议都不同）。
 
 **请求体上限独立**：bot 允许单文件 512MB，而社区站是 100MB，故用 `LKM_BOT_MAX_UPLOAD_BYTES`
@@ -672,7 +605,7 @@ IM 平台回调用，需填 `https://community.example/bot`，否则回调会打
 **代码沙箱（shipyard，同一 profile）**：
 
 - ⚠️ **安全面**：shipyard 挂 `/var/run/docker.sock`（≈把宿主机 root 交给容器），因此它只在
-  `--profile bot` 下启用、用完即 `down`；它 spawn 的沙箱容器落在独立网络 `lkm-bot-sandbox`，
+  `--profile bot` 下启用、用完用 `docker compose stop shipyard` 停止；它 spawn 的沙箱容器落在独立网络 `lkm-bot-sandbox`，
   刻意**不接** `lkm`，否则沙箱里跑的模型生成代码就能直连 postgres/redis/minio。
 - ⚠️ **与 bot 默认 booter 不匹配**：bot 默认 `sandbox.booter=shipyard_neo`，而本服务是**旧版 Bay**。
   要生效需在面板「配置 → 沙箱」把 booter 改成 `shipyard`，endpoint 填 `http://shipyard:8156`，
@@ -681,38 +614,14 @@ IM 平台回调用，需填 `https://community.example/bot`，否则回调会打
 - `LKM_BOT_SHIP_DATA_DIR` 必须是**宿主机绝对路径**（Bay 原样交给 Docker API 做 bind），默认取
   `${PWD}/LKM-bot/data/shipyard/ship_mnt_data`，故 compose 必须在仓库根执行。
 
-## 三·五、无域名 / 公网 IP 直连(可选)
+## 无公网域名的验证环境
 
-没有域名时,用公网 IP 直连(如 `http://<公网IP>`)。需把域名配置
-替换为你的公网 IP,并把访问方式从「强制 HTTPS」改为「HTTP 为主 + 自签证书兜底」。
+默认 `localhost` 适用于本机验证。需要远程访问时，可用测试域名配合客户端 hosts/DNS，
+并让域名、Host 白名单、origin、RP ID 和证书保持一致。自签证书需由客户端显式信任。
+生产使用正式域名和受信证书。
 
-改造点(改了如下文件,按你机器 IP 替换,勿再 clone 到默认域名配置):
-
-```sh
-# 1. 根仓库 docker-compose.yml:后端域名变量改成 IP(HTTP)
-LKM_RP_ID: <公网IP>
-LKM_ORIGIN: http://<公网IP>
-LKM_GITHUB_REDIRECT_URI: http://<公网IP>/api/v1/auth/oauth/github/callback
-LKM_FRONTEND_CALLBACK: http://<公网IP>/login/success
-
-# 3. deploy/apisix/apisix.yaml:各路由 hosts 列（IP 无法配 hosts，需另加按 priority 兜底的路由）；
-#    deploy/apisix/config.yaml 的 redirect.https_port 与 dns 解析按需调整
-# 4. deploy/apisix/apisix.yaml：**停用 http-redirect 路由**（见下）
-```
-
-> **注**：网关为 APISIX，无域名/IP 直连改造只需改上述第 3、4 步（`deploy/apisix/` 下两个YAML），未在本教程展开。
-
-- **必须停用 `http-redirect` 路由**：模板里的 `http-redirect`（`hosts: [__COMMUNITY_HOSTS__]` + `redirect.http_to_https: true`）
-  是「社群域名 http → https 301」。IP 直连时该域名就是 IP 字面量，而 curl/浏览器对 IP 字面量
-  **不发 SNI**，APISIX 按 SNI 选不到证书 → 301 之后是 TLS 握手失败。保留这条路由会让
-  `http://<IP>` 整站不可达（表现为首页 301 后打不开，而非 404）。做法：注释掉该路由
-  （`deploy/apisix/apisix.yaml` 的 `id: http-redirect` 整段），`docker compose up -d apisix-render`
-  重渲染后确认 `curl -s -o /dev/null -w '%{http_code}' http://<IP>/api/v1/health` 是 **200 而非 301**。
-  真实域名部署应保留这条路由（强制 HTTPS 是想要的行为）。
-- **certbot 服务可停**(`docker compose stop certbot`):无域名不签正式证书,其会循环空跑 renew 报错污染日志。
-- **403 后台明文限制**:admin 后台 cookie 带 `Secure`,**纯 HTTP(80)下浏览器不发送** → 后台登录会话无法保持。
-  后台请走 **`https://IP`**(自签证书,浏览器首次点"继续访问/信任")。普通用户前台走 JWT,HTTP 下正常。
-- 客户端可通过配置的公网 IP 与 API 路径访问服务；Bot 面板位于 `/bot/`。
+仓库没有交付完整的公网 IP + 明文 HTTP overlay；不要沿用旧手册中修改 Compose 字面量、
+移除 HTTPS 路由的步骤。管理员 Secure cookie、WebAuthn 和 TLS/SNI 均需要相符的访问配置。
 
 ## 四、首次签发 HTTPS 证书
 
@@ -732,95 +641,54 @@ docker compose restart apisix-render
 ## 五、验证
 
 ```sh
-# 首页
-curl -I https://community.example/
+# HTTP 重定向及 HTTPS 探针
+curl -I http://community.example/api/v1/liveness
+curl --fail https://community.example/api/v1/liveness
+curl --fail https://community.example/api/v1/readiness
 
-# HTTP 应 301 到 HTTPS
-curl -I http://community.example/
+# 只读 GraphQL
+curl --fail https://community.example/graphql/v1 \
+  -H 'Content-Type: application/json' -d '{"query":"{ __typename }"}'
 
-# 后端健康检查
-curl https://community.example/api/v1/health
-# 期望: {"code":0,"msg":"OK","data":{"status":"ok"}}
-
-# GraphQL(示例查询)
-curl -X POST https://community.example/graphql/v1 \
-  -H 'Content-Type: application/json' \
-  -d '{"query":"{ __typename }"}'
-
-# 静态资源缓存头(应含 Cache-Control: public, immutable)
-curl -I https://community.example/_astro/<某资源路径>
-
-# 成员头像(头像已对象存储化,key 形如 avatars/<uid>/v<ms>.webp,经 /avatar/{user_id} 读取)
-curl -I https://community.example/api/v1/avatar/<user_id>
-# 期望: 200(头像由后端从 S3 流式返回)
-
-# 证书链与有效期
-openssl s_client -connect community.example:443 </dev/null 2>/dev/null | openssl x509 -noout -dates
+# 网关契约与证书
+sh deploy/apisix/smoke.sh <网关IP>
+openssl s_client -servername community.example -connect community.example:443 \
+  </dev/null 2>/dev/null | openssl x509 -noout -dates
 ```
+
+业务响应使用 `message` 字段；就绪状态及失败依赖以实际响应为准。
+再用桌面端验证登录、文件上传/下载、考试和聊天；Bot 启用时加测 `/bot/`。
+静态官网和旧网页资源路径不在本栈验收范围。
 
 ## 六、证书续期(自动)
 
 - `certbot` 容器每 12 小时执行 `certbot renew`,证书文件原地更新。
 - `apisix-render` 容器每 6 小时重渲染一次 `apisix.yaml`(内联新证书),APISIX 监测文件变化自动 reload。
-  该重渲染同时刷新 upstream DNS 解析(standalone 为静态解析,后端容器换 IP 靠此自愈)。
+  上游容器地址由动态 DNS 发现，当前解析有效期为 30 秒。
 
 无需人工干预;证书与续期状态都在 `certbot_conf` 卷,容器重建不丢。
 
-## 七、常用运维
+## 七、升级与回滚
+
+日常命令见 [运维速查](./OPS-CHEATSHEET.md)。升级前记录根仓库与子模块提交、
+保留旧镜像标签及配置，并完成备份。更新根仓库后执行
+`git submodule update --init --recursive`，构建后端镜像一次，再更新所有共用镜像的
+API、AUTH、worker 和 Prefect 服务。环境变量变更用 `up -d` 重建容器。
+
+回滚时恢复对应提交、镜像标签和配置，再检查 readiness、网关冒烟与用户路径。
+schema 已变化时先确认旧镜像兼容；需要恢复数据时按下面的恢复演练验证，不能以删卷代替回滚。
+
+## 八、Kubernetes 部署（可选）
+
+入口见 [Kustomize 部署说明](../deploy/k8s/README.md)。先创建命名空间，再导入 Secret 和证书，
+最后渲染并应用 overlay。当前清单的渲染阻塞见 Kubernetes 说明；先解决并确认渲染通过。本地 kind 脚本封装了部署步骤：
 
 ```sh
-# 查看状态
-docker compose ps
-
-# 查看日志
-docker compose logs -f apisix       # 网关(唯一对外入口,访问日志在此)
-docker compose logs -f backend
-docker compose logs -f worker       # 任务队列消费
-docker compose logs -f worker-send  # 发送队列
-docker compose --profile bot logs -f lkmbot   # 机器人面板(可选组件)
-
-# 重启单个服务
-docker compose restart backend
-
-# MinIO Web 控制台(9001)仅在容器内网,未对外映射;需要浏览器访问时,
-# 在 docker-compose.yml 的 minio 服务临时加 `ports: ['9001:9001']` 后 `docker compose up -d minio`,
-# 访问 http://<主机IP>:9001,账号见 .env 的 MINIO_ROOT_USER/PASSWORD。或用镜像内置的 mc 命令行:
-docker compose exec minio mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
-docker compose exec minio mc ls local/lkm   # 列出默认桶内容
-
-# 更新代码后重新构建并重启
-git pull
-docker compose up -d --build
+sh deploy/k8s/overlays/kind/setup.sh
 ```
 
-## 八、Kubernetes 部署（可选，与 compose 并列）
-
-除本教程的 compose 形态外，仓库另提供一套 **Kustomize 清单**把整栈搬到 k8s，
-入口是 [`deploy/k8s/README.md`](../deploy/k8s/README.md)：
-
-```sh
-# Secret 与网关证书（从根目录 .env 与自签证书生成）
-sh deploy/k8s/gen-secret.sh | kubectl apply -f -
-sh deploy/k8s/gen-tls.sh    | kubectl apply -f -
-# 建命名空间（Secret 要落进来）
-kubectl apply -f deploy/k8s/base/namespace.yaml
-# 应用（--load-restrictor 必需：清单直接引用 deploy/ 下的既有资产，不复制副本；
-# 且 `apply -k` 不接受该标志，故先渲染再 apply）
-kubectl kustomize deploy/k8s/overlays/kind --load-restrictor LoadRestrictionsNone | kubectl apply -f -
-```
-
-- **覆盖范围**：与本文的 compose 栈逐服务一一对应（网关 + 应用层 + 全部有状态中间件），
-  不是另一套架构。两套编排并列、互不依赖，可随时回退。
-- **单一来源**：路由模板、initdb 脚本、ClickHouse DDL、OTel 配置等仍只有一份文件，
-  compose 与 k8s 共用；`render.sh` 把运行时差异（上游 DNS、服务名后缀）从环境变量展开。
-- **差异与坑**：启动顺序用 Job/initContainer 替代 `depends_on`、可选组件由 `--profile`
-  改为副本数、证书改 Secret 载体、探针必须用 `exec`（`httpGet` 的 Host 是 Pod IP，
-  会被 `LKM_ALLOWED_HOSTS` 判 400）等，逐条列在 `deploy/k8s/README.md`。
-- **bot 也是可选组件**：`deploy/k8s/base/app/lkmbot.yaml` 默认 `replicas: 0`，启用用
-  `kubectl -n lkm scale deploy/lkmbot --replicas=1`（镜像 `lkm-bot:latest` 需自行构建/推仓）。
-  **shipyard 沙箱在集群内不交付**（Bay 依赖 Docker API 在宿主 spawn 兄弟容器，与 k8s 模型不兼容），
-  需要沙箱时指向集群外的 Bay，见 `deploy/k8s/README.md`「已知限制」。
-- 本地无集群时可用 kind 验收：`sh deploy/k8s/overlays/kind/setup.sh`。
+kind 是单节点验证环境。生产需核对存储、broker 持久化、域名/证书、镜像、资源限制和备份；
+Compose 与 K8s 的镜像版本、默认 broker 及组件覆盖存在差异，不能视作逐服务等价交付。
 
 ## 八·一、切换 L2 后端（Redis ↔ Dragonfly）
 
@@ -906,7 +774,7 @@ docker compose exec postgres psql -U lkm -d lkm
 
 ```sql
 \dt          -- 列出所有表
-\d users     -- 查看某张表结构
+\d content_items -- 业务表；users 在独立 AUTH 库
 ```
 
 手动执行迁移(一般不需要:启动时按 `LKM_USE_ALEMBIC` 决定走 create_all 还是 `upgrade head`):
@@ -914,12 +782,14 @@ docker compose exec postgres psql -U lkm -d lkm
 ```sh
 docker compose exec backend alembic upgrade head
 docker compose exec backend alembic current
+docker compose exec auth alembic -c alembic.auth.ini upgrade head
+docker compose exec auth alembic -c alembic.auth.ini current
 ```
 
 ### 备份与恢复
 
 **不要只备份数据库。** 文件库与成员头像都在 MinIO,博客仓库在 `backend_data` 卷里 ——
-只 dump PostgreSQL 等于丢文件。用仓库自带的 `tools/backup.py`,一条命令覆盖三处:
+只 dump PostgreSQL 等于丢文件。用仓库自带的 `tools/backup.py`,覆盖业务库、MinIO 与 backend_data：
 
 ```sh
 # 备份(产物落在 <仓库>/backups/<YYYY-MM-DD>/,已 gitignore)
@@ -930,12 +800,23 @@ python3 tools/backup.py list
 python3 tools/backup.py restore --from backups/2026-09-19 --only db --yes
 ```
 
-手工兜底(仅数据库,应急用):
+**当前工具的范围限制**：`tools/backup.py` 对 `POSTGRES_DB` 执行单库 `pg_dump`，
+不包含同实例的 AUTH/Tinode 库，也不包含 Tinode 附件、Prefect 或可选 Bot 数据。
+这些数据必须另行备份，且与主备份使用一致的停写窗口。默认库名示例：
 
 ```sh
-docker compose exec -T postgres pg_dump -U lkm lkm > backup_db_$(date +%F).sql
-docker compose exec -T postgres psql -U lkm -d lkm < backup_db.sql
+# 宿主机保存；自定义库名时替换 lkm_auth / tinode
+mkdir -p backups/extra
+docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" lkm_auth' > backups/extra/auth.sql
+docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" tinode' > backups/extra/tinode.sql
+docker compose exec -T tinode tar czf - -C /var/lib/tinode/uploads . > backups/extra/tinode-media.tar.gz
+# 保留 Prefect 编排数据库
+docker compose exec -T prefect-postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > backups/extra/prefect.sql
+# 启用 Bot 时另备份宿主机 LKM-bot/data（停 Bot 后复制），以及所用沙箱数据
 ```
+
+检查每条命令退出码和产物，按日期保存到独立介质；同时保管恢复所需的配置与密钥。
+`lkm-backup.timer` 只调用现有工具，额外数据需纳入自己的定时备份流程。
 
 #### 自动定时(推荐)
 
@@ -956,42 +837,42 @@ systemctl start lkm-backup.service     # 先手工跑一次,确认退出码为 0
 
 #### 恢复演练(至少每季度一次)
 
-没演练过的备份只是「一堆文件」。演练必须在**独立 compose 项目**里做,绝不在生产库上恢复:
+在独立 Compose 项目和独立目录中恢复，使用独立配置；Bot 的 bind 路径、端口和网络也要隔离。
+先启动空库和对象存储，不启动应用，避免应用先建表导致 SQL 恢复冲突：
 
 ```sh
-# 1) 起一套与生产同版本的演练栈(独立项目名 = 独立卷/独立库,不碰生产)
-COMPOSE_PROJECT_NAME=lkm-drill docker compose up -d postgres minio backend
-
-# 2) 把生产备份恢复到演练栈(backup.py 按当前 COMPOSE_PROJECT_NAME 定位卷与库)
+COMPOSE_PROJECT_NAME=lkm-drill docker compose up -d postgres minio minio-init
+# 确认 postgres / minio 健康、minio-init 完成后恢复工具覆盖的数据
 COMPOSE_PROJECT_NAME=lkm-drill python3 tools/backup.py restore --from backups/<日期> --yes
-
-# 3) 逐项核对,不要只看"命令没报错"
-#    - 登录一个正常账号;打开任一含图帖子(验证 MinIO 对象真的回来了)
-#    - 随机抽 3 篇博客正文(验证 backend_data 卷)
-#    - psql: select count(*) from users;
-
-# 4) 清理演练栈(会删卷!先确认项目名是 lkm-drill 再执行)
-COMPOSE_PROJECT_NAME=lkm-drill docker compose down -v
+# 对空的 AUTH 库恢复；自定义库名时替换 lkm_auth
+COMPOSE_PROJECT_NAME=lkm-drill docker compose exec -T postgres \
+  sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d lkm_auth' < backups/extra/auth.sql
 ```
 
-演练记录至少写:备份日期、恢复耗时、各核对项结论、发现的问题。
+再恢复 Tinode 数据库、附件及其他启用组件。Tinode 库应先由管理员创建为空库并导入完整 dump，
+恢复完成后才启动 Tinode；这与全新部署由 Tinode 自建库的流程不同。
+确认恢复到空库，SQL 遇错立即中止；现有非空库需先另行制定清理/重建方案。
+
+数据齐全后启动演练应用并检查：登录、帖子和文件、博客、聊天历史与附件、
+AUTH 库用户数、业务库关键表计数。检查通过后清理演练项目；需要删除卷时先核对项目名。
+演练记录至少包含备份日期、恢复耗时、核对结果和问题，至少每季度执行一次。
 
 ### schema 变更纪律(迁移链与大表)
 
 后端有**两条独立迁移链**,各自单头线性。业务库与 auth 库各只有
 **一条自包含基线** revision(`0001_initial` / `0001_auth_baseline`),后续变更再按 `NNNN_语义名`
-追加单头增量,与蓝图 §3.2 的「每个迁移一件事、可回滚」一致:
+追加单头增量；每个迁移聚焦一个变更并明确回滚影响：
 
 | 链 | 目录 | 配置文件 | 覆盖 |
 |---|---|---|---|
 | 业务库 | `LKM-service/alembic/versions/` | `alembic.ini` | 业务域全部表(含 `user_dim` 宽表) |
-| auth 库 | `LKM-service/alembic_auth/versions/` | `alembic.auth.ini` | auth 自有 19 张表 |
+| auth 库 | `LKM-service/alembic_auth/versions/` | `alembic.auth.ini` | 认证、用户、角色、Tinode 映射及聊天封禁表 |
 
 **默认通道仍是 `LKM_USE_ALEMBIC=false`(create_all)**,迁移链是生产后备;两者不混用。
 
 两条通道必须给出**同一结构**：CI 的 `scripts/check_schema_drift.py` 在空库上跑两条迁移链再跑
 `alembic check`，任何「迁移链 ↔ ORM metadata」差异都会让 `test` job 变红（本地同样可跑，需可连 PG）。
-**既有库**切到迁移链前必须先 `alembic stamp head`（结构已由 create_all 建出），否则 `upgrade` 会重复建表。
+**既有库**切换前先备份，并逐项核对表结构、索引和约束；补齐到目标基线后才可 `stamp` 对应 revision。`stamp` 只改版本记录，不会修复结构；不得直接对任意旧库执行 `stamp head`。
 
 在 `LKM-service/` 对空的业务库运行 `alembic upgrade head`，对空的 auth 库运行 `alembic -c alembic.auth.ini upgrade head`，由各自的 `0001` 基线建表。
 
@@ -1003,7 +884,7 @@ COMPOSE_PROJECT_NAME=lkm-drill docker compose down -v
 
 ```sh
 # 只生成 SQL、不连库执行(逐 revision 双向:upgrade 与 downgrade 各一份)
-LKM_USE_ALEMBIC=true docker compose exec backend \
+docker compose exec -e LKM_USE_ALEMBIC=true backend \
   alembic upgrade <prev>:<rev> --sql > /tmp/mig.sql
 # 先审查 /tmp/mig.sql；大表的加列、回填、建索引、非空收紧按下方工具分阶段执行。
 ```
@@ -1053,81 +934,20 @@ rollout 状态；生产镜像为私有仓库时，集群还需预先配置 image
 任一目标不存在或 rollout 失败时 job 失败，不能将镜像推送成功误认作部署成功。
 需要人工复核时，在 GitHub 的 `production` environment 配置 required reviewers。
 
-### 可选方案：主机手动安装 PostgreSQL
-
-若需复用主机已有数据库实例,可在主机直接安装 PostgreSQL 并让后端连接外部库。
-
-> **注意**:此路径下**没有 TimescaleDB**,outbox 两表与 `points_ledger` 会降级为普通表(启动时告警、不影响功能,但没有分区裁剪与压缩)。要用 hypertable 请装 `timescaledb` 版并预加载 `shared_preload_libraries`,或直接用上面的 docker 方案。
-
-1. 安装并启动:
-
-```sh
-sudo apt update && sudo apt install -y postgresql postgresql-contrib
-sudo systemctl enable --now postgresql
-```
-
-2. 建库建用户:
-
-```sh
-sudo -u postgres psql -c "CREATE USER lkm WITH PASSWORD '<强密码>';"
-sudo -u postgres psql -c "CREATE DATABASE lkm OWNER lkm;"
-```
-
-3. 允许 Docker 容器连接:
-
-- 编辑 `/etc/postgresql/*/main/postgresql.conf`,将 `listen_addresses` 改为 `'*'`。
-- 在 `/etc/postgresql/*/main/pg_hba.conf` 末尾追加一行:
-
-```
-host all lkm 172.16.0.0/12 scram-sha-256
-```
-
-- 重启:
-
-```sh
-sudo systemctl restart postgresql
-```
-
-4. 修改 `docker-compose.yml`:删除 `postgres` 服务,并把 `backend` 的数据库连接指向宿主机:
-
-```yaml
-  backend:
-    environment:
-      LKM_DB_HOST: 172.17.0.1   # 宿主机在 docker 网桥上的地址
-      LKM_DB_PORT: 5432
-      LKM_DB_NAME: lkm
-      LKM_DB_USER: lkm
-      LKM_DB_PASSWORD: <与建库时一致>
-```
-
-然后重新启动:
-
-```sh
-docker compose up -d backend
-```
-
-> docker 内置库零配置、随仓库走、备份简单,推荐默认使用;主机手动安装适用于复用已有数据库实例或需要更细管控的场景。
-
 ## 数据持久化
 
-- 数据库在 `postgres_data` 卷(postgres 容器 `/var/lib/postgresql/data`)。
-- Redis 在 `redis_data` 卷(redis 容器 `/data`;**不持久化**——`--save '' --appendonly no`,
-  内容全为可重建的缓存/限流/租约数据,无需备份)。
-- 文件库上传文件与成员头像存在 **MinIO** 对象存储(`minio_data` 卷);后端以 S3 兼容接口读写。
-- 博客 git 仓库(`blog_repos/`)在 `backend_data` 卷,挂载到后端容器 `/data`(`files_store` 为存量迁移源,运行时不写)。
-- 备份示例:
+| 数据 | 位置 | 备份要求 |
+|---|---|---|
+| 业务、AUTH、Tinode 数据库 | `postgres_data` | 每个库分别备份，或使用经验证的整实例方案 |
+| 文件与头像 | `minio_data` | 与业务库使用一致恢复点 |
+| 博客仓库 | `backend_data` | 与业务记录一起备份 |
+| 聊天附件 | `tinode_media` | 与 Tinode 库一起备份 |
+| Prefect | `prefect_pg_data` | 备份编排运行数据；deployment 定义可由 worker 重建 |
+| Bot | `LKM-bot/data` bind 目录 | 启用时单独备份；沙箱按配置另备 |
+| Redis | 缓存、限流和租约 | 默认不持久化，重启后重建 |
 
-```sh
-# 数据库
-docker compose exec postgres pg_dump -U lkm lkm > backup_db_$(date +%F).sql
-
-# MinIO 对象(含文件库与头像)
-docker compose exec minio sh -c 'mc alias set m http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" && mc mirror --preserve m/lkm ./minio_backup_$(date +%F)'
-
-# 后端卷(博客 git 仓库)
-docker run --rm -v lkm_backend_data:/data -v "$PWD":/backup alpine \
-  tar czf /backup/backend_files_$(date +%F).tar.gz -C /data .
-```
+可选 Infisical、ClickHouse/SigNoz、监控数据和密钥材料按实际启用范围补充备份策略。
+命令和工具覆盖边界见上文“备份与恢复”。
 
 ## MinIO 首次初始化(建桶)——已自动化,人工只在排查时用
 
@@ -1138,9 +958,9 @@ docker run --rm -v lkm_backend_data:/data -v "$PWD":/backup alpine \
 - `mc mb --ignore-existing "$LKM_S3_BUCKET"` → **幂等**,桶名与 `backend` 的 `LKM_S3_BUCKET` 同源;
 - `restart: 'no'`、退出码 0 即完成,不常驻。
 
-验证:`docker compose up -d && docker compose ps minio-init` 应看到 `Exited (0)`;
+验证:`docker compose up -d && docker compose ps --all minio-init` 应看到 `Exited (0)`;
 `docker compose logs minio-init` 末行为 `minio-init: bucket <名字> ready`。
-`down -v` 抹掉卷后重新 `up -d` 也会自动重建,不再需要人工介入。
+已有桶会被保留；任务失败时先排查连接、凭据与日志。
 
 仍保留人工命令,只用于「job 失败后手工补一次」的排查场景:
 
@@ -1160,34 +980,20 @@ docker exec <minio容器名> sh -c 'mc alias set m http://localhost:9000 "$MINIO
 ```sh
 cd LKM-service
 # 需先配好指向 MinIO 的 LKM_STORAGE_BACKEND=s3 及 s3_* 连接参数
-./.venv/Scripts/python.exe -m scripts.migrate_files_to_s3       # 文件库存量
+uv run python -m scripts.migrate_files_to_s3       # 文件库存量
 ```
 
 ## 常见问题
 
-- **后端反复重启(Exited 3)**:通常是密钥缺失或过短。确认 `.env` 中三个密钥已设置为强随机值,并 `docker compose up -d` 重读。
-- **镜像构建卡在 `uv sync` / `apt-get`(国内云主机)**:`files.pythonhosted.org` 在部分国内主机上只有几 KB/s,
-  构建会「看起来卡死」而非报错。根因是 `uv.lock` 里**逐条记录了下载 URL**,而 `--frozen` 只认 lock 里的地址 ——
-  仅设 `UV_INDEX_URL` / `UV_DEFAULT_INDEX` **无效**。做法:在 `LKM-service/Dockerfile` 的 builder 阶段、`uv sync` 之前
-  把 lock 里的源改写成就近镜像(镜像站逐字节同源,`--frozen` 的哈希校验仍通过),运行阶段再把 apt 源一并换掉:
-  ```dockerfile
-  RUN sed -i "s#https://files.pythonhosted.org/#https://<就近镜像>/pypi/#g;\
-             s#https://pypi.org/simple#https://<就近镜像>/pypi/simple#g" uv.lock
-  RUN sed -i 's#http://deb.debian.org#https://<就近镜像>#g' /etc/apt/sources.list.d/debian.sources
-  ```
-  `LKM-bot/Dockerfile` 同理(`PIP_INDEX_URL` / `UV_*` + apt 源)。这类改动**属于环境适配,不要提交进仓库**——不同
-  机房的就近镜像不同,写死会让别处构建失败。
-- **上传大文件被拒**:APISIX 路由已设 `client-control.max_body_size: 104857600`(100m),与后端 `max_upload_bytes` 对齐;更大文件需同时改 `deploy/apisix/apisix.yaml` 与后端配置。
-- **数据库**:使用 PostgreSQL(`timescale/timescaledb:latest-pg16` 服务,卷持久化)。后端经 `LKM_DB_*` 环境变量以 `postgresql+asyncpg` 连接;首次启动时自动建表(默认走 `create_all` 通道)。**换库/改 schema 后需重建数据卷**(`docker compose down -v`,见「数据库」章节)。
-- **换域名**:网关侧只需在 `.env` 改 `LKM_COMMUNITY_DOMAINS`(hosts、CORS 来源、MinIO Host、证书 SNI 全量跟随,见「单一来源」),再 `docker compose up -d apisix-render` 重渲染(bot 面板随社群域走,无需额外 DNS/证书)。后端**自身身份**类配置 `LKM_ORIGIN`/`LKM_RP_ID`/`LKM_GITHUB_REDIRECT_URI`/`LKM_FRONTEND_CALLBACK`/`LKM_S3_PUBLIC_ENDPOINT_URL` 与 `LKM_ALLOWED_HOSTS` **也都在 `.env` 里改**(compose 已全部写成 `${VAR:-默认值}`,不要再去改 `docker-compose.yml`);最后重新签发证书。四个键漏改任何一项都是**静默失效**(WebAuthn 直接拒、OAuth 回跳旧地址、登录成功白屏、预签名被混合内容拦截),契约测试 `tests/deploy/test_site_identity_config.py` 锁的就是「不许再写回字面量」。
+启动、上传、证书、Bot 与沙箱排障见 [运维速查](./OPS-CHEATSHEET.md#常见故障)。
 
-- **头像/文件上传 404**:MinIO 桶未创建(S3 不自动建桶)。正常路径由一次性 job `minio-init` 自动建桶——先看 `docker compose logs minio-init` 是否 `Exited (0)`;失败时再手动 `mc mb .../lkm` 补一次(见上文「MinIO 首次初始化」)。
+- **换域名**：更新网关域名、Host 白名单、origin、RP ID、OAuth 回调和存储公网地址；
+  用 `docker compose up -d` 重建受影响的 backend/auth、worker 与渲染容器，再签发证书并验收。
+- **上传上限**：修改 `.env` 的 `LKM_MAX_UPLOAD_BYTES` 并重建 backend 与 apisix-render；
+  Bot 使用独立的 `LKM_BOT_MAX_UPLOAD_BYTES`。
+- **数据库变更**：使用迁移或经核对的加性同步；保留数据卷，不将 `down -v` 作为更新步骤。
 
-- **上传返回 403 SignatureDoesNotMatch**:boto3 对 MinIO 默认生成 SigV2 签名,MinIO 不认 → 需在 s3.py 预签名 client 显式 `signature_version="s3v4"` + `addressing_style="path"` + 给 region。且预签名 URL 的 host 必须与浏览器实际访问的 host 一致(`LKM_S3_PUBLIC_ENDPOINT_URL`)。
 
-- **上传经 APISIX 后 400 Bad Request**(而直连 MinIO 正常)**:MinIO 路由的 Host 必须落为公网站点(SigV4 预签名按公网 host 签)(`deploy/apisix/apisix.yaml` 的 `minio` 路由用 `pass_host: rewrite` + `upstream.upstream_host`;用插件 `proxy-rewrite.host` 会被 pass_host 以 nil 覆盖 → 空 Host → MinIO 400)。
-
-- **MinIO 建议经 APISIX 转发而非开公网 9000**:compose 里 minio 保持仅内网,由 APISIX `/lkm/` 路径转发;安全组只需放行 80/443。
 
 - **后台看不到「机器人」分组（或 iframe 提示无权限）**：该管理员缺 `admin.bot_panel` 能力点。
   它默认只授予复合角色 `admin:super_admin`（bot 票据换的是面板会话＝Bot 控制面），

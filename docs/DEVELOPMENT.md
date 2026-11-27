@@ -1,5 +1,7 @@
 # LKM 项目开发教程
 
+> 核对日期：2026-11-28。命令以当前根仓库脚本与固定的子模块提交为准。
+
 本文档说明如何在本地开发 LKM 桌面客户端、FastAPI 后端与 Bot,以及团队协作约定。
 与 `DEPLOYMENT.md`(生产部署)分工:**本文件讲本地开发**,另一份讲线上部署。
 
@@ -19,7 +21,7 @@
 
 ## 一、仓库结构与文档约定
 
-LKM 由三个独立子项目组成(根仓库仅做编排,包含文档与 dev 脚本):
+LKM 由三个 Git 子模块组成；根仓库维护编排、部署资产、开发脚本与跨项目文档：
 
 ```
 LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / dev 脚本 / 文档)
@@ -56,7 +58,7 @@ LKM-Website/                  # 根仓库(编排入口,含 docker-compose.yml / 
 - **PostgreSQL**:后端必需；先启动数据库，并创建 `lkm` 数据库。连接参数见
   `LKM-service/.env.example`，未配置时默认连接 `localhost:5432/lkm`，用户 `postgres`。
 - **Redis(可选)**:后端 `LKM_REDIS_URL` 留空时会**回退到单机内存版限流**(fail-open),
-  本地开发不装 Redis 也能跑;需要调试共享限流/任务队列时再启动 Redis。
+  本地开发不装 Redis 也能跑;需要调试共享限流、缓存、租约、WS 广播时再启动 Redis；异步任务使用所选消息 broker。
 
 ---
 
@@ -96,22 +98,26 @@ Linux/macOS 若尚未配置数据库，可先运行 `./scripts/start_dev_db.sh`�
 在 `LKM-service/.env` 设置相应的 `LKM_DB_*`。AUTH 服务若单独运行，还需要 `lkm_auth` 库和
 `LKM_AUTH_DB_*` 配置。生产 `docker-compose.yml` 需要完整生产环境变量，不能直接替代本地数据库准备步骤。
 
-### 方式二:手动启动
+### 方式二:分别启动与桌面热重载
+
+需要分别查看进程日志或使用 Flutter 交互键时，先让根脚本准备开发环境并启动服务：
 
 ```sh
-# 后端（终端 1）
-cd LKM-service
-uv run uvicorn main:app --reload --port 8000
-
-# 桌面客户端（终端 2，从根目录开始）
-cd LKM-desktop
-./buildtools/setup-dev.sh --install  # 检查/安装平台依赖，安装 webf 依赖并构建小程序资源
-flutter run
+./dev.sh back
 ```
 
-`assets/webf/` 是生成物、不进 git；改了 `webf/` 下源码后先执行 `pnpm --dir webf build`。
+另开终端，从根目录启动桌面端，并把 LKM 服务地址指向开发网关：
 
-本地后端使用 PostgreSQL，配置见 `LKM-service/.env.example`。
+```sh
+cd LKM-desktop
+./buildtools/setup-dev.sh --install
+flutter run --dart-define=LKM_SERVER_URL=http://127.0.0.1:8002
+```
+
+`assets/webf/` 是生成物，不进 Git；改了 `webf/` 源码后先执行 `pnpm --dir webf build`。
+如需完全手动启动，按后端 README 配置双库、RS256 密钥和内部通信变量，分别运行
+`uvicorn main:app`（8000）与 `uvicorn auth.main:app`（8001），再运行根目录
+`scripts/dev_gateway.py`（8002）。仅启动业务进程不能完成拆分认证登录。
 
 ### 方式三:CI 门禁与本地等价命令
 
@@ -123,8 +129,9 @@ flutter run
 | 根仓库 | 文档链接 | `python3 scripts/check_doc_links.py` |
 | 根仓库 | 子模块指针 | `python3 scripts/check_submodule_pointers.py`（指针可达 + 子仓 CI 结论） |
 | 根仓库 | compose 插值 | `docker compose config --quiet`（先按 `.env.example` 导出必填变量） |
-| LKM-service | lint / 格式 / 边界 / 类型 | `uv run ruff check app auth core boot tests scripts`、`uv run ruff format --check …`、`uv run lint-imports`、`uv run ty check app auth core boot scripts` |
+| LKM-service | lint / 格式 / 边界 / 类型 | `uv run ruff check app auth core boot tests scripts`、`uv run ruff format --check app auth core boot tests scripts`、`uv run lint-imports`、`uv run ty check app auth core boot scripts` |
 | LKM-service | 测试 | `uv run pytest -q`（需要 PostgreSQL） |
+| LKM-desktop | 静态检查 / 测试 | `flutter analyze`、`flutter test`；WebF 改动再跑 `webf/package.json` 对应检查 |
 | LKM-bot | 类型 / 格式 / 测试 | `uv run ty check .`、`uv run ruff format --check .`、`uv run pytest` |
 
 几点约定：
@@ -138,7 +145,7 @@ flutter run
 ### 环境变量
 
 后端通过 `LKM_` 前缀读取环境变量(详见 `core/config.py`)。宽松环境
-(`dev`/`local`/`test`/未设)放行任何密钥用于本地;`production` 才强制强随机密钥。
+（`dev`/`local`/`test`，默认 `dev`）允许开发值；其他环境执行生产密钥校验。
 
 本地若需显式配置,可在 `LKM-service/` 建 `.env`:
 
@@ -149,11 +156,11 @@ LKM_VERIFICATION_CODE_PEPPER=<与上面不同>
 #   sh deploy/jwt/gen-keys.sh
 # LKM_JWT_PRIVATE_KEY_FILE=<私钥 PEM 路径>   # 仅签发方(auth)需要
 # LKM_JWT_PUBLIC_KEY_FILE=<公钥 PEM 路径>    # 验签方需要
-# PowerShell dev 脚本在缺失时会自动补齐上述密钥; Bash 或手动启动时必须自行提供
+# Bash 与 PowerShell dev 脚本均会补齐缺失的开发密钥；完全手动启动时自行提供
 ```
 
 - 数据库:PostgreSQL;设 `LKM_DB_HOST/PORT/NAME/USER/PASSWORD`(见 `LKM-service/.env.example`)。
-- Redis:设 `LKM_REDIS_URL=redis://...` 启用共享限流与任务队列;留空回退单机(限流失效、任务队列不消费)。
+- Redis:设 `LKM_REDIS_URL=redis://...` 启用共享限流、缓存、租约与 WS 广播；未配置时相关能力降级。异步任务需另配消息总线。
 - L2 后端可换:默认 Redis 7,也可整套换成 Dragonfly(RESP 兼容,应用代码零改动)。compose 侧
   切换与取舍见 `DEPLOYMENT.md`「八·一、切换 L2 后端」;集成测试对两种后端都能跑,见下「测试」段。
 
@@ -167,20 +174,22 @@ LKM_VERIFICATION_CODE_PEPPER=<与上面不同>
 - **切 MinIO/S3 对象存储**:设 `LKM_STORAGE_BACKEND=s3`,并配
   `LKM_S3_ENDPOINT_URL`(本地 MinIO 填 `http://127.0.0.1:9000`)、`LKM_S3_BUCKET`(默认 `lkm`)、
   `LKM_S3_PREFIX`(默认 `files`)、`LKM_S3_ACCESS_KEY` / `LKM_S3_SECRET_KEY`。
-  生产 compose 已默认 `s3`,桶在首次部署时手动用 `mc mb` 创建(S3 不自动建桶)。
+  生产 Compose 默认 `s3`，由一次性 `minio-init` 服务幂等建桶；应用本身不自动建桶。
 - **存量迁移**:本地磁盘的文件库已有存量时,在切换 S3 前跑一次性脚本搬迁(幂等):
   `uv run python -m scripts.migrate_files_to_s3`。
 
 ### 任务队列(worker)
 
 后端通过消息总线（Compose 默认 RabbitMQ；直接启动时 Settings 默认 Pulsar，按 `LKM_MESSAGE_BUS` 选择）订阅和独立进程消费异步任务；生产 Compose 将默认任务、发送、通知、积分、
-调度、死信和 outbox relay 分开运行。本地 dev 脚本不启动这些进程，需要验证时按目标订阅单独启动：
+内容索引、死信和 outbox relay 分开运行，cron 调度由 Prefect 承载。本地 dev 脚本不启动这些进程，需要验证时按目标订阅单独启动：
 
 ```sh
 uv run python -m boot.workers.default   # 默认队列
 uv run python -m boot.workers.send      # 发送队列
 uv run python -m boot.workers.notify    # 对象事件登记
 uv run python -m boot.workers.notification  # 站内信
+uv run python -m boot.workers.content_index # 内容/文件索引同步
+uv run python -m boot.workers.dlq          # 死信落库
 uv run python -m boot.workers.points_reward # 积分入账
 uv run python -m boot.workers.points_stats  # 积分统计/成就
 uv run python -m boot.workers.points_tasks  # 每日任务
@@ -206,15 +215,14 @@ LKM_IT_USE_TESTCONTAINERS=1 \
 ### 类型门禁与 lint
 
 ```sh
-uv run ty check                        # 硬门禁:类型检查 0 诊断(ty 是硬性要求)
-uv run basedpyright                    # 可选:更严格的基本类型检查(已降级为辅助,不强制)
+uv run ty check app auth core boot scripts  # 与 CI 类型检查范围一致
 uv run ruff check                      # 代码风格/静态检查
-uv run ruff format                     # 代码格式化
+uv run ruff format --check .           # 检查格式；去掉 --check 才写入文件
 uv run lint-imports                    # 分层边界契约(见 pyproject.toml)
 uv run python scripts/check_raw_sql.py # 裸 SQL 门禁:业务查询必须走 ORM
 ```
 
-约定:以 **ty + ruff** 为准(ty 0 诊断 + ruff 干净);`basedpyright` 作为补充可选。
+静态门禁包括 ty、Ruff、import-linter 和裸 SQL 检查；测试目录类型债务按 CI 的独立检查执行。
 测试文件豁免返回值类型标注(ruff 的 `ANN` 规则于 `tests/**` 关闭)。
 
 **金路径验收**:起好后端后可跑 `./scripts/demo_golden_path.sh`(注册 → 登录 → 发帖 →
@@ -224,7 +232,7 @@ uv run python scripts/check_raw_sql.py # 裸 SQL 门禁:业务查询必须走 OR
 - 真实验证码注册:后端开 `LKM_DEV_CODE_SINK=1`(仅 dev/local/test,生产启动校验会拒绝),
   脚本设 `DEMO_REGISTER_EMAIL` 与 `AUTH_INTERNAL_TOKEN`(= `LKM_AUTH_HTTP_TOKEN`);脚本走
   `/reg/normal` → `/auth/internal/dev-code` 取码 → `/reg/normal/verify`,再用新账号登录。
-  验证码仍只以哈希落库,明文仅出现在该内部响应,不写日志/不落盘。
+  验证码只以哈希落库，明文仅由开发内部响应返回。
 - 未开 dev-code:只跑 `/reg/local` 做接口 smoke,内容路径用已 seed 的 `DEMO_USER`。
 
 其余可选:`DEMO_USER2` 产生通知、`DEMO_TOTP_SECRET` 自动完成管理员 2FA step-up、
@@ -263,7 +271,6 @@ uv run python scripts/check_raw_sql.py # 裸 SQL 门禁:业务查询必须走 OR
 
 ## 七、常见问题
 
-- **后端启动报密钥相关错误**:确认 JWT/TOTP/PEPPER 三密钥已提供(非默认占位)。PowerShell
-  dev 脚本会生成进程级开发值；Bash dev 脚本和手动启动不会生成，需自行设置。
+- **后端启动报密钥错误**：两个 dev 脚本均补齐缺失开发值；已有但错误的环境变量或 `.env` 不会被覆盖。完全手动启动时需提供 RS256 密钥对、TOTP 密钥与验证码 pepper。
 - **集成测试 skipped**:`uv run pytest -m integration` 需要先设置 `LKM_REDIS_URL` 并启动 Redis。
-- **数据库是全新的**:后端启动时(`lifespan` 的 `init_db`)默认用 `Base.metadata.create_all()` 自动建缺失表（开发免维护增量迁移；新增表只改 `models.py` 即可，无需手动初始化）;生产/有历史数据的库需显式设 `LKM_USE_ALEMBIC=true` 走 Alembic 增量迁移,手动管理时用 `uv run alembic upgrade head`。
+- **数据库是全新的**：默认 create_all 通道建缺失表，并对小表执行受限的加性同步；模型变化仍需维护迁移链。新库可选 `LKM_USE_ALEMBIC=true`；已有库切换前先核对结构和版本，不能直接重跑基线或盲目 stamp。业务与 AUTH 分别初始化，详见部署手册的 schema 变更纪律。

@@ -1,6 +1,8 @@
 # LKM 项目编排
 
-LKM（理科迷）的本地开发与部署编排仓库，包含 Flutter 桌面客户端、FastAPI 后端和社区机器人。根目录负责容器编排、后端启动脚本和跨项目文档。
+LKM（理科迷）的本地开发与部署编排仓库，包含 Flutter 桌面客户端、FastAPI 后端和社区机器人。根目录负责容器编排、开发启动脚本和跨项目文档。
+
+> 文档核对：2026-11-28。功能状态以固定的子模块提交及目标环境验收为准。
 
 ## 项目组成
 
@@ -30,6 +32,9 @@ git submodule status
 | [docs/后端架构与现状.md](./docs/后端架构与现状.md)             | 后端服务拓扑、数据模型、认证、消息链路与模块边界 |
 | [docs/Bot平台架构与现状.md](./docs/Bot平台架构与现状.md)       | Bot 核心、消息流水线、插件生态与管理面板         |
 | [docs/社区需求与开发规划.md](./docs/社区需求与开发规划.md)     | 一期业务现状、差距、优先级与验收口径             |
+| [实时协议](./docs/实时协议.md) | 上传/通知 WebSocket 与 Tinode 聊天接入 |
+| [运维速查](./docs/OPS-CHEATSHEET.md) | 已部署环境的更新、排障与备份 |
+| [Kubernetes 部署](./deploy/k8s/README.md) | Kustomize 清单、验证流程与生产限制 |
 | [DEVELOPMENT.md](./docs/DEVELOPMENT.md)                             | 本地开发、环境变量与常用命令                     |
 | [DEPLOYMENT.md](./docs/DEPLOYMENT.md)                               | Compose/Kubernetes 部署、网关、证书与运维        |
 
@@ -39,7 +44,7 @@ git submodule status
 
 - Flutter/Dart（版本与命令见 `LKM-desktop/README.md`）；Node.js 24+ 与 pnpm（Bot 面板与桌面端内置小程序）
 - Python `>=3.13`、[uv](https://docs.astral.sh/uv/)
-- PostgreSQL（后端必需；先启动并创建 `lkm` 数据库，连接参数见 `LKM-service/.env.example`）
+- PostgreSQL（业务库 `lkm` 与认证库 `lkm_auth`；本地准备方式见开发手册）
 - Git
 - Docker Engine + Docker Compose（运行完整基础设施时需要）
 
@@ -61,7 +66,8 @@ Windows 使用 `.\dev.ps1`，安装了 pwsh 的 Linux/macOS 使用 `pwsh ./dev.p
 webf 小程序资源（`assets/webf/` 不进 git）。脚本同时起本地网关 `:8002`
 （`/api/v1/auth/*` → AUTH `:8001`，其余 → 后端），桌面端与浏览器开发把服务地址指向它。桌面端设备默认按当前平台选择，可用
 `DESKTOP_DEVICE` 覆盖。桌面端以非交互方式运行，需要热重载时请单独在
-`LKM-desktop` 下执行 `flutter run`（先运行 `pnpm --dir webf build`）。
+`LKM-desktop` 下执行 `flutter run --dart-define=LKM_SERVER_URL=http://127.0.0.1:8002`
+（先运行 `pnpm --dir webf build`）。仅启动 desktop 模式时也需自行配置可用服务地址。
 
 后端 API 地址为 `http://127.0.0.1:8000`，Swagger UI 为 `http://127.0.0.1:8000/docs`。
 桌面客户端在设置中配置服务地址。
@@ -72,7 +78,8 @@ webf 小程序资源（`assets/webf/` 不进 git）。脚本同时起本地网�
 
 ```sh
 cp .env.example .env
-# 编辑 .env，至少替换所有生产密钥和密码
+# 按模板生成并填写所有必填密钥、密码、Tinode 配对 key 和站点身份
+sh deploy/jwt/gen-keys.sh
 docker compose config
 docker compose up -d --build
 docker compose ps
@@ -90,24 +97,14 @@ flutter analyze && flutter test
 # 后端
 cd ../LKM-service
 uv run pytest
-uv run ty check
+uv run ty check app auth core boot scripts
 uv run ruff check
+uv run python scripts/check_raw_sql.py
 
 # 社区机器人面板（可选组件，默认不随主栈起）
 cd ../LKM-bot
 python -m pytest
 ```
-
-## 文档
-
-从 [DOCUMENTATION.md](./docs/DOCUMENTATION.md) 查看文档地图、适用场景和权威来源。常用入口：
-
-- [本地开发](./docs/DEVELOPMENT.md)
-- [Compose 生产部署](./docs/DEPLOYMENT.md)
-- [运维速查](./docs/OPS-CHEATSHEET.md)
-- [Kubernetes 部署](./deploy/k8s/README.md)
-- [后端设计方案](./docs/后端架构与现状.md)
-- [后端执行路线图](./docs/社区需求与开发规划.md)
 
 ## 文档与实现的优先级
 

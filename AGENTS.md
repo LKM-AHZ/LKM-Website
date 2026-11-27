@@ -6,7 +6,7 @@ This root repository owns local orchestration, `docker-compose.yml`, deployment 
 
 - `LKM-desktop/`: Flutter desktop client; application code in `lib/`, tests in `test/`, and embedded mini apps in `webf/`.
 - `LKM-service/`: FastAPI backend; business modules in `app/`, authentication in `auth/`, shared code in `core/`, migrations in `alembic/` and `alembic_auth/`, and tests in `tests/`.
-- `LKM-bot/`: Python bot in `astrbot/`, dashboard in `dashboard/`, and tests in `tests/`.
+- `LKM-bot/`: Python bot in `bot/`, dashboard in `dashboard/`, and tests in `tests/`.
 
 Make code changes and commits in the owning submodule. Check its own `AGENTS.md` when present; update the root submodule pointer separately.
 
@@ -17,7 +17,7 @@ Run `git submodule update --init --recursive` after cloning. From the root, `./d
 Run checks from the relevant submodule:
 
 - Desktop: `flutter analyze && flutter test`; run the `webf/` package checks when changing mini apps.
-- Backend: `uv run pytest && uv run ty check && uv run ruff check && uv run python scripts/check_raw_sql.py`.
+- Backend: `uv run pytest && uv run ty check app auth core boot scripts && uv run ruff check && uv run python scripts/check_raw_sql.py`.
 - Bot: `python -m pytest`.
 - Root contracts/docs: `cd LKM-service && uv run pytest tests/deploy -q`, `python3 scripts/check_doc_links.py`, `python3 scripts/check_submodule_pointers.py`.
 

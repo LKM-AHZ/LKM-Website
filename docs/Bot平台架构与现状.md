@@ -3,7 +3,7 @@
 > **文档定位**：说明 `LKM-bot/` 的进程拓扑、消息处理流水线、插件/平台/模型抽象、管理面板
 > 以及 LKM 定制层。本文以该子仓库源码与配置为准。
 >
-> **结构与入口核对日期**：2026-10-31。内部 Python 包名为 `bot`，面向用户的产品名和命令为
+> **结构与入口核对日期**：2026-11-28。内部 Python 包名为 `bot`，面向用户的产品名和命令为
 > `LKMBot` / `lkmbot`。
 
 ## 1. 定位
@@ -36,7 +36,10 @@ main.py
 
 ## 3. 消息处理流水线
 
-核心阶段定义在 `bot/core/pipeline/stage_order.py`：
+阶段顺序定义在 `bot/core/pipeline/stage_order.py`：
+
+前置 Life 阶段为 `LifeIngestStage`、`LifeReactionStage`、`LifeAcpStage`、`LifeTurnStage`，
+分别处理归档、关键词回应、外部 ACP Agent 与环境回合；具体启用行为由配置决定。之后是：
 
 1. `WakingCheckStage`：检查是否需要唤醒 Bot。
 2. `WhitelistCheckStage`：检查群聊/私聊白名单。
@@ -133,7 +136,7 @@ Pipeline 的上下文、调度器和阶段基类位于 `bot/core/pipeline/`；�
   决定每条媒体是走后端还是回落本地 token 服务（开关是面板配置 `media_storage_mode`），调用点只有一处
   （`components.py` 的 `register_to_file_service` 与 `result_decorate/stage.py` 的 TTS/T2I）。
 - **账号统一**：`account_auth.py` 在面板配置 `dashboard.auth_mode` 为 `both`/`backend` 时把面板登录的
-  账号密码转给 AUTH 内部端点校验（`/auth/internal/verify-password`），只接受
+  账号密码转给 AUTH 内部端点校验（`/api/v1/auth/internal/verify-password`），只接受
   `account_level=admin`；面板会话仍由 bot 自己签发，`backend` 模式下 AUTH 不可用即失败。
 
 ### 7.1 媒体与文件的双向链路
@@ -150,7 +153,7 @@ Pipeline 的上下文、调度器和阶段基类位于 `bot/core/pipeline/`；�
 
 ## 8. 外部依赖边界
 
-bot 与面板默认**不向项目方或上游作者的域名发任何请求**。以下是与外部的全部接触面，便于审计：
+以下列出主要外联入口；实际网络行为还取决于所启用的平台、模型、插件、MCP 与工具配置，不能把此表当作完整网络白名单：
 
 | 场景 | 是否外联 | 目标 |
 | --- | --- | --- |
@@ -185,7 +188,6 @@ cd dashboard
 pnpm install
 pnpm dev          # 默认 3000，/api 代理到 127.0.0.1:6185
 pnpm build
-pnpm generate:api # 后端 OpenAPI 变化后重新生成客户端
 
 # 质量门禁
 uv run ruff check .
@@ -194,8 +196,9 @@ uv run pytest
 ```
 
 目录归属和生成产物规则见 [Bot 开发入口](../LKM-bot/README.md#代码结构与开发入口)。
-API 路由在 `bot/dashboard/api/` 装配，前端客户端由 `openspec/openapi-v1.yaml` 生成到
-`bot-panel/src/api/generated/`；修改规格和路由后须同步生成客户端。
+API 路由在 `bot/dashboard/api/` 装配，前端客户端由 `openspec/openapi-v1.yaml` 经
+`@hey-api/openapi-ts` 生成到 `dashboard/src/api/generated/`。当前 package.json 没有
+`generate:api` 脚本；API 变化时按子仓库现有生成配置与工具同步产物。
 
 ## 11. 维护边界
 
